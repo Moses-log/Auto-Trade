@@ -1,0 +1,80 @@
+{
+  "buy": {
+    "secret": "MY_SHARED_SECRET",
+    "ticker": "AAPL",
+    "action": "buy",
+    "contracts": "10",
+    "price": "189.45",
+    "order_id": "order_001",
+    "market_position": "long",
+    "market_position_size": "10",
+    "prev_market_position": "flat",
+    "prev_market_position_size": "0",
+    "timestamp": "2024-01-15T14:30:00Z"
+  },
+  "sell": {
+    "secret": "MY_SHARED_SECRET",
+    "ticker": "AAPL",
+    "action": "sell",
+    "contracts": "10",
+    "price": "192.10",
+    "order_id": "order_002",
+    "market_position": "flat",
+    "market_position_size": "0",
+    "prev_market_position": "long",
+    "prev_market_position_size": "10",
+    "timestamp": "2024-01-15T15:00:00Z"
+  },
+  "close_long": {
+    "secret": "MY_SHARED_SECRET",
+    "ticker": "SPY",
+    "action": "close_long",
+    "contracts": "5",
+    "price": "479.00",
+    "order_id": "order_003",
+    "market_position": "flat",
+    "market_position_size": "0",
+    "prev_market_position": "long",
+    "prev_market_position_size": "5",
+    "timestamp": "2024-01-15T15:15:00Z"
+  },
+  "close_short": {
+    "secret": "MY_SHARED_SECRET",
+    "ticker": "QQQ",
+    "action": "close_short",
+    "contracts": "3",
+    "price": "410.00",
+    "order_id": "order_004",
+    "market_position": "flat",
+    "market_position_size": "0",
+    "prev_market_position": "short",
+    "prev_market_position_size": "3",
+    "timestamp": "2024-01-15T15:30:00Z"
+  },
+  "reverse_to_long": {
+    "secret": "MY_SHARED_SECRET",
+    "ticker": "TSLA",
+    "action": "reverse_to_long",
+    "contracts": "5",
+    "price": "245.00",
+    "order_id": "order_005",
+    "market_position": "long",
+    "market_position_size": "5",
+    "prev_market_position": "short",
+    "prev_market_position_size": "5",
+    "timestamp": "2024-01-15T15:45:00Z"
+  },
+  "reverse_to_short": {
+    "secret": "MY_SHARED_SECRET",
+    "ticker": "TSLA",
+    "action": "reverse_to_short",
+    "contracts": "5",
+    "price": "240.00",
+    "order_id": "order_006",
+    "market_position": "short",
+    "market_position_size": "5",
+    "prev_market_position": "long",
+    "prev_market_position_size": "5",
+    "timestamp": "2024-01-15T16:00:00Z"
+  }
+}
