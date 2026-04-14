@@ -27,33 +27,48 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
     ClosePositionRequest,
+    GetLatestTradeRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Position, Order
 from alpaca.common.exceptions import APIError
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockLatestTradeRequest
 
 from app.config import settings
 
 log = logging.getLogger(__name__)
 
-# ── Client singleton ──────────────────────────────────────────────────────────
+# ── Client singletons ─────────────────────────────────────────────────────────
 
-_client: Optional[TradingClient] = None
+_trading_client: Optional[TradingClient] = None
+_data_client: Optional[StockHistoricalDataClient] = None
 
 
 def get_client() -> TradingClient:
-    global _client
-    if _client is None:
-        _client = TradingClient(
+    global _trading_client
+    if _trading_client is None:
+        _trading_client = TradingClient(
             api_key=settings.alpaca_api_key,
             secret_key=settings.alpaca_secret_key,
             paper=_is_paper(),
         )
         log.info(
-            "Alpaca client initialised",
+            "Alpaca trading client initialised",
             extra={"paper": _is_paper(), "base_url": settings.alpaca_base_url},
         )
-    return _client
+    return _trading_client
+
+
+def get_data_client() -> StockHistoricalDataClient:
+    global _data_client
+    if _data_client is None:
+        _data_client = StockHistoricalDataClient(
+            api_key=settings.alpaca_api_key,
+            secret_key=settings.alpaca_secret_key,
+        )
+        log.info("Alpaca data client initialised")
+    return _data_client
 
 
 def _is_paper() -> bool:
@@ -74,6 +89,44 @@ _retry = retry(
 
 
 # ── Public helpers ────────────────────────────────────────────────────────────
+
+@_retry
+def get_account():
+    """
+    Return the Alpaca Account object.
+    Used by order_logic.py to read buying_power for Kimi DD sizing.
+    """
+    account = get_client().get_account()
+    log.debug(
+        "Account fetched",
+        extra={
+            "equity":        str(account.equity),
+            "buying_power":  str(account.buying_power),
+            "cash":          str(account.cash),
+        },
+    )
+    return account
+
+
+@_retry
+def get_latest_price(ticker: str) -> Optional[float]:
+    """
+    Return the latest trade price for ticker.
+    Used as a fallback when price is not included in the alert payload.
+    """
+    try:
+        req    = StockLatestTradeRequest(symbol_or_symbols=ticker)
+        trades = get_data_client().get_stock_latest_trade(req)
+        price  = float(trades[ticker].price)
+        log.debug("Latest price fetched", extra={"ticker": ticker, "price": price})
+        return price
+    except Exception as exc:
+        log.warning(
+            "Could not fetch latest price",
+            extra={"ticker": ticker, "error": str(exc)},
+        )
+        return None
+
 
 @_retry
 def get_position(ticker: str) -> Optional[Position]:
