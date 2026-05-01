@@ -27,6 +27,7 @@ from alpaca.trading.models import Order
 
 from app.models import AlertPayload, TradingAction
 from app.trading import alpaca_client as ac
+from app.config import settings
 
 log = logging.getLogger(__name__)
 
@@ -146,7 +147,7 @@ def _kimi_add_leverage(ticker: str, price: Optional[float], leverage_factor: flo
         raise ValueError(f"Could not determine current price for {ticker}")
 
     raw_qty = (buying_power * leverage_factor) / current_price
-    dd_qty  = math.floor(raw_qty)
+    dd_qty  = round(raw_qty, 2) if settings.allow_fractional_shares else math.floor(raw_qty)
 
     if dd_qty <= 0:
         log.warning(
@@ -186,7 +187,8 @@ def _kimi_remove_leverage(ticker: str, leverage_factor: float) -> Optional[Order
         return None
 
     total_qty = float(position.qty)
-    dd_qty = math.floor(total_qty * (leverage_factor / (1 + leverage_factor)))
+    dd_portion = total_qty * (leverage_factor / (1 + leverage_factor))
+    dd_qty = round(dd_portion, 2) if settings.allow_fractional_shares else math.floor(dd_portion)
 
     if dd_qty <= 0:
         log.warning("Calculated DD qty to close is 0", extra={"ticker": ticker, "total_qty": total_qty})
