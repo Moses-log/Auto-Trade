@@ -30,8 +30,8 @@ from app.trading import alpaca_client as ac
 
 log = logging.getLogger(__name__)
 
-# Kimi leverage_factor — must match what is set in TradingView script (default 0.5)
-LEVERAGE_FACTOR = 0.5
+# Default leverage factor — overridden per-alert by payload.leverage_factor
+DEFAULT_LEVERAGE_FACTOR = 0.5
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -98,7 +98,8 @@ async def execute_action(payload: AlertPayload) -> dict:
 
     elif action == TradingAction.ADD_LEVERAGE:
         # Query real Alpaca buying power and calculate DD qty
-        order = _kimi_add_leverage(ticker, payload.price)
+        lf = payload.leverage_factor if payload.leverage_factor is not None else DEFAULT_LEVERAGE_FACTOR
+        order = _kimi_add_leverage(ticker, payload.price, lf)
         if order:
             result["orders"].append(_order_summary(order))
         else:
@@ -106,7 +107,8 @@ async def execute_action(payload: AlertPayload) -> dict:
 
     elif action == TradingAction.REMOVE_LEVERAGE:
         # Close only the DD (Leverage) position, leave base untouched
-        order = _kimi_remove_leverage(ticker)
+        lf = payload.leverage_factor if payload.leverage_factor is not None else DEFAULT_LEVERAGE_FACTOR
+        order = _kimi_remove_leverage(ticker, lf)
         if order:
             result["orders"].append(_order_summary(order))
         else:
@@ -127,20 +129,14 @@ async def execute_action(payload: AlertPayload) -> dict:
 
 # ── Kimi-specific helpers ─────────────────────────────────────────────────────
 
-def _kimi_add_leverage(ticker: str, price: Optional[float]) -> Optional[Order]:
+def _kimi_add_leverage(ticker: str, price: Optional[float], leverage_factor: float) -> Optional[Order]:
     """
     Calculate DD qty from real Alpaca buying power and place the buy order.
-
-    Mirrors Kimi script logic:
-        leverage_qty = (strategy.equity * leverage_factor) / close
-
-    Here we use Alpaca's actual buying_power instead of strategy.equity
-    so the sizing is always based on real available funds.
+    leverage_factor comes directly from TradingView alert payload.
     """
     account = ac.get_account()
     buying_power = float(account.buying_power)
 
-    # Use price from alert payload if available, otherwise fetch from Alpaca
     if price and price > 0:
         current_price = price
     else:
@@ -149,18 +145,17 @@ def _kimi_add_leverage(ticker: str, price: Optional[float]) -> Optional[Order]:
     if not current_price or current_price <= 0:
         raise ValueError(f"Could not determine current price for {ticker}")
 
-    # Calculate DD qty — same formula as Kimi script
-    raw_qty = (buying_power * LEVERAGE_FACTOR) / current_price
-    dd_qty  = math.floor(raw_qty)  # whole shares only
+    raw_qty = (buying_power * leverage_factor) / current_price
+    dd_qty  = math.floor(raw_qty)
 
     if dd_qty <= 0:
         log.warning(
             "DD qty is 0 — not enough buying power",
             extra={
-                "ticker":        ticker,
-                "buying_power":  buying_power,
-                "price":         current_price,
-                "leverage_factor": LEVERAGE_FACTOR,
+                "ticker":          ticker,
+                "buying_power":    buying_power,
+                "price":           current_price,
+                "leverage_factor": leverage_factor,
             },
         )
         return None
@@ -168,25 +163,21 @@ def _kimi_add_leverage(ticker: str, price: Optional[float]) -> Optional[Order]:
     log.info(
         "Placing Kimi DD buy",
         extra={
-            "ticker":        ticker,
-            "buying_power":  buying_power,
-            "price":         current_price,
-            "dd_qty":        dd_qty,
+            "ticker":          ticker,
+            "buying_power":    buying_power,
+            "price":           current_price,
+            "leverage_factor": leverage_factor,
+            "dd_qty":          dd_qty,
         },
     )
 
     return ac.place_market_order(ticker, OrderSide.BUY, dd_qty)
 
 
-def _kimi_remove_leverage(ticker: str) -> Optional[Order]:
+def _kimi_remove_leverage(ticker: str, leverage_factor: float) -> Optional[Order]:
     """
     Close the DD (leverage) position only.
-    Looks for an open position on the ticker and closes it partially
-    by the DD qty tracked via Alpaca positions.
-
-    Since Alpaca merges all buys into one position, we track the DD
-    qty by looking at the difference between total position and base qty.
-    If tracking is unavailable, we close the full position as a fallback.
+    Uses leverage_factor from payload to calculate DD portion of total position.
     """
     position = ac.get_position(ticker)
 
@@ -195,13 +186,7 @@ def _kimi_remove_leverage(ticker: str) -> Optional[Order]:
         return None
 
     total_qty = float(position.qty)
-
-    # Try to close only the DD portion
-    # Since Alpaca merges positions, we close half the total as an approximation
-    # This works because base ≈ equity/price and DD ≈ equity*0.5/price
-    # so DD is roughly 1/3 of total position
-    # For a cleaner solution, store DD qty in a database/cache when ADD_LEVERAGE fires
-    dd_qty = math.floor(total_qty * (LEVERAGE_FACTOR / (1 + LEVERAGE_FACTOR)))
+    dd_qty = math.floor(total_qty * (leverage_factor / (1 + leverage_factor)))
 
     if dd_qty <= 0:
         log.warning("Calculated DD qty to close is 0", extra={"ticker": ticker, "total_qty": total_qty})
@@ -209,7 +194,7 @@ def _kimi_remove_leverage(ticker: str) -> Optional[Order]:
 
     log.info(
         "Closing Kimi DD position",
-        extra={"ticker": ticker, "total_qty": total_qty, "closing_dd_qty": dd_qty},
+        extra={"ticker": ticker, "total_qty": total_qty, "closing_dd_qty": dd_qty, "leverage_factor": leverage_factor},
     )
 
     return ac.place_market_order(ticker, OrderSide.SELL, dd_qty)
