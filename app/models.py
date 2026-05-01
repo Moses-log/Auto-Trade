@@ -42,6 +42,9 @@ class AlertPayload(BaseModel):
     # Current bar close price — used for Kimi DD sizing
     price: Optional[float] = None
 
+    # Leverage factor from TradingView script input (default 0.5)
+    leverage_factor: Optional[float] = 0.5
+
     # TradingView strategy order ID — used as idempotency key
     order_id: Optional[str] = None
 
