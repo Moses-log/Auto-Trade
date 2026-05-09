@@ -16,6 +16,9 @@ httpx>=0.27.0
 # Retry logic
 tenacity>=8.3.0
 
+# Task scheduler for P&L tracking
+APScheduler>=3.10,<4
+
 # Timezone support (required by alpaca.data)
 pytz>=2024.1
 # ── Dev / test (not needed in production) ────────────────────────────────────
