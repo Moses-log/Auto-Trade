@@ -58,7 +58,7 @@ def _format_message(result: PnLResult, label: str, date_str: str) -> str:
 async def send_daily_report() -> None:
     """Fetch daily portfolio history and post P&L to Discord."""
     now = datetime.now(ET)
-    date_str = now.strftime("%A %B %-d, %Y")
+    date_str = f"{now.strftime('%A %B')} {now.day}, {now.year}"
     try:
         history = get_portfolio_history(period="1D", timeframe="1Min")
         result = _compute_pnl(history, "daily")
@@ -74,7 +74,7 @@ async def send_weekly_report() -> None:
     """Fetch weekly portfolio history and post P&L to Discord."""
     now = datetime.now(ET)
     monday = now - timedelta(days=now.weekday())
-    date_str = f"Week of {monday.strftime('%b %-d')}\u2013{now.strftime('%-d, %Y')}"
+    date_str = f"Week of {monday.strftime('%b')} {monday.day}\u2013{now.day}, {now.year}"
     try:
         history = get_portfolio_history(period="1W", timeframe="1D")
         result = _compute_pnl(history, "weekly")

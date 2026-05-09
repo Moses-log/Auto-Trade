@@ -1,6 +1,6 @@
 import os
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, AsyncMock
 
 # Must set env vars before importing any app module
 os.environ.setdefault("ALPACA_API_KEY", "test_key")
@@ -78,10 +78,9 @@ def test_format_message_loss():
 
 @pytest.mark.asyncio
 @patch("app.pnl.get_portfolio_history")
-@patch("app.pnl.notify")
+@patch("app.pnl.notify", new_callable=AsyncMock)
 async def test_send_daily_report_success(mock_notify, mock_get_history):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10320.50])
-    mock_notify.return_value = None
     from app.pnl import send_daily_report
     await send_daily_report()
     mock_notify.assert_called_once()
@@ -93,10 +92,9 @@ async def test_send_daily_report_success(mock_notify, mock_get_history):
 
 @pytest.mark.asyncio
 @patch("app.pnl.get_portfolio_history")
-@patch("app.pnl.notify")
+@patch("app.pnl.notify", new_callable=AsyncMock)
 async def test_send_daily_report_alpaca_error(mock_notify, mock_get_history):
     mock_get_history.side_effect = Exception("Alpaca unreachable")
-    mock_notify.return_value = None
     from app.pnl import send_daily_report
     await send_daily_report()
     mock_notify.assert_called_once()
@@ -107,10 +105,9 @@ async def test_send_daily_report_alpaca_error(mock_notify, mock_get_history):
 
 @pytest.mark.asyncio
 @patch("app.pnl.get_portfolio_history")
-@patch("app.pnl.notify")
+@patch("app.pnl.notify", new_callable=AsyncMock)
 async def test_send_weekly_report_success(mock_notify, mock_get_history):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10875.20])
-    mock_notify.return_value = None
     from app.pnl import send_weekly_report
     await send_weekly_report()
     mock_notify.assert_called_once()
@@ -121,10 +118,9 @@ async def test_send_weekly_report_success(mock_notify, mock_get_history):
 
 @pytest.mark.asyncio
 @patch("app.pnl.get_portfolio_history")
-@patch("app.pnl.notify")
+@patch("app.pnl.notify", new_callable=AsyncMock)
 async def test_send_weekly_report_alpaca_error(mock_notify, mock_get_history):
     mock_get_history.side_effect = Exception("Alpaca unreachable")
-    mock_notify.return_value = None
     from app.pnl import send_weekly_report
     await send_weekly_report()
     msg = mock_notify.call_args[0][0]
