@@ -140,3 +140,29 @@ def test_scheduler_jobs_registered():
     assert "daily_pnl" in job_ids
     assert "weekly_pnl" in job_ids
     assert len(job_ids) == 2
+
+
+# ── get_spy_bars tests ────────────────────────────────────────────────────────
+
+@patch("app.trading.alpaca_client.get_data_client")
+def test_get_spy_bars_calls_sdk(mock_get_data_client):
+    """get_spy_bars() must call get_stock_bars with SPY and TimeFrame.Day."""
+    from app.trading.alpaca_client import get_spy_bars
+    from datetime import datetime
+    import pytz
+
+    mock_client = MagicMock()
+    mock_get_data_client.return_value = mock_client
+    fake_bars = MagicMock()
+    mock_client.get_stock_bars.return_value = fake_bars
+
+    ET = pytz.timezone("America/New_York")
+    start = datetime(2026, 5, 12, 9, 30, tzinfo=ET)
+    end = datetime(2026, 5, 12, 16, 0, tzinfo=ET)
+
+    result = get_spy_bars(start=start, end=end)
+
+    mock_client.get_stock_bars.assert_called_once()
+    req_arg = mock_client.get_stock_bars.call_args[0][0]
+    assert req_arg.symbol_or_symbols == "SPY"
+    assert result is fake_bars

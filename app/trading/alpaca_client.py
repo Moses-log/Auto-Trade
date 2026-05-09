@@ -33,7 +33,8 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Position, Order
 from alpaca.common.exceptions import APIError
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockLatestTradeRequest
+from alpaca.data.requests import StockLatestTradeRequest, StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
 
 from app.config import settings
 
@@ -122,6 +123,27 @@ def get_portfolio_history(period: str, timeframe: str):
     return get_client().get_portfolio_history(
         filter=GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
     )
+
+
+@_retry
+def get_spy_bars(start, end):
+    """Fetch daily SPY bars between start and end.
+
+    Args:
+        start: datetime (ET timezone) — market open of the period start
+        end:   datetime (ET timezone) — current time (4pm ET at report time)
+
+    Returns:
+        BarSet dict-like object. Access bars via bars["SPY"] → list of Bar.
+        Each Bar has .open and .close float attributes.
+    """
+    req = StockBarsRequest(
+        symbol_or_symbols="SPY",
+        timeframe=TimeFrame.Day,
+        start=start,
+        end=end,
+    )
+    return get_data_client().get_stock_bars(req)
 
 
 @_retry
