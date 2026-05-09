@@ -29,6 +29,7 @@ from app.idempotency import is_duplicate, mark_processed
 from app.logging_config import setup_logging
 from app.models import AlertPayload
 from app.notifications import notify
+from app.scheduler import scheduler, setup_jobs
 from app.security import verify_webhook_secret
 from app.trading.order_logic import execute_action
 from alpaca.common.exceptions import APIError
@@ -48,7 +49,10 @@ async def lifespan(app: FastAPI):
         "TradingView → Alpaca webhook server starting",
         extra={"paper_trading": "paper" in settings.alpaca_base_url},
     )
+    setup_jobs()
+    scheduler.start()
     yield
+    scheduler.shutdown(wait=False)
     log.info("Server shutting down.")
 
 
