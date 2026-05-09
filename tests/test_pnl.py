@@ -130,3 +130,17 @@ async def test_send_weekly_report_alpaca_error(mock_notify, mock_get_history):
     msg = mock_notify.call_args[0][0]
     assert "⚠️" in msg
     assert "Weekly P&L report failed" in msg
+
+
+# ── scheduler.py tests ────────────────────────────────────────────────────────
+
+def test_scheduler_jobs_registered():
+    """setup_jobs() must register exactly 2 jobs: daily_pnl and weekly_pnl."""
+    from app.scheduler import scheduler, setup_jobs
+    # Start fresh — remove any jobs from previous calls
+    scheduler.remove_all_jobs()
+    setup_jobs()
+    job_ids = {job.id for job in scheduler.get_jobs()}
+    assert "daily_pnl" in job_ids
+    assert "weekly_pnl" in job_ids
+    assert len(job_ids) == 2
