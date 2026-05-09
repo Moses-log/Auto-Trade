@@ -5,7 +5,7 @@ from unittest.mock import patch, MagicMock
 # Must set env vars before importing any app module
 os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
-os.environ.setdefault("WEBHOOK_SECRET", "test_webhook")
+os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 
 
 # ── alpaca_client tests ───────────────────────────────────────────────────────
