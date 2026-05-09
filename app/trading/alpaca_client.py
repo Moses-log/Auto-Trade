@@ -27,6 +27,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import (
     MarketOrderRequest,
     ClosePositionRequest,
+    GetPortfolioHistoryRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Position, Order
@@ -105,6 +106,22 @@ def get_account():
         },
     )
     return account
+
+
+@_retry
+def get_portfolio_history(period: str, timeframe: str):
+    """Fetch portfolio equity history from Alpaca.
+
+    Args:
+        period:    Lookback window — "1D" for daily, "1W" for weekly.
+        timeframe: Data granularity — "1Min" for intraday, "1D" for daily bars.
+
+    Returns:
+        PortfolioHistory object with .equity list (float) and .timestamp list (int).
+    """
+    return get_client().get_portfolio_history(
+        filter=GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
+    )
 
 
 @_retry
