@@ -15,7 +15,7 @@ from typing import Optional
 import pytz
 
 from app.notifications import notify
-from app.trading.alpaca_client import get_portfolio_history
+from app.trading.alpaca_client import get_portfolio_history, get_spy_bars
 
 log = logging.getLogger(__name__)
 
@@ -102,7 +102,16 @@ async def send_daily_report() -> None:
     try:
         history = get_portfolio_history(period="1D", timeframe="1Min")
         result = _compute_pnl(history, "daily")
-        msg = _format_message(result, "Daily P&L", date_str)
+
+        spy_pct = None
+        try:
+            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
+            bars = get_spy_bars(start=market_open, end=now)
+            spy_pct = compute_spy_pct(bars)
+        except Exception as spy_exc:
+            log.warning("SPY data fetch failed, omitting S&P line: %s", spy_exc)
+
+        msg = _format_message(result, "Daily P&L", date_str, spy_pct=spy_pct)
         await notify(msg)
         log.info("Daily P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:
@@ -118,7 +127,16 @@ async def send_weekly_report() -> None:
     try:
         history = get_portfolio_history(period="1W", timeframe="1D")
         result = _compute_pnl(history, "weekly")
-        msg = _format_message(result, "Weekly P&L", date_str)
+
+        spy_pct = None
+        try:
+            monday_open = monday.replace(hour=9, minute=30, second=0, microsecond=0)
+            bars = get_spy_bars(start=monday_open, end=now)
+            spy_pct = compute_spy_pct(bars)
+        except Exception as spy_exc:
+            log.warning("SPY data fetch failed, omitting S&P line: %s", spy_exc)
+
+        msg = _format_message(result, "Weekly P&L", date_str, spy_pct=spy_pct)
         await notify(msg)
         log.info("Weekly P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:

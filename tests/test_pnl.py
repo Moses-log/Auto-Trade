@@ -77,10 +77,12 @@ def test_format_message_loss():
 
 
 @pytest.mark.asyncio
+@patch("app.pnl.get_spy_bars")
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_daily_report_success(mock_notify, mock_get_history):
+async def test_send_daily_report_success(mock_notify, mock_get_history, mock_get_spy):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10320.50])
+    mock_get_spy.return_value = {"SPY": []}
     from app.pnl import send_daily_report
     await send_daily_report()
     mock_notify.assert_called_once()
@@ -91,10 +93,12 @@ async def test_send_daily_report_success(mock_notify, mock_get_history):
 
 
 @pytest.mark.asyncio
+@patch("app.pnl.get_spy_bars")
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_daily_report_alpaca_error(mock_notify, mock_get_history):
+async def test_send_daily_report_alpaca_error(mock_notify, mock_get_history, mock_get_spy):
     mock_get_history.side_effect = Exception("Alpaca unreachable")
+    mock_get_spy.return_value = {"SPY": []}
     from app.pnl import send_daily_report
     await send_daily_report()
     mock_notify.assert_called_once()
@@ -104,10 +108,12 @@ async def test_send_daily_report_alpaca_error(mock_notify, mock_get_history):
 
 
 @pytest.mark.asyncio
+@patch("app.pnl.get_spy_bars")
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_weekly_report_success(mock_notify, mock_get_history):
+async def test_send_weekly_report_success(mock_notify, mock_get_history, mock_get_spy):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10875.20])
+    mock_get_spy.return_value = {"SPY": []}
     from app.pnl import send_weekly_report
     await send_weekly_report()
     mock_notify.assert_called_once()
@@ -117,10 +123,12 @@ async def test_send_weekly_report_success(mock_notify, mock_get_history):
 
 
 @pytest.mark.asyncio
+@patch("app.pnl.get_spy_bars")
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_weekly_report_alpaca_error(mock_notify, mock_get_history):
+async def test_send_weekly_report_alpaca_error(mock_notify, mock_get_history, mock_get_spy):
     mock_get_history.side_effect = Exception("Alpaca unreachable")
+    mock_get_spy.return_value = {"SPY": []}
     from app.pnl import send_weekly_report
     await send_weekly_report()
     msg = mock_notify.call_args[0][0]
@@ -229,3 +237,69 @@ def test_format_message_spy_negative():
     assert "S&P 500: -2.00%" in msg
     assert "ahead" in msg
     assert "+1.00%" in msg
+
+
+# ── send_*_report with SPY tests ──────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@patch("app.pnl.get_spy_bars")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_daily_report_includes_spy(mock_notify, mock_get_history, mock_get_spy):
+    """Daily report must include S&P 500 line when SPY data available."""
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 10264.0])
+
+    bar1 = MagicMock()
+    bar1.open = 500.0
+    bar2 = MagicMock()
+    bar2.close = 506.0
+    mock_get_spy.return_value = {"SPY": [bar1, bar2]}
+
+    from app.pnl import send_daily_report
+    await send_daily_report()
+
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "S&P 500" in msg
+    assert "ahead" in msg or "behind" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.get_spy_bars")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_daily_report_spy_fetch_fails(mock_notify, mock_get_history, mock_get_spy):
+    """Daily report must still post without S&P line when SPY fetch raises."""
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 10264.0])
+    mock_get_spy.side_effect = Exception("Alpaca data down")
+
+    from app.pnl import send_daily_report
+    await send_daily_report()
+
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "Daily P&L" in msg
+    assert "S&P 500" not in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.get_spy_bars")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_weekly_report_includes_spy(mock_notify, mock_get_history, mock_get_spy):
+    """Weekly report must include S&P 500 line when SPY data available."""
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 10875.0])
+
+    bar1 = MagicMock()
+    bar1.open = 500.0
+    bar2 = MagicMock()
+    bar2.close = 510.0
+    mock_get_spy.return_value = {"SPY": [bar1, bar2]}
+
+    from app.pnl import send_weekly_report
+    await send_weekly_report()
+
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "S&P 500" in msg
+    assert "Weekly P&L" in msg
