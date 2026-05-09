@@ -166,3 +166,66 @@ def test_get_spy_bars_calls_sdk(mock_get_data_client):
     req_arg = mock_client.get_stock_bars.call_args[0][0]
     assert req_arg.symbol_or_symbols == "SPY"
     assert result is fake_bars
+
+
+# ── compute_spy_pct tests ─────────────────────────────────────────────────────
+
+def test_compute_spy_pct_normal():
+    from app.pnl import compute_spy_pct
+
+    bar1 = MagicMock()
+    bar1.open = 500.0
+    bar2 = MagicMock()
+    bar2.close = 506.0
+    fake_bars = {"SPY": [bar1, bar2]}
+
+    result = compute_spy_pct(fake_bars)
+    assert result == pytest.approx(1.2)  # (506-500)/500 * 100
+
+
+def test_compute_spy_pct_empty_bars():
+    from app.pnl import compute_spy_pct
+    result = compute_spy_pct({"SPY": []})
+    assert result is None
+
+
+def test_compute_spy_pct_missing_key():
+    from app.pnl import compute_spy_pct
+    result = compute_spy_pct({})
+    assert result is None
+
+
+# ── _format_message with spy_pct tests ───────────────────────────────────────
+
+def test_format_message_spy_ahead():
+    from app.pnl import _format_message, PnLResult
+    result = PnLResult(period="daily", close_equity=10320.50, dollar_pnl=320.50, pct_pnl=2.64)
+    msg = _format_message(result, "Daily P&L", "Monday May 12, 2026", spy_pct=1.20)
+    assert "S&P 500: +1.20%" in msg
+    assert "ahead" in msg
+    assert "+1.44%" in msg
+
+
+def test_format_message_spy_behind():
+    from app.pnl import _format_message, PnLResult
+    result = PnLResult(period="daily", close_equity=9850.0, dollar_pnl=-150.0, pct_pnl=-1.20)
+    msg = _format_message(result, "Daily P&L", "Monday May 12, 2026", spy_pct=1.20)
+    assert "S&P 500: +1.20%" in msg
+    assert "behind" in msg
+    assert "-2.40%" in msg
+
+
+def test_format_message_no_spy():
+    from app.pnl import _format_message, PnLResult
+    result = PnLResult(period="daily", close_equity=10320.50, dollar_pnl=320.50, pct_pnl=2.64)
+    msg = _format_message(result, "Daily P&L", "Monday May 12, 2026")
+    assert "S&P 500" not in msg
+
+
+def test_format_message_spy_negative():
+    from app.pnl import _format_message, PnLResult
+    result = PnLResult(period="daily", close_equity=9900.0, dollar_pnl=-100.0, pct_pnl=-1.0)
+    msg = _format_message(result, "Daily P&L", "Monday May 12, 2026", spy_pct=-2.0)
+    assert "S&P 500: -2.00%" in msg
+    assert "ahead" in msg
+    assert "+1.00%" in msg

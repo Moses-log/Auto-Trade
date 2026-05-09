@@ -10,6 +10,7 @@ Jobs are registered in scheduler.py and fire at 4pm ET.
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from typing import Optional
 
 import pytz
 
@@ -41,18 +42,57 @@ def _compute_pnl(history, period: str) -> PnLResult:
     return PnLResult(period=period, close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
 
 
-def _format_message(result: PnLResult, label: str, date_str: str) -> str:
-    """Format a Discord-ready P&L message string."""
+def compute_spy_pct(bars) -> Optional[float]:
+    """Extract S&P 500 % return from SPY BarSet.
+
+    Args:
+        bars: BarSet (dict-like) from get_spy_bars(). Access via bars["SPY"].
+
+    Returns:
+        % return as float, or None if bars empty or key missing.
+    """
+    try:
+        spy_bars = bars["SPY"]
+    except (KeyError, TypeError):
+        return None
+    if not spy_bars:
+        return None
+    open_price = spy_bars[0].open
+    close_price = spy_bars[-1].close
+    if not open_price:
+        return None
+    return (close_price - open_price) / open_price * 100
+
+
+def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optional[float] = None) -> str:
+    """Format a Discord-ready P&L message string.
+
+    Args:
+        result:   PnLResult with portfolio P&L data.
+        label:    "Daily P&L" or "Weekly P&L".
+        date_str: Human-readable date string.
+        spy_pct:  S&P 500 % return for the period. Omits S&P line if None.
+    """
     emoji = "📈🟢" if result.dollar_pnl >= 0 else "📉🔴"
     if result.dollar_pnl >= 0:
         pnl_str = f"+${result.dollar_pnl:,.2f} (+{result.pct_pnl:.2f}%)"
     else:
         pnl_str = f"-${abs(result.dollar_pnl):,.2f} ({result.pct_pnl:.2f}%)"
-    return (
+
+    msg = (
         f"{emoji} {label} \u2014 {date_str}\n"
         f"Portfolio: ${result.close_equity:,.2f}\n"
         f"P&L: {pnl_str}"
     )
+
+    if spy_pct is not None:
+        spy_sign = "+" if spy_pct >= 0 else ""
+        relative = result.pct_pnl - spy_pct
+        rel_sign = "+" if relative >= 0 else ""
+        rel_word = "ahead" if relative >= 0 else "behind"
+        msg += f"\nS&P 500: {spy_sign}{spy_pct:.2f}% ({rel_sign}{relative:.2f}% {rel_word})"
+
+    return msg
 
 
 async def send_daily_report() -> None:
