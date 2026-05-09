@@ -61,7 +61,7 @@ def test_format_message_profit():
     from app.pnl import _format_message, PnLResult
     result = PnLResult(period="daily", close_equity=10320.50, dollar_pnl=320.50, pct_pnl=3.21)
     msg = _format_message(result, "Daily P&L", "Monday May 5, 2026")
-    assert "📈" in msg
+    assert "📈🟢" in msg
     assert "$10,320.50" in msg
     assert "+$320.50" in msg
     assert "+3.21%" in msg
@@ -71,7 +71,7 @@ def test_format_message_loss():
     from app.pnl import _format_message, PnLResult
     result = PnLResult(period="daily", close_equity=9700.0, dollar_pnl=-300.0, pct_pnl=-3.0)
     msg = _format_message(result, "Daily P&L", "Monday May 5, 2026")
-    assert "📉" in msg
+    assert "📉🔴" in msg
     assert "-$300.00" in msg
     assert "-3.00%" in msg
 
@@ -85,7 +85,7 @@ async def test_send_daily_report_success(mock_notify, mock_get_history):
     await send_daily_report()
     mock_notify.assert_called_once()
     msg = mock_notify.call_args[0][0]
-    assert "📈" in msg
+    assert "📈🟢" in msg
     assert "Daily P&L" in msg
     assert "$10,320.50" in msg
 

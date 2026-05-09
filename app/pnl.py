@@ -43,7 +43,7 @@ def _compute_pnl(history, period: str) -> PnLResult:
 
 def _format_message(result: PnLResult, label: str, date_str: str) -> str:
     """Format a Discord-ready P&L message string."""
-    emoji = "📈" if result.dollar_pnl >= 0 else "📉"
+    emoji = "📈🟢" if result.dollar_pnl >= 0 else "📉🔴"
     if result.dollar_pnl >= 0:
         pnl_str = f"+${result.dollar_pnl:,.2f} (+{result.pct_pnl:.2f}%)"
     else:
