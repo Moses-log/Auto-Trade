@@ -52,10 +52,12 @@ def _format_trade_message(
         if dollar_pnl >= 0:
             pnl_str = f"+${dollar_pnl:,.2f}"
             pct_str = f"+{pct_pnl:.2f}%"
+            pnl_emoji = "🟢"
         else:
             pnl_str = f"-${abs(dollar_pnl):,.2f}"
             pct_str = f"{pct_pnl:.2f}%"
-        lines.append(f"P&L: {pnl_str} ({pct_str})")
+            pnl_emoji = "🔴"
+        lines.append(f"P&L: {pnl_str} ({pct_str}) {pnl_emoji}")
 
     lines.append(f"🕐 {time_str}")
     return "\n".join(lines)
