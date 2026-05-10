@@ -1,0 +1,22 @@
+{
+  "investors": [
+    {
+      "name": "Moses",
+      "deposits": [
+        {"amount": 300, "entry_spy": 707.116, "date": "2026-05-09"}
+      ]
+    },
+    {
+      "name": "David",
+      "deposits": [
+        {"amount": 2000, "entry_spy": 710.6993, "date": "2026-05-09"}
+      ]
+    },
+    {
+      "name": "Gabe",
+      "deposits": [
+        {"amount": 3000, "entry_spy": 710.36, "date": "2026-05-09"}
+      ]
+    }
+  ]
+}
