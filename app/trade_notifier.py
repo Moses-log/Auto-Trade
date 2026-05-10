@@ -10,7 +10,7 @@ from app.notifications import notify_trades
 from app.trading.alpaca_client import get_order, get_position
 
 log = logging.getLogger(__name__)
-ET = pytz.timezone("America/New_York")
+CT = pytz.timezone("America/Chicago")
 
 _BUY_ACTIONS = {"BUY", "BASE_ENTRY", "ADD_LEVERAGE"}
 
@@ -37,9 +37,10 @@ def _format_trade_message(
 
     qty_str = f"{filled_qty:.0f}" if filled_qty is not None else "?"
 
-    now = datetime.now(ET)
+    now = datetime.now(CT)
     hour = int(now.strftime("%I"))
-    time_str = f"{hour}:{now.strftime('%M %p')} ET — {now.strftime('%B')} {now.day}, {now.year}"
+    tz_label = now.strftime("%Z")
+    time_str = f"{hour}:{now.strftime('%M %p')} {tz_label} — {now.strftime('%B')} {now.day}, {now.year}"
 
     lines = [
         f"{emoji} **{action.upper()} — {ticker}**",
