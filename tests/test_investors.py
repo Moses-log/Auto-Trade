@@ -241,3 +241,31 @@ async def test_notify_investors_skips_when_no_webhooks_set():
             from app.notifications import notify_investors
             await notify_investors("test message")
     mock_client.post.assert_not_called()
+
+
+def test_deposit_request_valid_without_spy_price():
+    from app.models import DepositRequest
+    req = DepositRequest(secret="s", investor="Moses", amount=500.0)
+    assert req.spy_price is None
+    assert req.amount == 500.0
+    assert req.investor == "Moses"
+
+
+def test_deposit_request_valid_with_explicit_spy_price():
+    from app.models import DepositRequest
+    req = DepositRequest(secret="s", investor="Moses", amount=500.0, spy_price=580.0)
+    assert req.spy_price == 580.0
+
+
+def test_deposit_request_rejects_zero_amount():
+    from pydantic import ValidationError
+    from app.models import DepositRequest
+    with pytest.raises(ValidationError):
+        DepositRequest(secret="s", investor="Moses", amount=0.0)
+
+
+def test_deposit_request_rejects_negative_amount():
+    from pydantic import ValidationError
+    from app.models import DepositRequest
+    with pytest.raises(ValidationError):
+        DepositRequest(secret="s", investor="Moses", amount=-100.0)

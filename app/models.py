@@ -89,3 +89,17 @@ class AlertPayload(BaseModel):
         return float(v)
 
     model_config = {"extra": "ignore"}
+
+
+class DepositRequest(BaseModel):
+    secret: str
+    investor: str
+    amount: float
+    spy_price: Optional[float] = None
+
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("amount must be positive")
+        return v
