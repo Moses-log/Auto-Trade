@@ -1,10 +1,11 @@
 import os
+import pytest
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("ALPACA_API_KEY", "test")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 
-from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.investors import Deposit, Investor
@@ -40,13 +41,14 @@ def test_deposit_rejects_malformed_json():
 
 def test_deposit_appends_to_existing_investor():
     with patch("app.main.load_investors", return_value=_initial_investors()):
-        with patch("app.main.save_investors"):
-            with patch("app.main.get_latest_price", return_value=580.0):
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "Moses",
-                    "amount": 500.0,
-                })
+        with patch("app.main.commit_investors_json", new_callable=AsyncMock):
+            with patch("app.main.save_investors"):
+                with patch("app.main.get_latest_price", return_value=580.0):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 500.0,
+                    })
     assert response.status_code == 200
     data = response.json()
     assert data["investor"] == "Moses"
@@ -57,14 +59,15 @@ def test_deposit_appends_to_existing_investor():
 
 def test_deposit_uses_provided_spy_price_and_skips_alpaca_call():
     with patch("app.main.load_investors", return_value=_initial_investors()):
-        with patch("app.main.save_investors"):
-            with patch("app.main.get_latest_price") as mock_price:
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "Moses",
-                    "amount": 500.0,
-                    "spy_price": 595.0,
-                })
+        with patch("app.main.commit_investors_json", new_callable=AsyncMock):
+            with patch("app.main.save_investors"):
+                with patch("app.main.get_latest_price") as mock_price:
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 500.0,
+                        "spy_price": 595.0,
+                    })
     assert response.status_code == 200
     mock_price.assert_not_called()
     assert response.json()["deposits"][1]["entry_spy"] == 595.0
@@ -72,13 +75,14 @@ def test_deposit_uses_provided_spy_price_and_skips_alpaca_call():
 
 def test_deposit_creates_new_investor_when_name_not_found():
     with patch("app.main.load_investors", return_value=_initial_investors()):
-        with patch("app.main.save_investors"):
-            with patch("app.main.get_latest_price", return_value=580.0):
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "Alice",
-                    "amount": 1000.0,
-                })
+        with patch("app.main.commit_investors_json", new_callable=AsyncMock):
+            with patch("app.main.save_investors"):
+                with patch("app.main.get_latest_price", return_value=580.0):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Alice",
+                        "amount": 1000.0,
+                    })
     assert response.status_code == 200
     data = response.json()
     assert data["investor"] == "Alice"
@@ -88,13 +92,14 @@ def test_deposit_creates_new_investor_when_name_not_found():
 
 def test_deposit_matches_investor_name_case_insensitively():
     with patch("app.main.load_investors", return_value=_initial_investors()):
-        with patch("app.main.save_investors"):
-            with patch("app.main.get_latest_price", return_value=580.0):
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "moses",
-                    "amount": 200.0,
-                })
+        with patch("app.main.commit_investors_json", new_callable=AsyncMock):
+            with patch("app.main.save_investors"):
+                with patch("app.main.get_latest_price", return_value=580.0):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "moses",
+                        "amount": 200.0,
+                    })
     assert response.status_code == 200
     assert response.json()["investor"] == "Moses"
 
@@ -117,3 +122,38 @@ def test_deposit_rejects_zero_amount():
         "amount": 0.0,
     })
     assert response.status_code == 422
+
+
+def test_deposit_returns_500_and_skips_disk_write_when_github_fails():
+    with patch("app.main.load_investors", return_value=_initial_investors()):
+        with patch("app.main.get_latest_price", return_value=580.0):
+            with patch("app.main.commit_investors_json", new_callable=AsyncMock,
+                       side_effect=RuntimeError("GitHub GET failed: 401 Unauthorized")):
+                with patch("app.main.save_investors") as mock_save:
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 500.0,
+                    })
+    assert response.status_code == 500
+    mock_save.assert_not_called()
+
+
+def test_deposit_commits_to_github_before_writing_disk():
+    call_order = []
+    async def fake_commit(content):
+        call_order.append("github")
+    def fake_save(investors):
+        call_order.append("disk")
+
+    with patch("app.main.load_investors", return_value=_initial_investors()):
+        with patch("app.main.get_latest_price", return_value=580.0):
+            with patch("app.main.commit_investors_json", side_effect=fake_commit):
+                with patch("app.main.save_investors", side_effect=fake_save):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 500.0,
+                    })
+    assert response.status_code == 200
+    assert call_order == ["github", "disk"]
