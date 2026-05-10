@@ -50,3 +50,59 @@ def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> No
         ]
     }
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+@dataclass
+class InvestorResult:
+    name: str
+    total_deposited: float
+    current_equity: float
+    dollar_pnl: float
+    pct_pnl: float
+    portfolio_share: float
+
+
+@dataclass
+class InvestorBreakdown:
+    investors: list[InvestorResult]
+    spy_price: float
+    total_portfolio: float
+    total_deposited: float
+    overall_dollar_pnl: float
+    overall_pct_pnl: float
+
+
+def compute_breakdown(investors: list[Investor], spy_price: float) -> InvestorBreakdown:
+    results: list[InvestorResult] = []
+    for inv in investors:
+        total_deposited = sum(d.amount for d in inv.deposits)
+        current_equity = sum(d.amount * spy_price / d.entry_spy for d in inv.deposits)
+        dollar_pnl = current_equity - total_deposited
+        pct_pnl = (dollar_pnl / total_deposited * 100) if total_deposited else 0.0
+        results.append(
+            InvestorResult(
+                name=inv.name,
+                total_deposited=total_deposited,
+                current_equity=current_equity,
+                dollar_pnl=dollar_pnl,
+                pct_pnl=pct_pnl,
+                portfolio_share=0.0,
+            )
+        )
+
+    total_portfolio = sum(r.current_equity for r in results)
+    for r in results:
+        r.portfolio_share = (r.current_equity / total_portfolio * 100) if total_portfolio else 0.0
+
+    total_deposited = sum(r.total_deposited for r in results)
+    overall_dollar_pnl = total_portfolio - total_deposited
+    overall_pct_pnl = (overall_dollar_pnl / total_deposited * 100) if total_deposited else 0.0
+
+    return InvestorBreakdown(
+        investors=results,
+        spy_price=spy_price,
+        total_portfolio=total_portfolio,
+        total_deposited=total_deposited,
+        overall_dollar_pnl=overall_dollar_pnl,
+        overall_pct_pnl=overall_pct_pnl,
+    )
