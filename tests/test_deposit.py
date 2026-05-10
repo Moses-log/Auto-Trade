@@ -21,13 +21,21 @@ def _initial_investors():
 
 
 def test_deposit_rejects_wrong_secret():
-    with patch("app.main.load_investors", return_value=_initial_investors()):
-        response = client.post("/deposit", json={
-            "secret": "wrong-secret",
-            "investor": "Moses",
-            "amount": 500.0,
-        })
+    response = client.post("/deposit", json={
+        "secret": "wrong-secret",
+        "investor": "Moses",
+        "amount": 500.0,
+    })
     assert response.status_code == 401
+
+
+def test_deposit_rejects_malformed_json():
+    response = client.post(
+        "/deposit",
+        content=b"not json",
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 400
 
 
 def test_deposit_appends_to_existing_investor():

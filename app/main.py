@@ -221,7 +221,20 @@ async def deposit(request: Request) -> dict:
       4. Append deposit to matching investor (case-insensitive), or create new one.
       5. Persist and return the updated investor record.
     """
-    body = await request.json()
+    # ── 1. Raw JSON parse ─────────────────────────────────────────────────────
+    try:
+        body = await request.json()
+    except Exception:
+        log.warning("Received non-JSON request body on /deposit")
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Request body must be valid JSON."},
+        )
+
+    # ── 2. Secret check ───────────────────────────────────────────────────────
+    verify_webhook_secret(body.get("secret", ""))
+
+    # ── 3. Payload validation ─────────────────────────────────────────────────
     try:
         req = DepositRequest(**body)
     except ValidationError as exc:
@@ -241,7 +254,6 @@ async def deposit(request: Request) -> dict:
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={"error": "Invalid deposit request.", "detail": _serialisable(exc.errors())},
         )
-    verify_webhook_secret(req.secret)
 
     investors = load_investors()
     match = next(
