@@ -106,3 +106,29 @@ def compute_breakdown(investors: list[Investor], spy_price: float) -> InvestorBr
         overall_dollar_pnl=overall_dollar_pnl,
         overall_pct_pnl=overall_pct_pnl,
     )
+
+
+def format_discord_message(breakdown: InvestorBreakdown, date_str: str) -> str:
+    lines = [
+        f"📊 **Investor Breakdown — {date_str}**",
+        f"SPY: ${breakdown.spy_price:,.2f}",
+        "",
+    ]
+    for r in breakdown.investors:
+        sign = "+" if r.dollar_pnl >= 0 else ""
+        lines += [
+            f"**{r.name}**",
+            f"> Deposited: ${r.total_deposited:,.2f}",
+            f"> Current Equity: ${r.current_equity:,.2f}",
+            f"> P&L: {sign}${r.dollar_pnl:,.2f} ({sign}{r.pct_pnl:.2f}%)",
+            f"> Portfolio Share: {r.portfolio_share:.1f}%",
+            "",
+        ]
+    overall_sign = "+" if breakdown.overall_dollar_pnl >= 0 else ""
+    lines += [
+        "─" * 25,
+        f"**Total Portfolio: ${breakdown.total_portfolio:,.2f}**",
+        f"**Total Deposited: ${breakdown.total_deposited:,.2f}**",
+        f"**Overall P&L: {overall_sign}${breakdown.overall_dollar_pnl:,.2f} ({overall_sign}{breakdown.overall_pct_pnl:.2f}%)**",
+    ]
+    return "\n".join(lines)

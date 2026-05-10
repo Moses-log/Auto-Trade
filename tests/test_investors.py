@@ -123,3 +123,46 @@ def test_compute_breakdown_totals():
     assert result.overall_dollar_pnl == pytest.approx(300.0)
     assert result.overall_pct_pnl == pytest.approx(10.0)
     assert result.spy_price == 110.0
+
+
+def test_format_discord_message_contains_investor_name_and_date():
+    from app.investors import Deposit, Investor, compute_breakdown, format_discord_message
+    investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    breakdown = compute_breakdown(investors, spy_price=600.0)
+    msg = format_discord_message(breakdown, "May 9, 2026")
+    assert "Moses" in msg
+    assert "May 9, 2026" in msg
+
+
+def test_format_discord_message_shows_current_equity():
+    from app.investors import Deposit, Investor, compute_breakdown, format_discord_message
+    investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    breakdown = compute_breakdown(investors, spy_price=600.0)
+    msg = format_discord_message(breakdown, "May 9, 2026")
+    assert "360.00" in msg  # current_equity = 300 * 600/500
+
+
+def test_format_discord_message_prefixes_positive_pnl_with_plus():
+    from app.investors import Deposit, Investor, compute_breakdown, format_discord_message
+    investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    breakdown = compute_breakdown(investors, spy_price=600.0)
+    msg = format_discord_message(breakdown, "May 9, 2026")
+    assert "+$60.00" in msg
+
+
+def test_format_discord_message_shows_totals():
+    from app.investors import Deposit, Investor, compute_breakdown, format_discord_message
+    investors = [
+        Investor(name="A", deposits=[Deposit(amount=1000.0, entry_spy=100.0, date="2026-01-01")]),
+        Investor(name="B", deposits=[Deposit(amount=2000.0, entry_spy=100.0, date="2026-01-01")]),
+    ]
+    breakdown = compute_breakdown(investors, spy_price=110.0)
+    msg = format_discord_message(breakdown, "May 9, 2026")
+    assert "3,300.00" in msg  # total portfolio
+    assert "3,000.00" in msg  # total deposited
