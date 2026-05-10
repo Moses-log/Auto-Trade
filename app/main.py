@@ -188,11 +188,6 @@ async def webhook(request: Request):
             extra={"ticker": payload.ticker, "action": payload.action, "result": result},
         )
 
-        await notify(
-            f"✅ <b>{payload.action.upper()}</b> {payload.ticker} "
-            f"| qty={payload.contracts} | price≈{payload.price}"
-        )
-
         asyncio.create_task(
             notify_trade(
                 ticker=payload.ticker,
