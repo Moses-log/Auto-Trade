@@ -11,7 +11,7 @@ dummy values — the tests never hit the real Alpaca API.
 
 import json
 import os
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -72,8 +72,9 @@ def test_missing_secret_rejected():
 
 # ── BUY ───────────────────────────────────────────────────────────────────────
 
+@patch("app.main.notify_trade", new_callable=AsyncMock)
 @patch("app.trading.alpaca_client.get_client")
-def test_buy_order(mock_get_client):
+def test_buy_order(mock_get_client, mock_notify_trade):
     mock_client = MagicMock()
     mock_client.submit_order.return_value = _mock_order(side="buy")
     mock_get_client.return_value = mock_client
@@ -90,8 +91,9 @@ def test_buy_order(mock_get_client):
 
 # ── SELL ──────────────────────────────────────────────────────────────────────
 
+@patch("app.main.notify_trade", new_callable=AsyncMock)
 @patch("app.trading.alpaca_client.get_client")
-def test_sell_order(mock_get_client):
+def test_sell_order(mock_get_client, mock_notify_trade):
     mock_client = MagicMock()
     mock_client.submit_order.return_value = _mock_order(side="sell")
     mock_get_client.return_value = mock_client
@@ -105,8 +107,9 @@ def test_sell_order(mock_get_client):
 
 # ── CLOSE LONG ────────────────────────────────────────────────────────────────
 
+@patch("app.main.notify_trade", new_callable=AsyncMock)
 @patch("app.trading.alpaca_client.get_client")
-def test_close_long_with_position(mock_get_client):
+def test_close_long_with_position(mock_get_client, mock_notify_trade):
     mock_position = MagicMock()
     mock_position.qty  = "5"
     mock_position.side = "long"
@@ -123,8 +126,9 @@ def test_close_long_with_position(mock_get_client):
     mock_client.close_position.assert_called_once_with("SPY")
 
 
+@patch("app.main.notify_trade", new_callable=AsyncMock)
 @patch("app.trading.alpaca_client.get_client")
-def test_close_long_no_position(mock_get_client):
+def test_close_long_no_position(mock_get_client, mock_notify_trade):
     from alpaca.common.exceptions import APIError
     mock_client = MagicMock()
     mock_client.get_open_position.side_effect = APIError(
@@ -142,8 +146,9 @@ def test_close_long_no_position(mock_get_client):
 
 # ── Idempotency ───────────────────────────────────────────────────────────────
 
+@patch("app.main.notify_trade", new_callable=AsyncMock)
 @patch("app.trading.alpaca_client.get_client")
-def test_duplicate_alert_rejected(mock_get_client):
+def test_duplicate_alert_rejected(mock_get_client, mock_notify_trade):
     mock_client = MagicMock()
     mock_client.submit_order.return_value = _mock_order()
     mock_get_client.return_value = mock_client
@@ -182,3 +187,32 @@ def test_missing_ticker_rejected():
     del payload["ticker"]
     r = client.post("/webhook", json=payload)
     assert r.status_code == 422
+
+
+@patch("app.main.notify_trade", new_callable=AsyncMock)
+@patch("app.trading.alpaca_client.get_client")
+def test_notify_trade_called_after_successful_trade(mock_get_client, mock_notify_trade):
+    payload = _load_sample("buy")
+    payload["order_id"] = "order_buy_notify_trade_unique"
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    mock_client.submit_order.return_value = _mock_order()
+    client.post("/webhook", json=payload)
+    mock_notify_trade.assert_called_once()
+    call_kwargs = mock_notify_trade.call_args[1]
+    assert call_kwargs["ticker"] == payload["ticker"]
+    assert call_kwargs["action"] == "BUY"
+
+
+@patch("app.main.notify_trade", new_callable=AsyncMock)
+@patch("app.main.get_position")
+@patch("app.trading.alpaca_client.get_client")
+def test_pre_trade_position_fetched_for_sell(mock_get_client, mock_get_position, mock_notify_trade):
+    payload = _load_sample("sell")
+    payload["order_id"] = "order_sell_pre_trade_unique"
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    mock_client.submit_order.return_value = _mock_order(side="sell")
+    mock_get_position.return_value = None
+    client.post("/webhook", json=payload)
+    mock_get_position.assert_called_once_with(payload["ticker"])

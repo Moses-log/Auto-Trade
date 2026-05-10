@@ -14,10 +14,12 @@ no separate API-key header — the secret is embedded in the alert payload
 as TradingView requires.
 """
 
+import asyncio
 import logging
 import time
 from contextlib import asynccontextmanager
 from datetime import date
+from typing import Optional
 
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
@@ -30,11 +32,12 @@ from app.github_commit import commit_investors_json
 from app.idempotency import is_duplicate, mark_processed
 from app.investors import Deposit, Investor, load_investors, save_investors, serialize_investors
 from app.logging_config import setup_logging
-from app.models import AlertPayload, DepositRequest
+from app.models import AlertPayload, DepositRequest, TradingAction
 from app.notifications import notify
+from app.trade_notifier import notify_trade
 from app.scheduler import scheduler, setup_jobs
 from app.security import verify_webhook_secret
-from app.trading.alpaca_client import get_latest_price
+from app.trading.alpaca_client import get_latest_price, get_position
 from app.trading.order_logic import execute_action
 from alpaca.common.exceptions import APIError
 
@@ -43,6 +46,14 @@ setup_logging()
 log = logging.getLogger(__name__)
 
 _start_time = time.time()
+
+_SELL_ACTIONS = {
+    TradingAction.SELL,
+    TradingAction.CLOSE_LONG,
+    TradingAction.CLOSE_SHORT,
+    TradingAction.REVERSE_TO_LONG,
+    TradingAction.REVERSE_TO_SHORT,
+}
 
 
 # ── App lifecycle ─────────────────────────────────────────────────────────────
@@ -162,6 +173,13 @@ async def webhook(request: Request):
 
     # ── 5. Execute trade ──────────────────────────────────────────────────────
     try:
+        # Capture pre-trade entry price for P&L on sells
+        avg_entry_price: Optional[float] = None
+        if payload.action in _SELL_ACTIONS:
+            pos = get_position(payload.ticker)
+            if pos and pos.avg_entry_price:
+                avg_entry_price = float(pos.avg_entry_price)
+
         result = await execute_action(payload)
         mark_processed(payload)
 
@@ -173,6 +191,16 @@ async def webhook(request: Request):
         await notify(
             f"✅ <b>{payload.action.upper()}</b> {payload.ticker} "
             f"| qty={payload.contracts} | price≈{payload.price}"
+        )
+
+        asyncio.create_task(
+            notify_trade(
+                ticker=payload.ticker,
+                action=payload.action.value.upper(),
+                result=result,
+                alert_price=payload.price,
+                avg_entry_price=avg_entry_price,
+            )
         )
 
         return JSONResponse(
