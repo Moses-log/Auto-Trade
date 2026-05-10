@@ -338,3 +338,21 @@ def test_serialize_investors_output_matches_save_investors(tmp_path):
     path = tmp_path / "investors.json"
     save_investors(investors, path=path)
     assert path.read_text(encoding="utf-8") == serialize_investors(investors)
+
+
+def test_config_github_token_defaults_to_none():
+    from app.config import Settings
+    s = Settings(alpaca_api_key="x", alpaca_secret_key="x", webhook_secret="x")
+    assert s.github_token is None
+
+
+def test_config_github_repo_defaults_to_auto_trade():
+    from app.config import Settings
+    s = Settings(alpaca_api_key="x", alpaca_secret_key="x", webhook_secret="x")
+    assert s.github_repo == "Moses-log/Auto-Trade"
+
+
+def test_config_github_token_accepts_value():
+    from app.config import Settings
+    s = Settings(alpaca_api_key="x", alpaca_secret_key="x", webhook_secret="x", github_token="ghp_abc123")
+    assert s.github_token == "ghp_abc123"

@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # ── Optional notifications (leave blank to disable) ───────────────────────
     discord_webhook_url: Optional[str] = None
     discord_investors_webhook_url: Optional[str] = None
+    github_token: Optional[str] = None
+    github_repo: str = "Moses-log/Auto-Trade"
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
 
