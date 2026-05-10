@@ -312,3 +312,14 @@ async def test_send_investor_report_sends_message_with_investor_name():
     message = mock_notify.call_args[0][0]
     assert "Moses" in message
     assert "360.00" in message  # 300 * 600/500
+
+
+def test_setup_jobs_registers_investor_breakdown_jobs():
+    from unittest.mock import MagicMock, patch
+    mock_scheduler = MagicMock()
+    with patch("app.scheduler.scheduler", mock_scheduler):
+        from app.scheduler import setup_jobs
+        setup_jobs()
+    registered_ids = [call.kwargs.get("id") for call in mock_scheduler.add_job.call_args_list]
+    assert "investor_breakdown_daily" in registered_ids
+    assert "investor_breakdown_weekly" in registered_ids
