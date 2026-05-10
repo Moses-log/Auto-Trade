@@ -14,8 +14,9 @@ from typing import Optional
 
 import pytz
 
-from app.notifications import notify
-from app.trading.alpaca_client import get_portfolio_history, get_spy_bars
+from app.investors import compute_breakdown, format_discord_message, load_investors
+from app.notifications import notify, notify_investors
+from app.trading.alpaca_client import get_latest_price, get_portfolio_history, get_spy_bars
 
 log = logging.getLogger(__name__)
 
@@ -142,3 +143,22 @@ async def send_weekly_report() -> None:
     except Exception as exc:
         log.error("Weekly P&L report failed: %s", exc)
         await notify(f"\u26a0\ufe0f Weekly P&L report failed: {exc}")
+
+
+async def send_investor_report() -> None:
+    investors = load_investors()
+    if not investors:
+        log.warning("No investors found; skipping investor report")
+        return
+
+    spy_price = get_latest_price("SPY")
+    if spy_price is None:
+        log.warning("Could not fetch SPY price; skipping investor report")
+        return
+
+    now = datetime.now(ET)
+    date_str = now.strftime(f"%B {now.day}, %Y")
+    breakdown = compute_breakdown(investors, spy_price)
+    message = format_discord_message(breakdown, date_str)
+    await notify_investors(message)
+    log.info("Investor report sent for %s", date_str)

@@ -269,3 +269,46 @@ def test_deposit_request_rejects_negative_amount():
     from app.models import DepositRequest
     with pytest.raises(ValidationError):
         DepositRequest(secret="s", investor="Moses", amount=-100.0)
+
+
+@pytest.mark.asyncio
+async def test_send_investor_report_skips_when_no_investors():
+    from unittest.mock import AsyncMock, patch
+    with patch("app.pnl.load_investors", return_value=[]):
+        with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+            from app.pnl import send_investor_report
+            await send_investor_report()
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_investor_report_skips_when_spy_price_unavailable():
+    from unittest.mock import AsyncMock, patch
+    from app.investors import Deposit, Investor
+    mock_investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    with patch("app.pnl.load_investors", return_value=mock_investors):
+        with patch("app.pnl.get_latest_price", return_value=None):
+            with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+                from app.pnl import send_investor_report
+                await send_investor_report()
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_send_investor_report_sends_message_with_investor_name():
+    from unittest.mock import AsyncMock, patch
+    from app.investors import Deposit, Investor
+    mock_investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    with patch("app.pnl.load_investors", return_value=mock_investors):
+        with patch("app.pnl.get_latest_price", return_value=600.0):
+            with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+                from app.pnl import send_investor_report
+                await send_investor_report()
+    mock_notify.assert_called_once()
+    message = mock_notify.call_args[0][0]
+    assert "Moses" in message
+    assert "360.00" in message  # 300 * 600/500
