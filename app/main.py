@@ -17,20 +17,23 @@ as TradingView requires.
 import logging
 import time
 from contextlib import asynccontextmanager
+from datetime import date
 
 import uvicorn
-from fastapi import FastAPI, Request, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.config import settings
 from app.idempotency import is_duplicate, mark_processed
+from app.investors import Deposit, Investor, load_investors, save_investors
 from app.logging_config import setup_logging
-from app.models import AlertPayload
+from app.models import AlertPayload, DepositRequest
 from app.notifications import notify
 from app.scheduler import scheduler, setup_jobs
 from app.security import verify_webhook_secret
+from app.trading.alpaca_client import get_latest_price
 from app.trading.order_logic import execute_action
 from alpaca.common.exceptions import APIError
 
@@ -204,6 +207,71 @@ async def webhook(request: Request):
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             content={"error": "Internal server error."},
         )
+
+
+@app.post("/deposit", tags=["investors"])
+async def deposit(request: Request) -> dict:
+    """
+    Record a cash deposit for an investor.
+
+    Flow:
+      1. Parse raw JSON and validate against DepositRequest.
+      2. Verify webhook secret.
+      3. Resolve SPY entry price (use provided value or fetch live from Alpaca).
+      4. Append deposit to matching investor (case-insensitive), or create new one.
+      5. Persist and return the updated investor record.
+    """
+    body = await request.json()
+    try:
+        req = DepositRequest(**body)
+    except ValidationError as exc:
+        # Pydantic v2 error dicts may contain Exception objects in the 'ctx'
+        # field which are not JSON-serialisable — convert them to strings first.
+        def _serialisable(errors):
+            result = []
+            for err in errors:
+                err = dict(err)
+                if "ctx" in err:
+                    err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
+                err.pop("url", None)
+                result.append(err)
+            return result
+
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"error": "Invalid deposit request.", "detail": _serialisable(exc.errors())},
+        )
+    verify_webhook_secret(req.secret)
+
+    investors = load_investors()
+    match = next(
+        (inv for inv in investors if inv.name.lower() == req.investor.lower()),
+        None,
+    )
+
+    spy_price = req.spy_price
+    if spy_price is None:
+        spy_price = get_latest_price("SPY")
+        if spy_price is None:
+            raise HTTPException(status_code=502, detail="Could not fetch current SPY price from Alpaca.")
+
+    new_deposit = Deposit(amount=req.amount, entry_spy=spy_price, date=date.today().isoformat())
+
+    if match is None:
+        match = Investor(name=req.investor, deposits=[new_deposit])
+        investors.append(match)
+    else:
+        match.deposits.append(new_deposit)
+
+    save_investors(investors)
+
+    return {
+        "investor": match.name,
+        "deposits": [
+            {"amount": d.amount, "entry_spy": d.entry_spy, "date": d.date}
+            for d in match.deposits
+        ],
+    }
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
