@@ -23,14 +23,17 @@ class Investor:
 def load_investors(path: Path = INVESTORS_FILE) -> list[Investor]:
     if not path.exists():
         return []
-    data = json.loads(path.read_text())
-    return [
-        Investor(
-            name=inv["name"],
-            deposits=[Deposit(**d) for d in inv["deposits"]],
-        )
-        for inv in data["investors"]
-    ]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [
+            Investor(
+                name=inv["name"],
+                deposits=[Deposit(**d) for d in inv["deposits"]],
+            )
+            for inv in data["investors"]
+        ]
+    except Exception as exc:
+        raise ValueError(f"investors.json is malformed: {exc}") from exc
 
 
 def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> None:
@@ -46,4 +49,4 @@ def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> No
             for inv in investors
         ]
     }
-    path.write_text(json.dumps(data, indent=2))
+    path.write_text(json.dumps(data, indent=2), encoding="utf-8")

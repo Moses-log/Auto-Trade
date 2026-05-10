@@ -58,3 +58,11 @@ def test_save_preserves_multiple_investors(tmp_path):
     loaded = load_investors(path=path)
     assert len(loaded) == 2
     assert loaded[1].name == "David"
+
+
+def test_load_investors_raises_on_malformed_json(tmp_path):
+    from app.investors import load_investors
+    bad = tmp_path / "investors.json"
+    bad.write_text("not valid json", encoding="utf-8")
+    with pytest.raises(ValueError, match="malformed"):
+        load_investors(path=bad)
