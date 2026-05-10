@@ -356,3 +356,48 @@ def test_config_github_token_accepts_value():
     from app.config import Settings
     s = Settings(alpaca_api_key="x", alpaca_secret_key="x", webhook_secret="x", github_token="ghp_abc123")
     assert s.github_token == "ghp_abc123"
+
+
+def test_config_discord_trades_webhook_url_defaults_to_none():
+    from app.config import Settings
+    s = Settings(alpaca_api_key="x", alpaca_secret_key="x", webhook_secret="x")
+    assert s.discord_trades_webhook_url is None
+
+
+def test_config_accepts_discord_trades_webhook_url():
+    from app.config import Settings
+    s = Settings(
+        alpaca_api_key="x", alpaca_secret_key="x", webhook_secret="x",
+        discord_trades_webhook_url="https://discord.com/api/webhooks/trades/abc",
+    )
+    assert s.discord_trades_webhook_url == "https://discord.com/api/webhooks/trades/abc"
+
+
+@pytest.mark.asyncio
+async def test_notify_trades_posts_to_trades_webhook():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=MagicMock())
+    with patch("app.notifications.settings") as mock_settings:
+        mock_settings.discord_trades_webhook_url = "https://discord.com/trades"
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from app.notifications import notify_trades
+            await notify_trades("test trade message")
+    mock_client.post.assert_called_once()
+    assert mock_client.post.call_args[0][0] == "https://discord.com/trades"
+
+
+@pytest.mark.asyncio
+async def test_notify_trades_skips_when_url_not_set():
+    from unittest.mock import AsyncMock, patch
+    with patch("app.notifications.settings") as mock_settings:
+        mock_settings.discord_trades_webhook_url = None
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from app.notifications import notify_trades
+            await notify_trades("test trade message")
+    mock_client.post.assert_not_called()
