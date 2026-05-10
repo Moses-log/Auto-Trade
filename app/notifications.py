@@ -36,6 +36,18 @@ async def _discord(message: str) -> None:
         log.warning("Discord notification failed: %s", exc)
 
 
+async def notify_investors(message: str) -> None:
+    url = settings.discord_investors_webhook_url or settings.discord_webhook_url
+    if not url:
+        log.warning("No Discord webhook configured for investor notifications; skipping")
+        return
+    try:
+        async with httpx.AsyncClient() as client:
+            await client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("Investor Discord notification failed: %s", exc)
+
+
 async def _telegram(message: str) -> None:
     url = (
         f"https://api.telegram.org/bot{settings.telegram_bot_token}"

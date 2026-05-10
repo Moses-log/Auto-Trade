@@ -192,3 +192,52 @@ def test_config_accepts_discord_investors_webhook_url():
         discord_investors_webhook_url="https://discord.com/api/webhooks/999/abc",
     )
     assert s.discord_investors_webhook_url == "https://discord.com/api/webhooks/999/abc"
+
+
+@pytest.mark.asyncio
+async def test_notify_investors_posts_to_investors_webhook():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=MagicMock())
+    with patch("app.notifications.settings") as mock_settings:
+        mock_settings.discord_investors_webhook_url = "https://discord.com/investors"
+        mock_settings.discord_webhook_url = "https://discord.com/main"
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from app.notifications import notify_investors
+            await notify_investors("test message")
+    mock_client.post.assert_called_once()
+    assert mock_client.post.call_args[0][0] == "https://discord.com/investors"
+
+
+@pytest.mark.asyncio
+async def test_notify_investors_falls_back_to_main_webhook():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    mock_client = AsyncMock()
+    mock_client.post = AsyncMock(return_value=MagicMock())
+    with patch("app.notifications.settings") as mock_settings:
+        mock_settings.discord_investors_webhook_url = None
+        mock_settings.discord_webhook_url = "https://discord.com/main"
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from app.notifications import notify_investors
+            await notify_investors("test message")
+    mock_client.post.assert_called_once()
+    assert mock_client.post.call_args[0][0] == "https://discord.com/main"
+
+
+@pytest.mark.asyncio
+async def test_notify_investors_skips_when_no_webhooks_set():
+    from unittest.mock import AsyncMock, patch
+    with patch("app.notifications.settings") as mock_settings:
+        mock_settings.discord_investors_webhook_url = None
+        mock_settings.discord_webhook_url = None
+        with patch("httpx.AsyncClient") as mock_cls:
+            mock_client = AsyncMock()
+            mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+            from app.notifications import notify_investors
+            await notify_investors("test message")
+    mock_client.post.assert_not_called()
