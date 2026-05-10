@@ -36,7 +36,7 @@ def load_investors(path: Path = INVESTORS_FILE) -> list[Investor]:
         raise ValueError(f"investors.json is malformed: {exc}") from exc
 
 
-def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> None:
+def serialize_investors(investors: list[Investor]) -> str:
     data = {
         "investors": [
             {
@@ -49,7 +49,11 @@ def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> No
             for inv in investors
         ]
     }
-    path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    return json.dumps(data, indent=2)
+
+
+def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> None:
+    path.write_text(serialize_investors(investors), encoding="utf-8")
 
 
 @dataclass

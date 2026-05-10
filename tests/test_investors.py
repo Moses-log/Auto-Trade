@@ -315,3 +315,26 @@ def test_setup_jobs_registers_investor_breakdown_jobs():
     registered_ids = [call.kwargs.get("id") for call in mock_scheduler.add_job.call_args_list]
     assert "investor_breakdown_daily" in registered_ids
     assert "investor_breakdown_weekly" in registered_ids
+
+
+def test_serialize_investors_returns_valid_json():
+    from app.investors import Deposit, Investor, serialize_investors
+    import json
+    investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=707.116, date="2026-05-09")])
+    ]
+    result = serialize_investors(investors)
+    data = json.loads(result)
+    assert data["investors"][0]["name"] == "Moses"
+    assert data["investors"][0]["deposits"][0]["amount"] == 300.0
+    assert data["investors"][0]["deposits"][0]["entry_spy"] == 707.116
+
+
+def test_serialize_investors_output_matches_save_investors(tmp_path):
+    from app.investors import Deposit, Investor, save_investors, serialize_investors
+    investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=707.116, date="2026-05-09")])
+    ]
+    path = tmp_path / "investors.json"
+    save_investors(investors, path=path)
+    assert path.read_text(encoding="utf-8") == serialize_investors(investors)
