@@ -1,5 +1,14 @@
 import json
+import os
+
 import pytest
+
+# Required so that `from app.config import Settings` (which instantiates
+# the module-level `settings` singleton) does not fail when no .env file
+# is present during testing.
+os.environ.setdefault("ALPACA_API_KEY", "test")
+os.environ.setdefault("ALPACA_SECRET_KEY", "test")
+os.environ.setdefault("WEBHOOK_SECRET", "test-secret")
 
 
 def test_load_investors_returns_empty_list_when_file_missing(tmp_path):
@@ -166,3 +175,20 @@ def test_format_discord_message_shows_totals():
     msg = format_discord_message(breakdown, "May 9, 2026")
     assert "3,300.00" in msg  # total portfolio
     assert "3,000.00" in msg  # total deposited
+
+
+def test_config_discord_investors_webhook_url_defaults_to_none():
+    from app.config import Settings
+    s = Settings(alpaca_api_key="x", alpaca_secret_key="x", webhook_secret="x")
+    assert s.discord_investors_webhook_url is None
+
+
+def test_config_accepts_discord_investors_webhook_url():
+    from app.config import Settings
+    s = Settings(
+        alpaca_api_key="x",
+        alpaca_secret_key="x",
+        webhook_secret="x",
+        discord_investors_webhook_url="https://discord.com/api/webhooks/999/abc",
+    )
+    assert s.discord_investors_webhook_url == "https://discord.com/api/webhooks/999/abc"
