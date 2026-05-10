@@ -1,14 +1,6 @@
 import json
-import os
 
 import pytest
-
-# Required so that `from app.config import Settings` (which instantiates
-# the module-level `settings` singleton) does not fail when no .env file
-# is present during testing.
-os.environ.setdefault("ALPACA_API_KEY", "test")
-os.environ.setdefault("ALPACA_SECRET_KEY", "test")
-os.environ.setdefault("WEBHOOK_SECRET", "test-secret")
 
 
 def test_load_investors_returns_empty_list_when_file_missing(tmp_path):
