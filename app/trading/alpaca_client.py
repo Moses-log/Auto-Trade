@@ -242,6 +242,20 @@ def close_position(ticker: str) -> Optional[Order]:
     return order
 
 
+@_retry
+def get_order(order_id: str) -> Optional[Order]:
+    """
+    Fetch a full order object by ID.
+    Used to get fill price after a trade executes.
+    Returns None if order not found or any exception occurs.
+    """
+    try:
+        return get_client().get_order_by_id(order_id)
+    except Exception as exc:
+        log.warning("Could not fetch order %s: %s", order_id, exc)
+        return None
+
+
 # ── Internal helpers ──────────────────────────────────────────────────────────
 
 def _sanitise_qty(qty: float) -> float:

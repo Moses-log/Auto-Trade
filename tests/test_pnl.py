@@ -305,3 +305,29 @@ async def test_send_weekly_report_includes_spy(mock_notify, mock_get_history, mo
     msg = mock_notify.call_args[0][0]
     assert "S&P 500" in msg
     assert "Weekly P&L" in msg
+
+
+# ── get_order tests ───────────────────────────────────────────────────────────
+
+@patch("app.trading.alpaca_client.get_client")
+def test_get_order_returns_order_on_success(mock_get_client):
+    from app.trading.alpaca_client import get_order
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    fake_order = MagicMock()
+    fake_order.filled_avg_price = "537.42"
+    fake_order.filled_qty = "5"
+    mock_client.get_order_by_id.return_value = fake_order
+    result = get_order("abc-123")
+    assert result is fake_order
+    mock_client.get_order_by_id.assert_called_once_with("abc-123")
+
+
+@patch("app.trading.alpaca_client.get_client")
+def test_get_order_returns_none_on_exception(mock_get_client):
+    from app.trading.alpaca_client import get_order
+    mock_client = MagicMock()
+    mock_get_client.return_value = mock_client
+    mock_client.get_order_by_id.side_effect = Exception("not found")
+    result = get_order("bad-id")
+    assert result is None
