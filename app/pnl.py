@@ -16,7 +16,9 @@ import pytz
 
 from app.investors import compute_breakdown, format_discord_message, load_investors
 from app.notifications import notify, notify_investors
-from app.trading.alpaca_client import get_latest_price, get_portfolio_history, get_spy_bars
+import yfinance as yf
+
+from app.trading.alpaca_client import get_latest_price, get_portfolio_history
 
 log = logging.getLogger(__name__)
 
@@ -43,26 +45,28 @@ def _compute_pnl(history, period: str) -> PnLResult:
     return PnLResult(period=period, close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
 
 
-def compute_spy_pct(bars) -> Optional[float]:
-    """Extract S&P 500 % return from SPY BarSet.
+def compute_spy_pct(period: str) -> Optional[float]:
+    """Fetch SPY % return for the given period using yfinance (free, no subscription).
 
     Args:
-        bars: BarSet (dict-like) from get_spy_bars(). Access via bars["SPY"].
+        period: "1d" for daily, "5d" for weekly.
 
     Returns:
-        % return as float, or None if bars empty or key missing.
+        % return as float, or None if data unavailable.
     """
     try:
-        spy_bars = bars["SPY"]
-    except (KeyError, TypeError):
+        interval = "1m" if period == "1d" else "1d"
+        hist = yf.Ticker("SPY").history(period=period, interval=interval)
+        if hist.empty:
+            return None
+        open_price = float(hist["Open"].iloc[0])
+        close_price = float(hist["Close"].iloc[-1])
+        if not open_price:
+            return None
+        return (close_price - open_price) / open_price * 100
+    except Exception as exc:
+        log.warning("yfinance SPY fetch failed: %s", exc)
         return None
-    if not spy_bars:
-        return None
-    open_price = spy_bars[0].open
-    close_price = spy_bars[-1].close
-    if not open_price:
-        return None
-    return (close_price - open_price) / open_price * 100
 
 
 def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optional[float] = None) -> str:
@@ -104,13 +108,7 @@ async def send_daily_report() -> None:
         history = get_portfolio_history(period="1D", timeframe="1Min")
         result = _compute_pnl(history, "daily")
 
-        spy_pct = None
-        try:
-            market_open = now.replace(hour=9, minute=30, second=0, microsecond=0)
-            bars = get_spy_bars(start=market_open, end=now)
-            spy_pct = compute_spy_pct(bars)
-        except Exception as spy_exc:
-            log.warning("SPY data fetch failed, omitting S&P line: %s", spy_exc)
+        spy_pct = compute_spy_pct("1d")
 
         msg = _format_message(result, "Daily P&L", date_str, spy_pct=spy_pct)
         await notify(msg)
@@ -129,13 +127,7 @@ async def send_weekly_report() -> None:
         history = get_portfolio_history(period="1W", timeframe="1D")
         result = _compute_pnl(history, "weekly")
 
-        spy_pct = None
-        try:
-            monday_open = monday.replace(hour=9, minute=30, second=0, microsecond=0)
-            bars = get_spy_bars(start=monday_open, end=now)
-            spy_pct = compute_spy_pct(bars)
-        except Exception as spy_exc:
-            log.warning("SPY data fetch failed, omitting S&P line: %s", spy_exc)
+        spy_pct = compute_spy_pct("5d")
 
         msg = _format_message(result, "Weekly P&L", date_str, spy_pct=spy_pct)
         await notify(msg)
