@@ -35,7 +35,7 @@ def _format_trade_message(
     else:
         price_str = "unknown"
 
-    qty_str = f"{filled_qty:.0f}" if filled_qty is not None else "?"
+    qty_str = f"{filled_qty:g}" if filled_qty is not None else "?"
 
     now = datetime.now(CT)
     hour = int(now.strftime("%I"))
@@ -45,7 +45,7 @@ def _format_trade_message(
     lines = [
         f"{emoji} **{action.upper()} — {ticker}**",
         f"Qty: {qty_str} shares @ {price_str}",
-        f"Position: {position_qty:.0f} shares",
+        f"Position: {position_qty:g} shares",
     ]
 
     if dollar_pnl is not None and pct_pnl is not None:
