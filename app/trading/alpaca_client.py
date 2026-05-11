@@ -121,7 +121,7 @@ def get_portfolio_history(period: str, timeframe: str):
         PortfolioHistory object with .equity list (float) and .timestamp list (int).
     """
     return get_client().get_portfolio_history(
-        filter=GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
+        GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
     )
 
 
