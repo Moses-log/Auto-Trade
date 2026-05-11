@@ -34,6 +34,7 @@ from app.investors import Deposit, Investor, load_investors, save_investors, ser
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
 from app.notifications import notify
+from app.pnl import send_daily_report, send_weekly_report
 from app.trade_notifier import notify_trade
 from app.scheduler import scheduler, setup_jobs
 from app.security import verify_webhook_secret
@@ -314,6 +315,28 @@ async def deposit(request: Request) -> dict:
             for d in match.deposits
         ],
     }
+
+
+@app.post("/run-report")
+async def run_report(request: Request) -> dict:
+    """Manually trigger a P&L report. Body: {"secret": "...", "report": "daily"|"weekly"|"both"}"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Request body must be valid JSON."})
+
+    verify_webhook_secret(body.get("secret", ""))
+
+    report = body.get("report", "daily")
+    if report not in ("daily", "weekly", "both"):
+        return JSONResponse(status_code=422, content={"error": "report must be 'daily', 'weekly', or 'both'"})
+
+    if report in ("daily", "both"):
+        await send_daily_report()
+    if report in ("weekly", "both"):
+        await send_weekly_report()
+
+    return {"status": "ok", "report": report}
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
