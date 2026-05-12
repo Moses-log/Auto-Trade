@@ -8,6 +8,7 @@ import pytz
 
 from app.notifications import notify_trades
 from app.trading.alpaca_client import get_order, get_position
+from app.trade_record import format_record, record_trade_result
 
 log = logging.getLogger(__name__)
 CT = pytz.timezone("America/Chicago")
@@ -24,6 +25,7 @@ def _format_trade_message(
     position_qty: float,
     dollar_pnl: Optional[float],
     pct_pnl: Optional[float],
+    record_str: Optional[str] = None,
 ) -> str:
     is_buy = action.upper() in _BUY_ACTIONS
     emoji = "🟢" if is_buy else "🔴"
@@ -52,14 +54,19 @@ def _format_trade_message(
         if dollar_pnl >= 0:
             pnl_str = f"+${dollar_pnl:,.2f}"
             pct_str = f"+{pct_pnl:.2f}%"
-            pnl_emoji = "🟢"
+            result_label = "🟢 WIN"
         else:
             pnl_str = f"-${abs(dollar_pnl):,.2f}"
             pct_str = f"{pct_pnl:.2f}%"
-            pnl_emoji = "🔴"
-        lines.append(f"P&L: {pnl_str} ({pct_str}) {pnl_emoji}")
+            result_label = "🔴 LOSS"
+        lines.append(f"P&L: {pnl_str} ({pct_str}) {result_label}")
 
     lines.append(f"🕐 {time_str}")
+
+    if record_str:
+        lines.append("")
+        lines.append(f"Record: {record_str}")
+
     return "\n".join(lines)
 
 
@@ -94,6 +101,11 @@ async def notify_trade(
             dollar_pnl = (filled_price - avg_entry_price) * filled_qty
             pct_pnl = (filled_price - avg_entry_price) / avg_entry_price * 100
 
+        record_str: Optional[str] = None
+        if dollar_pnl is not None:
+            wins, losses = await record_trade_result(dollar_pnl >= 0)
+            record_str = format_record(wins, losses)
+
         message = _format_trade_message(
             ticker=ticker,
             action=action,
@@ -103,6 +115,7 @@ async def notify_trade(
             position_qty=position_qty,
             dollar_pnl=dollar_pnl,
             pct_pnl=pct_pnl,
+            record_str=record_str,
         )
         await notify_trades(message)
 
