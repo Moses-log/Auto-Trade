@@ -22,8 +22,8 @@ Render (FastAPI)
 APScheduler (inside Render)
       ├── 3:00 PM CT Mon–Fri   → Daily P&L report    → Discord (main channel)
       ├── 3:01 PM CT Friday    → Weekly P&L report   → Discord (main channel)
-      ├── 3:02 PM CT Mon–Fri   → Investor breakdown  → Discord (investors channel)
-      └── 3:03 PM CT Friday    → Investor breakdown  → Discord (investors channel)
+      └── 3:02 PM CT Mon–Fri   → Investor breakdown  → Discord (investors channel)
+                                  (3:03 PM on Fridays to avoid colliding with weekly report)
 ```
 
 ---
