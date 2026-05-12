@@ -54,6 +54,8 @@ _SELL_ACTIONS = {
     TradingAction.CLOSE_SHORT,
     TradingAction.REVERSE_TO_LONG,
     TradingAction.REVERSE_TO_SHORT,
+    TradingAction.REMOVE_LEVERAGE,
+    TradingAction.STOP_LOSS,
 }
 
 
@@ -75,7 +77,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="TradingView → Alpaca Webhook",
     version="1.0.0",
-    docs_url=None,   # Disable Swagger UI in production (re-enable for dev)
+    docs_url=None,
     redoc_url=None,
     lifespan=lifespan,
 )
@@ -174,7 +176,6 @@ async def webhook(request: Request):
 
     # ── 5. Execute trade ──────────────────────────────────────────────────────
     try:
-        # Capture pre-trade entry price for P&L on sells
         avg_entry_price: Optional[float] = None
         if payload.action in _SELL_ACTIONS:
             pos = get_position(payload.ticker)
@@ -205,7 +206,6 @@ async def webhook(request: Request):
         )
 
     except ValueError as exc:
-        # Bad input (e.g. qty = 0), not an Alpaca error
         log.warning("Trade rejected — bad value: %s", exc, extra={"ticker": payload.ticker})
         await notify(f"⚠️ Trade rejected for {payload.ticker}: {exc}")
         return JSONResponse(
@@ -246,7 +246,6 @@ async def deposit(request: Request) -> dict:
       4. Append deposit to matching investor (case-insensitive), or create new one.
       5. Persist and return the updated investor record.
     """
-    # ── 1. Raw JSON parse ─────────────────────────────────────────────────────
     try:
         body = await request.json()
     except Exception:
@@ -256,15 +255,11 @@ async def deposit(request: Request) -> dict:
             content={"error": "Request body must be valid JSON."},
         )
 
-    # ── 2. Secret check ───────────────────────────────────────────────────────
     verify_webhook_secret(body.get("secret", ""))
 
-    # ── 3. Payload validation ─────────────────────────────────────────────────
     try:
         req = DepositRequest(**body)
     except ValidationError as exc:
-        # Pydantic v2 error dicts may contain Exception objects in the 'ctx'
-        # field which are not JSON-serialisable — convert them to strings first.
         def _serialisable(errors):
             result = []
             for err in errors:
@@ -357,5 +352,5 @@ if __name__ == "__main__":
         host="0.0.0.0",
         port=settings.port,
         reload=False,
-        log_config=None,  # We manage logging ourselves
+        log_config=None,
     )
