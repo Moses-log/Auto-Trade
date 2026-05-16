@@ -69,3 +69,84 @@ def test_parse_options_returns_dict():
 def test_parse_options_empty():
     from app.interactions import parse_options
     assert parse_options([]) == {}
+
+
+_private_key2 = Ed25519PrivateKey.generate()
+_public_key2 = _private_key2.public_key()
+TEST_PK2 = _public_key2.public_bytes(Encoding.Raw, PublicFormat.Raw).hex()
+
+
+def _sign2(timestamp: str, body: bytes) -> str:
+    return _private_key2.sign(timestamp.encode() + body).hex()
+
+
+@pytest.mark.asyncio
+async def test_interactions_ping():
+    with patch("app.config.settings.discord_app_public_key", TEST_PK2), \
+         patch("app.config.settings.discord_your_user_id", "user123"):
+        from app.main import app
+        body = json.dumps({"type": 1}).encode()
+        ts = "1234567890"
+        sig = _sign2(ts, body)
+        from httpx import AsyncClient, ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/interactions",
+                content=body,
+                headers={
+                    "X-Signature-Ed25519": sig,
+                    "X-Signature-Timestamp": ts,
+                    "Content-Type": "application/json",
+                },
+            )
+    assert resp.status_code == 200
+    assert resp.json()["type"] == 1
+
+
+@pytest.mark.asyncio
+async def test_interactions_invalid_signature_returns_401():
+    with patch("app.config.settings.discord_app_public_key", TEST_PK2):
+        from app.main import app
+        body = json.dumps({"type": 1}).encode()
+        from httpx import AsyncClient, ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/interactions",
+                content=body,
+                headers={
+                    "X-Signature-Ed25519": "badbad",
+                    "X-Signature-Timestamp": "ts",
+                    "Content-Type": "application/json",
+                },
+            )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_interactions_unauthorized_user():
+    with patch("app.config.settings.discord_app_public_key", TEST_PK2), \
+         patch("app.config.settings.discord_your_user_id", "user123"):
+        from app.main import app
+        body = json.dumps({
+            "type": 2,
+            "token": "tok",
+            "user": {"id": "wrong-user"},
+            "data": {"name": "report", "options": [{"name": "type", "value": "daily"}]},
+        }).encode()
+        ts = "1234567890"
+        sig = _sign2(ts, body)
+        from httpx import AsyncClient, ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/interactions",
+                content=body,
+                headers={
+                    "X-Signature-Ed25519": sig,
+                    "X-Signature-Timestamp": ts,
+                    "Content-Type": "application/json",
+                },
+            )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["data"]["content"] == "Unauthorized."
+    assert data["data"]["flags"] == 64

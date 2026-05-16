@@ -15,6 +15,7 @@ as TradingView requires.
 """
 
 import asyncio
+import json
 import logging
 import time
 from contextlib import asynccontextmanager
@@ -22,7 +23,7 @@ from datetime import date
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import ValidationError
@@ -41,6 +42,8 @@ from app.security import verify_webhook_secret
 from app.trading.alpaca_client import get_latest_price, get_position
 from app.trading.order_logic import execute_action
 from alpaca.common.exceptions import APIError
+from app.interactions import extract_user_id, parse_options, verify_discord_signature
+from app.discord_commands import dispatch_command
 
 # ── Logging must be set up before the first log call ─────────────────────────
 setup_logging()
@@ -105,6 +108,34 @@ async def health():
         "uptime_s": round(time.time() - _start_time, 1),
         "paper":   "paper" in settings.alpaca_base_url,
     }
+
+
+@app.post("/interactions", tags=["discord"])
+async def interactions(request: Request, background_tasks: BackgroundTasks):
+    body = await request.body()
+    signature = request.headers.get("X-Signature-Ed25519", "")
+    timestamp = request.headers.get("X-Signature-Timestamp", "")
+
+    if not settings.discord_app_public_key or not verify_discord_signature(
+        settings.discord_app_public_key, signature, timestamp, body
+    ):
+        return JSONResponse(status_code=401, content={"error": "Invalid signature"})
+
+    data = json.loads(body)
+
+    if data.get("type") == 1:
+        return {"type": 1}
+
+    user_id = extract_user_id(data)
+    if user_id != settings.discord_your_user_id:
+        return {"type": 4, "data": {"content": "Unauthorized.", "flags": 64}}
+
+    token = data["token"]
+    command = data["data"]["name"]
+    options = parse_options(data["data"].get("options", []))
+
+    background_tasks.add_task(dispatch_command, command, options, token)
+    return {"type": 5, "data": {"flags": 64}}
 
 
 @app.post("/webhook", tags=["trading"])
