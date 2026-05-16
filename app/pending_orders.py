@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 from pathlib import Path
 from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_FILE = Path("pending_orders.json")
+_FILE = Path(os.getenv("PENDING_ORDERS_PATH", "pending_orders.json"))
 _lock = threading.Lock()
 
 
@@ -57,8 +58,3 @@ def remove_pending_order(order_id: str) -> None:
 
 def load_pending_orders() -> list:
     return _load()
-
-
-def as_json() -> str:
-    with _lock:
-        return json.dumps({"pending": _load()})
