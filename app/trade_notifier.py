@@ -72,6 +72,19 @@ def _format_trade_message(
     return "\n".join(lines)
 
 
+def _format_queued_message(ticker: str, action: str, alert_price: Optional[float]) -> str:
+    now = datetime.now(CT)
+    hour = int(now.strftime("%I"))
+    tz_label = now.strftime("%Z")
+    time_str = f"{hour}:{now.strftime('%M %p')} {tz_label} — {now.strftime('%B')} {now.day}, {now.year}"
+    price_str = f"≈${alert_price:,.2f}" if alert_price else "unknown price"
+    return "\n".join([
+        f"⏳ **{action.upper()} — {ticker}**",
+        f"Order queued for next market open @ {price_str}",
+        f"🕐 {time_str}",
+    ])
+
+
 async def notify_trade(
     ticker: str,
     action: str,
@@ -93,8 +106,12 @@ async def notify_trade(
                     filled_price = float(order.filled_avg_price)
                     filled_qty = float(order.filled_qty) if order.filled_qty else None
                 elif order:
-                    # Order exists but not yet filled — queued for next session
                     pending_order_id = order_id
+
+        if pending_order_id:
+            await notify_trades(_format_queued_message(ticker, action, alert_price))
+            _schedule_pending_followup(pending_order_id, ticker, action, alert_price, avg_entry_price)
+            return
 
         position_qty = 0.0
         pos = get_position(ticker)
@@ -124,9 +141,6 @@ async def notify_trade(
             record_str=record_str,
         )
         await notify_trades(message)
-
-        if pending_order_id:
-            _schedule_pending_followup(pending_order_id, ticker, action, alert_price, avg_entry_price)
 
     except Exception as exc:
         log.warning("Trade notification failed: %s", exc)
