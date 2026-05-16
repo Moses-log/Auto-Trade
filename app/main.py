@@ -35,7 +35,14 @@ from app.investors import Deposit, Investor, load_investors, save_investors, ser
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
 from app.notifications import notify
-from app.pnl import send_daily_report, send_weekly_report
+from app.pnl import (
+    send_daily_report,
+    send_weekly_report,
+    send_monthly_report,
+    send_yearly_report,
+    send_ytd_report,
+    send_alltime_report,
+)
 from app.trade_notifier import notify_trade
 from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders
 from app.security import verify_webhook_secret
@@ -349,7 +356,7 @@ async def deposit(request: Request) -> dict:
 
 @app.post("/run-report")
 async def run_report(request: Request) -> dict:
-    """Manually trigger a P&L report. Body: {"secret": "...", "report": "daily"|"weekly"|"both"}"""
+    """Manually trigger a P&L report. Body: {"secret": "...", "report": "daily"|"weekly"|"monthly"|"ytd"|"1year"|"alltime"|"both"}"""
     try:
         body = await request.json()
     except Exception:
@@ -357,14 +364,26 @@ async def run_report(request: Request) -> dict:
 
     verify_webhook_secret(body.get("secret", ""))
 
+    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both"}
     report = body.get("report", "daily")
-    if report not in ("daily", "weekly", "both"):
-        return JSONResponse(status_code=422, content={"error": "report must be 'daily', 'weekly', or 'both'"})
+    if report not in _VALID:
+        return JSONResponse(
+            status_code=422,
+            content={"error": f"report must be one of: {', '.join(sorted(_VALID))}"},
+        )
 
     if report in ("daily", "both"):
         await send_daily_report()
     if report in ("weekly", "both"):
         await send_weekly_report()
+    if report == "monthly":
+        await send_monthly_report()
+    if report == "ytd":
+        await send_ytd_report()
+    if report == "1year":
+        await send_yearly_report()
+    if report == "alltime":
+        await send_alltime_report()
 
     return {"status": "ok", "report": report}
 
