@@ -309,3 +309,136 @@ def test_get_order_returns_none_on_exception(mock_get_client):
     mock_client.get_order_by_id.side_effect = Exception("not found")
     result = get_order("bad-id")
     assert result is None
+
+
+# ── New extended report tests ─────────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_monthly_report_success(mock_notify, mock_get_history, mock_spy):
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 10500.0])
+    from app.pnl import send_monthly_report
+    await send_monthly_report()
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "Monthly P&L" in msg
+    assert "$10,500.00" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_monthly_report_alpaca_error(mock_notify, mock_get_history, mock_spy):
+    mock_get_history.side_effect = Exception("Alpaca unreachable")
+    from app.pnl import send_monthly_report
+    await send_monthly_report()
+    msg = mock_notify.call_args[0][0]
+    assert "⚠️" in msg
+    assert "Monthly" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_yearly_report_success(mock_notify, mock_get_history, mock_spy):
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 12000.0])
+    from app.pnl import send_yearly_report
+    await send_yearly_report()
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "Yearly P&L" in msg
+    assert "$12,000.00" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_ytd_report_success(mock_notify, mock_get_history, mock_spy):
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 10800.0])
+    from app.pnl import send_ytd_report
+    await send_ytd_report()
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "YTD" in msg
+    assert "$10,800.00" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_alltime_report_success(mock_notify, mock_get_history, mock_spy):
+    import time
+    fake_history = MagicMock()
+    fake_history.equity = [0.0, 10000.0, 11500.0]
+    fake_history.timestamp = [
+        int(time.time()) - 86400 * 10,
+        int(time.time()) - 86400 * 5,
+        int(time.time()),
+    ]
+    mock_get_history.return_value = fake_history
+    from app.pnl import send_alltime_report
+    await send_alltime_report()
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "All-Time P&L" in msg
+    assert "since" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.get_next_trading_day")
+@patch("app.pnl.send_monthly_report", new_callable=AsyncMock)
+@patch("app.pnl.send_yearly_report", new_callable=AsyncMock)
+async def test_check_period_reports_fires_monthly_on_last_trading_day_of_month(
+    mock_yearly, mock_monthly, mock_next_day
+):
+    from datetime import date
+    # next trading day is in a different month → fire monthly
+    mock_next_day.return_value = date(2026, 6, 1)
+    with patch("app.pnl.datetime") as mock_dt:
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 30)
+        from app.pnl import check_period_reports
+        await check_period_reports()
+    mock_monthly.assert_called_once()
+    mock_yearly.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.get_next_trading_day")
+@patch("app.pnl.send_monthly_report", new_callable=AsyncMock)
+@patch("app.pnl.send_yearly_report", new_callable=AsyncMock)
+async def test_check_period_reports_fires_both_on_last_trading_day_of_year(
+    mock_yearly, mock_monthly, mock_next_day
+):
+    from datetime import date
+    # next trading day is in a different year → fire both monthly and yearly
+    mock_next_day.return_value = date(2027, 1, 2)
+    with patch("app.pnl.datetime") as mock_dt:
+        mock_dt.now.return_value.date.return_value = date(2026, 12, 31)
+        from app.pnl import check_period_reports
+        await check_period_reports()
+    mock_monthly.assert_called_once()
+    mock_yearly.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.get_next_trading_day")
+@patch("app.pnl.send_monthly_report", new_callable=AsyncMock)
+@patch("app.pnl.send_yearly_report", new_callable=AsyncMock)
+async def test_check_period_reports_silent_mid_month(
+    mock_yearly, mock_monthly, mock_next_day
+):
+    from datetime import date
+    # next trading day is same month/year → fire nothing
+    mock_next_day.return_value = date(2026, 5, 18)
+    with patch("app.pnl.datetime") as mock_dt:
+        mock_dt.now.return_value.date.return_value = date(2026, 5, 15)
+        from app.pnl import check_period_reports
+        await check_period_reports()
+    mock_monthly.assert_not_called()
+    mock_yearly.assert_not_called()

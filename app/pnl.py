@@ -18,7 +18,7 @@ from app.investors import compute_breakdown, format_discord_message, load_invest
 from app.notifications import notify, notify_investors
 import yfinance as yf
 
-from app.trading.alpaca_client import get_latest_price, get_portfolio_history
+from app.trading.alpaca_client import get_latest_price, get_portfolio_history, get_next_trading_day
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +135,107 @@ async def send_weekly_report() -> None:
     except Exception as exc:
         log.error("Weekly P&L report failed: %s", exc)
         await notify(f"\u26a0\ufe0f Weekly P&L report failed: {exc}")
+
+
+async def send_monthly_report() -> None:
+    """Fetch monthly portfolio history and post P&L to Discord."""
+    now = datetime.now(ET)
+    date_str = f"Month of {now.strftime('%B %Y')}"
+    try:
+        history = get_portfolio_history(period="1M", timeframe="1D")
+        result = _compute_pnl(history, "monthly")
+        spy_pct = compute_spy_pct("1mo")
+        msg = _format_message(result, "Monthly P&L", date_str, spy_pct=spy_pct)
+        await notify(msg)
+        log.info("Monthly P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
+    except Exception as exc:
+        log.error("Monthly P&L report failed: %s", exc)
+        await notify(f"⚠️ Monthly P&L report failed: {exc}")
+
+
+async def send_yearly_report() -> None:
+    """Fetch trailing 12-month portfolio history and post P&L to Discord."""
+    now = datetime.now(ET)
+    date_str = f"Year {now.year}"
+    try:
+        history = get_portfolio_history(period="1A", timeframe="1D")
+        result = _compute_pnl(history, "yearly")
+        spy_pct = compute_spy_pct("1y")
+        msg = _format_message(result, "Yearly P&L", date_str, spy_pct=spy_pct)
+        await notify(msg)
+        log.info("Yearly P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
+    except Exception as exc:
+        log.error("Yearly P&L report failed: %s", exc)
+        await notify(f"⚠️ Yearly P&L report failed: {exc}")
+
+
+async def send_ytd_report() -> None:
+    """Fetch year-to-date portfolio history (Jan 1 to today) and post P&L to Discord."""
+    now = datetime.now(ET)
+    today = now.date()
+    jan1 = today.replace(month=1, day=1)
+    days = max((today - jan1).days, 1)
+    date_str = f"YTD Jan 1–{now.strftime('%b')} {now.day}, {now.year}"
+    try:
+        history = get_portfolio_history(period=f"{days}D", timeframe="1D")
+        result = _compute_pnl(history, "ytd")
+        spy_pct = compute_spy_pct("ytd")
+        msg = _format_message(result, "YTD P&L", date_str, spy_pct=spy_pct)
+        await notify(msg)
+        log.info("YTD P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
+    except Exception as exc:
+        log.error("YTD P&L report failed: %s", exc)
+        await notify(f"⚠️ YTD P&L report failed: {exc}")
+
+
+async def send_alltime_report() -> None:
+    """Fetch all-time portfolio history and post P&L to Discord."""
+    now = datetime.now(ET)
+    try:
+        history = get_portfolio_history(period="all", timeframe="1D")
+
+        # Find first non-zero equity to skip pre-portfolio zeros
+        start_idx = next(
+            (i for i, eq in enumerate(history.equity) if eq and eq > 0),
+            0,
+        )
+        open_eq = history.equity[start_idx]
+        close_eq = history.equity[-1]
+        dollar = close_eq - open_eq
+        pct = (dollar / open_eq * 100) if open_eq else 0.0
+        result = PnLResult(period="alltime", close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
+
+        start_str = "inception"
+        if start_idx < len(history.timestamp):
+            start_dt = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET)
+            start_str = start_dt.strftime(f"%b {start_dt.day}, %Y")
+        date_str = f"All Time since {start_str}"
+
+        spy_pct = compute_spy_pct("max")
+        msg = _format_message(result, "All-Time P&L", date_str, spy_pct=spy_pct)
+        await notify(msg)
+        log.info("All-time P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
+    except Exception as exc:
+        log.error("All-time P&L report failed: %s", exc)
+        await notify(f"⚠️ All-time P&L report failed: {exc}")
+
+
+async def check_period_reports() -> None:
+    """Fire monthly/yearly reports when today is the last trading day of the period.
+
+    Called Mon-Fri at 4:05 PM ET by APScheduler. Uses get_next_trading_day()
+    to detect month/year boundaries correctly, including market holidays.
+    """
+    today = datetime.now(ET).date()
+    try:
+        next_trading = get_next_trading_day()
+    except Exception as exc:
+        log.warning("Could not fetch next trading day for period check: %s", exc)
+        return
+    if next_trading.month != today.month:
+        await send_monthly_report()
+    if next_trading.year != today.year:
+        await send_yearly_report()
 
 
 async def send_investor_report() -> None:
