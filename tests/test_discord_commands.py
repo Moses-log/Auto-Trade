@@ -126,3 +126,43 @@ async def test_handle_deposit_spy_fetch_failure():
 
     msg = mock_edit.call_args[0][1]
     assert "Could not fetch SPY price" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_report_monthly():
+    with patch("app.discord_commands.send_monthly_report", new_callable=AsyncMock), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("monthly", "test-token")
+    msg = mock_edit.call_args[0][1]
+    assert "monthly" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_report_ytd():
+    with patch("app.discord_commands.send_ytd_report", new_callable=AsyncMock), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("ytd", "test-token")
+    msg = mock_edit.call_args[0][1]
+    assert "✅" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_report_1year():
+    with patch("app.discord_commands.send_yearly_report", new_callable=AsyncMock), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("1year", "test-token")
+    msg = mock_edit.call_args[0][1]
+    assert "✅" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_report_alltime():
+    with patch("app.discord_commands.send_alltime_report", new_callable=AsyncMock), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("alltime", "test-token")
+    msg = mock_edit.call_args[0][1]
+    assert "✅" in msg

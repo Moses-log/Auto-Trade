@@ -9,7 +9,14 @@ import httpx
 from app.config import settings
 from app.github_commit import commit_investors_json
 from app.investors import Deposit, get_total_deposited, load_investors, save_investors, serialize_investors
-from app.pnl import send_daily_report, send_weekly_report
+from app.pnl import (
+    send_daily_report,
+    send_weekly_report,
+    send_monthly_report,
+    send_yearly_report,
+    send_ytd_report,
+    send_alltime_report,
+)
 from app.trading.alpaca_client import get_latest_price
 
 log = logging.getLogger(__name__)
@@ -101,6 +108,14 @@ async def handle_report(report_type: str, token: str) -> None:
         await send_daily_report()
     if report_type in ("weekly", "both"):
         await send_weekly_report()
+    if report_type == "monthly":
+        await send_monthly_report()
+    if report_type == "ytd":
+        await send_ytd_report()
+    if report_type == "1year":
+        await send_yearly_report()
+    if report_type == "alltime":
+        await send_alltime_report()
     await _edit_original(token, f"✅ {report_type.capitalize()} report sent")
 
 
