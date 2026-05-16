@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     github_token: Optional[str] = None
     github_repo: str = "Moses-log/Auto-Trade"
     discord_trades_webhook_url: Optional[str] = None
+
+    # ── Discord slash commands ─────────────────────────────────────────────────
+    discord_app_public_key: Optional[str] = None
+    discord_app_id: Optional[str] = None
+    discord_your_user_id: Optional[str] = None
+
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
 
