@@ -150,3 +150,35 @@ async def test_interactions_unauthorized_user():
     data = resp.json()
     assert data["data"]["content"] == "Unauthorized."
     assert data["data"]["flags"] == 64
+
+
+@pytest.mark.asyncio
+async def test_interactions_valid_command_dispatches():
+    with patch("app.config.settings.discord_app_public_key", TEST_PK2), \
+         patch("app.config.settings.discord_your_user_id", "user123"), \
+         patch("app.discord_commands.dispatch_command", new_callable=AsyncMock) as mock_dispatch:
+        from app.main import app
+        body = json.dumps({
+            "type": 2,
+            "token": "real-token",
+            "user": {"id": "user123"},
+            "data": {
+                "name": "report",
+                "options": [{"name": "type", "value": "daily"}],
+            },
+        }).encode()
+        ts = "1234567890"
+        sig = _sign2(ts, body)
+        from httpx import AsyncClient, ASGITransport
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post(
+                "/interactions",
+                content=body,
+                headers={
+                    "X-Signature-Ed25519": sig,
+                    "X-Signature-Timestamp": ts,
+                    "Content-Type": "application/json",
+                },
+            )
+    assert resp.status_code == 200
+    assert resp.json()["type"] == 5

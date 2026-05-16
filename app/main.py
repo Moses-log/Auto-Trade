@@ -39,11 +39,11 @@ from app.pnl import send_daily_report, send_weekly_report
 from app.trade_notifier import notify_trade
 from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders
 from app.security import verify_webhook_secret
+from app.discord_commands import dispatch_command
+from app.interactions import extract_user_id, parse_options, verify_discord_signature
 from app.trading.alpaca_client import get_latest_price, get_position
 from app.trading.order_logic import execute_action
 from alpaca.common.exceptions import APIError
-from app.interactions import extract_user_id, parse_options, verify_discord_signature
-from app.discord_commands import dispatch_command
 
 # ── Logging must be set up before the first log call ─────────────────────────
 setup_logging()
@@ -121,7 +121,10 @@ async def interactions(request: Request, background_tasks: BackgroundTasks):
     ):
         return JSONResponse(status_code=401, content={"error": "Invalid signature"})
 
-    data = json.loads(body)
+    try:
+        data = json.loads(body)
+    except json.JSONDecodeError:
+        return JSONResponse(status_code=400, content={"error": "Invalid JSON"})
 
     if data.get("type") == 1:
         return {"type": 1}
