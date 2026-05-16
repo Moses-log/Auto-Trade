@@ -154,7 +154,7 @@ async def send_monthly_report() -> None:
 
 
 async def send_yearly_report() -> None:
-    """Fetch trailing 12-month portfolio history and post P&L to Discord."""
+    """Fetch trailing 12-month (1 year) portfolio history and post P&L to Discord."""
     now = datetime.now(ET)
     date_str = f"Year {now.year}"
     try:
@@ -190,7 +190,6 @@ async def send_ytd_report() -> None:
 
 async def send_alltime_report() -> None:
     """Fetch all-time portfolio history and post P&L to Discord."""
-    now = datetime.now(ET)
     try:
         history = get_portfolio_history(period="all", timeframe="1D")
 
