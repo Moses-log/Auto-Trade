@@ -14,16 +14,22 @@ TradingView alert
       ▼
 Render (FastAPI)
       ├── POST /webhook   → validate → deduplicate → execute on Alpaca
-      │                                             → trade alert to Discord
+      │                                             → if filled:  trade alert to Discord
+      │                                             → if queued:  ⏳ queued alert to Discord
+      │                                                           save to persistent disk
       ├── POST /deposit   → record investor deposit → auto-commit to GitHub
       ├── POST /run-report → manually fire P&L report
       └── GET  /health    → uptime check
 
 APScheduler (inside Render)
-      ├── 3:00 PM CT Mon–Fri   → Daily P&L report    → Discord (main channel)
-      ├── 3:01 PM CT Friday    → Weekly P&L report   → Discord (main channel)
-      └── 3:02 PM CT Mon–Fri   → Investor breakdown  → Discord (investors channel)
+      ├── 8:31 AM CT Mon–Fri   → Resolve queued orders → full trade alert to Discord
+      ├── 3:00 PM CT Mon–Fri   → Daily P&L report      → Discord (main channel)
+      ├── 3:01 PM CT Friday    → Weekly P&L report     → Discord (main channel)
+      └── 3:02 PM CT Mon–Fri   → Investor breakdown    → Discord (investors channel)
                                   (3:03 PM on Fridays to avoid colliding with weekly report)
+
+Persistent Disk (/data)
+      └── pending_orders.json  → survives restarts and redeploys
 ```
 
 ---
@@ -42,7 +48,8 @@ app/
 ├── pnl.py               # Daily & weekly P&L calculation and reporting
 ├── scheduler.py         # APScheduler job registration
 ├── investors.py         # Investor data model, equity math, Discord formatting
-├── trade_notifier.py    # Trade alert Discord message (fill price, P&L)
+├── trade_notifier.py    # Trade alert Discord message (fill price, P&L, queued order handling)
+├── pending_orders.py    # Persist queued orders to disk, reschedule on startup
 ├── github_commit.py     # Auto-commit investors.json to GitHub via REST API
 └── trading/
     ├── alpaca_client.py # Alpaca API wrapper + retry logic
@@ -59,6 +66,7 @@ tests/
 └── sample_payloads.json
 
 investors.json           # Investor deposit records (source of truth)
+pending_orders.json      # Queued orders awaiting next market open (written to persistent disk at runtime)
 ```
 
 ---
@@ -96,6 +104,12 @@ Copy `.env.example` to `.env` and fill in values. All are set in the Render dash
 |---|---|---|
 | `GITHUB_TOKEN` | — | GitHub personal access token (`repo` scope) — required for `/deposit` auto-commit |
 | `GITHUB_REPO` | `Moses-log/Auto-Trade` | Target repo for investors.json commits |
+
+### Optional — Persistent Disk
+
+| Variable | Default | Description |
+|---|---|---|
+| `PENDING_ORDERS_PATH` | `pending_orders.json` | Path to store queued orders — set to `/data/pending_orders.json` when using Render's persistent disk |
 
 ---
 
@@ -197,20 +211,34 @@ SPY: $537.42
 ```
 
 ### Trades channel (`DISCORD_TRADES_WEBHOOK_URL`)
-Fires after every trade with actual fill data:
+Fires after every trade. If an order fills immediately:
 ```
 🟢 ADD_LEVERAGE — SPY
 Qty: 7.5 shares @ $537.42
 Position: 14.5 shares
 🕐 1:32 PM CDT — May 11, 2026
 ```
-On sells, includes P&L:
+On sells, includes P&L and win/loss record:
 ```
 🔴 SELL — SPY
 Qty: 7.5 shares @ $551.80
 Position: 0 shares
-P&L: +$71.90 (+2.68%) 🟢
+P&L: +$71.90 (+2.68%) 🟢 WIN
 🕐 2:45 PM CDT — May 11, 2026
+
+Record: 3-1 (75% Win Rate)
+```
+If an order is placed after market close, two messages are sent — one immediately, one at next market open when filled:
+```
+⏳ ADD_LEVERAGE — SPY
+Order queued for next market open @ ≈$537.42
+🕐 3:00 PM CDT — May 11, 2026
+```
+```
+🟢 ADD_LEVERAGE (FILLED AT OPEN) — SPY
+Qty: 7.5 shares @ $538.10
+Position: 14.5 shares
+🕐 8:31 AM CDT — May 12, 2026
 ```
 
 ---
@@ -265,7 +293,11 @@ No real Alpaca or GitHub calls are made — all external clients are mocked.
    - **Build command:** `pip install -r requirements.txt`
    - **Start command:** `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
 4. Add all environment variables in the Render Environment tab
-5. Deploy — Render provides a public HTTPS URL automatically
+5. Add a **Persistent Disk** (Disks tab):
+   - Mount path: `/data`
+   - Size: 1 GB
+   - Add env var: `PENDING_ORDERS_PATH=/data/pending_orders.json`
+6. Deploy — Render provides a public HTTPS URL automatically
 
 ---
 
