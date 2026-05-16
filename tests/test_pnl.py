@@ -145,7 +145,8 @@ def test_scheduler_jobs_registered():
     assert "weekly_pnl" in job_ids
     assert "investor_breakdown_daily" in job_ids
     assert "investor_breakdown_weekly" in job_ids
-    assert len(job_ids) == 4
+    assert "period_pnl_check" in job_ids
+    assert len(job_ids) == 5
 
 
 # ── get_spy_bars tests ────────────────────────────────────────────────────────

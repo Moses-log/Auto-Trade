@@ -12,7 +12,7 @@ import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from app.pnl import send_daily_report, send_investor_report, send_weekly_report
+from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,13 @@ def setup_jobs() -> None:
         id="investor_breakdown_weekly",
         replace_existing=True,
     )
-    log.info("P&L scheduler jobs registered: daily_pnl (Mon-Fri 16:00 ET), weekly_pnl (Fri 16:01 ET)")
+    scheduler.add_job(
+        check_period_reports,
+        CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=ET),
+        id="period_pnl_check",
+        replace_existing=True,
+    )
+    log.info("P&L scheduler jobs registered: daily_pnl, weekly_pnl, period_pnl_check (Mon-Fri 16:05 ET)")
 
 
 def reschedule_pending_orders() -> None:
