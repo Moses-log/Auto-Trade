@@ -56,6 +56,10 @@ def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> No
     path.write_text(serialize_investors(investors), encoding="utf-8")
 
 
+def get_total_deposited(investor: Investor) -> float:
+    return sum(d.amount for d in investor.deposits)
+
+
 @dataclass
 class InvestorResult:
     name: str

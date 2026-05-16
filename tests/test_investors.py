@@ -401,3 +401,21 @@ async def test_notify_trades_skips_when_url_not_set():
             from app.notifications import notify_trades
             await notify_trades("test trade message")
     mock_client.post.assert_not_called()
+
+
+def test_get_total_deposited_sums_all_deposits():
+    from app.investors import Investor, Deposit, get_total_deposited
+    inv = Investor(name="Moses", deposits=[
+        Deposit(amount=300.0, entry_spy=707.0, date="2026-05-09"),
+        Deposit(amount=200.0, entry_spy=720.0, date="2026-05-10"),
+    ])
+    assert get_total_deposited(inv) == 500.0
+
+
+def test_get_total_deposited_handles_withdrawals():
+    from app.investors import Investor, Deposit, get_total_deposited
+    inv = Investor(name="Moses", deposits=[
+        Deposit(amount=2000.0, entry_spy=707.0, date="2026-05-09"),
+        Deposit(amount=-500.0, entry_spy=741.0, date="2026-05-16"),
+    ])
+    assert get_total_deposited(inv) == 1500.0
