@@ -1,4 +1,4 @@
-{
+﻿{
   "investors": [
     {
       "name": "Moses",
@@ -7,16 +7,6 @@
           "amount": 300,
           "entry_spy": 707.116,
           "date": "2026-05-09"
-        },
-        {
-          "amount": 100.0,
-          "entry_spy": 735.32,
-          "date": "2026-05-16"
-        },
-        {
-          "amount": -100.0,
-          "entry_spy": 737.71,
-          "date": "2026-05-16"
         }
       ]
     },
