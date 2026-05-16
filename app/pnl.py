@@ -204,13 +204,25 @@ async def send_alltime_report() -> None:
         pct = (dollar / open_eq * 100) if open_eq else 0.0
         result = PnLResult(period="alltime", close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
 
+        start_dt = None
         start_str = "inception"
         if start_idx < len(history.timestamp):
             start_dt = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET)
             start_str = start_dt.strftime(f"%b {start_dt.day}, %Y")
         date_str = f"All Time since {start_str}"
 
-        spy_pct = compute_spy_pct("max")
+        # Fetch SPY return over same date range as portfolio, not all-time SPY history
+        spy_pct: Optional[float] = None
+        if start_dt is not None:
+            try:
+                spy_hist = yf.Ticker("SPY").history(start=start_dt.date())
+                if not spy_hist.empty:
+                    spy_open = float(spy_hist["Open"].iloc[0])
+                    spy_close = float(spy_hist["Close"].iloc[-1])
+                    if spy_open:
+                        spy_pct = (spy_close - spy_open) / spy_open * 100
+            except Exception as exc:
+                log.warning("yfinance SPY all-time fetch failed: %s", exc)
         msg = _format_message(result, "All-Time P&L", date_str, spy_pct=spy_pct)
         await notify(msg)
         log.info("All-time P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
