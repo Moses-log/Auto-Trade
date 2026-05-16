@@ -6,6 +6,7 @@ Call setup_jobs() once at startup to register the cron triggers.
 """
 
 import logging
+from datetime import datetime
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -52,3 +53,35 @@ def setup_jobs() -> None:
         replace_existing=True,
     )
     log.info("P&L scheduler jobs registered: daily_pnl (Mon-Fri 16:00 ET), weekly_pnl (Fri 16:01 ET)")
+
+
+def reschedule_pending_orders() -> None:
+    from app.pending_orders import load_pending_orders
+    from app.trade_notifier import notify_pending_order_fill
+
+    orders = load_pending_orders()
+    if not orders:
+        return
+
+    now = datetime.now(ET)
+    for entry in orders:
+        order_id = entry["order_id"]
+        try:
+            run_dt = datetime.fromisoformat(entry["run_at"])
+            if run_dt.tzinfo is None:
+                run_dt = ET.localize(run_dt)
+        except Exception:
+            run_dt = now
+
+        effective_run = run_dt if run_dt > now else now
+
+        scheduler.add_job(
+            notify_pending_order_fill,
+            "date",
+            run_date=effective_run,
+            args=[order_id, entry["ticker"], entry["action"],
+                  entry.get("alert_price"), entry.get("avg_entry_price")],
+            id=f"pending_{order_id}",
+            replace_existing=True,
+        )
+        log.info("Rescheduled pending order %s for %s", order_id, effective_run)

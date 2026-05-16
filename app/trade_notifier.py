@@ -110,7 +110,7 @@ async def notify_trade(
 
         if pending_order_id:
             await notify_trades(_format_queued_message(ticker, action, alert_price))
-            _schedule_pending_followup(pending_order_id, ticker, action, alert_price, avg_entry_price)
+            await _schedule_pending_followup(pending_order_id, ticker, action, alert_price, avg_entry_price)
             return
 
         position_qty = 0.0
@@ -200,8 +200,16 @@ async def notify_pending_order_fill(
     )
     await notify_trades(message)
 
+    from app.pending_orders import remove_pending_order, as_json
+    from app.github_commit import commit_pending_orders
+    remove_pending_order(order_id)
+    try:
+        await commit_pending_orders(as_json())
+    except Exception as exc:
+        log.warning("Failed to commit pending_orders.json after fill: %s", exc)
 
-def _schedule_pending_followup(
+
+async def _schedule_pending_followup(
     order_id: str,
     ticker: str,
     action: str,
@@ -209,6 +217,8 @@ def _schedule_pending_followup(
     avg_entry_price: Optional[float],
 ) -> None:
     from app.scheduler import scheduler
+    from app.pending_orders import save_pending_order, as_json
+    from app.github_commit import commit_pending_orders
 
     next_day = get_next_trading_day()
     run_dt = _ET.localize(datetime.combine(next_day, dtime(9, 31)))
@@ -221,4 +231,9 @@ def _schedule_pending_followup(
         id=f"pending_{order_id}",
         replace_existing=True,
     )
+    save_pending_order(order_id, ticker, action, alert_price, avg_entry_price, run_dt.isoformat())
+    try:
+        await commit_pending_orders(as_json())
+    except Exception as exc:
+        log.warning("Failed to commit pending_orders.json: %s", exc)
     log.info("Queued order %s scheduled for resolution at %s", order_id, run_dt)

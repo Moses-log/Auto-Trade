@@ -36,7 +36,7 @@ from app.models import AlertPayload, DepositRequest, TradingAction
 from app.notifications import notify
 from app.pnl import send_daily_report, send_weekly_report
 from app.trade_notifier import notify_trade
-from app.scheduler import scheduler, setup_jobs
+from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders
 from app.security import verify_webhook_secret
 from app.trading.alpaca_client import get_latest_price, get_position
 from app.trading.order_logic import execute_action
@@ -68,6 +68,7 @@ async def lifespan(app: FastAPI):
         extra={"paper_trading": "paper" in settings.alpaca_base_url},
     )
     setup_jobs()
+    reschedule_pending_orders()
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)

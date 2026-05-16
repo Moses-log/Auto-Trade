@@ -46,3 +46,7 @@ async def commit_investors_json(content: str) -> None:
 
 async def commit_trade_record(content: str) -> None:
     await _commit_file("trade_record.json", content, "chore: update trade_record.json")
+
+
+async def commit_pending_orders(content: str) -> None:
+    await _commit_file("pending_orders.json", content, "chore: update pending_orders.json")
