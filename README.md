@@ -13,13 +13,14 @@ TradingView alert
       │
       ▼
 Render (FastAPI)
-      ├── POST /webhook   → validate → deduplicate → execute on Alpaca
-      │                                             → if filled:  trade alert to Discord
-      │                                             → if queued:  ⏳ queued alert to Discord
-      │                                                           save to persistent disk
-      ├── POST /deposit   → record investor deposit → auto-commit to GitHub
-      ├── POST /run-report → manually fire P&L report
-      └── GET  /health    → uptime check
+      ├── POST /webhook      → validate → deduplicate → execute on Alpaca
+      │                                               → if filled:  trade alert to Discord
+      │                                               → if queued:  ⏳ queued alert to Discord
+      │                                                             save to persistent disk
+      ├── POST /interactions → Discord slash commands (/deposit, /withdraw, /report)
+      ├── POST /deposit      → record investor deposit → auto-commit to GitHub
+      ├── POST /run-report   → manually fire P&L report
+      └── GET  /health       → uptime check
 
 APScheduler (inside Render)
       ├── 8:31 AM CT Mon–Fri   → Resolve queued orders → full trade alert to Discord
@@ -38,7 +39,7 @@ Persistent Disk (/data)
 
 ```
 app/
-├── main.py              # FastAPI app — /webhook, /deposit, /run-report, /health
+├── main.py              # FastAPI app — /webhook, /interactions, /deposit, /run-report, /health
 ├── config.py            # All settings loaded from environment variables
 ├── models.py            # Pydantic models for TradingView alerts and deposits
 ├── security.py          # Shared-secret validation (constant-time)
@@ -50,6 +51,8 @@ app/
 ├── investors.py         # Investor data model, equity math, Discord formatting
 ├── trade_notifier.py    # Trade alert Discord message (fill price, P&L, queued order handling)
 ├── pending_orders.py    # Persist queued orders to disk, reschedule on startup
+├── interactions.py      # Discord Ed25519 signature verification and routing helpers
+├── discord_commands.py  # /deposit, /withdraw, /report slash command handlers
 ├── github_commit.py     # Auto-commit investors.json to GitHub via REST API
 └── trading/
     ├── alpaca_client.py # Alpaca API wrapper + retry logic
@@ -111,6 +114,14 @@ Copy `.env.example` to `.env` and fill in values. All are set in the Render dash
 |---|---|---|
 | `PENDING_ORDERS_PATH` | `pending_orders.json` | Path to store queued orders — set to `/data/pending_orders.json` when using Render's persistent disk |
 
+### Optional — Discord Slash Commands
+
+| Variable | Description |
+|---|---|
+| `DISCORD_APP_PUBLIC_KEY` | Discord app public key — from Developer Portal → app → General Information |
+| `DISCORD_APP_ID` | Discord application ID — same page |
+| `DISCORD_YOUR_USER_ID` | Your personal Discord user ID — only this user can run slash commands |
+
 ---
 
 ## Endpoints
@@ -162,6 +173,17 @@ Manually fires a P&L report to Discord. Useful if the scheduled report failed.
 ```
 
 `report` accepts `"daily"`, `"weekly"`, or `"both"`.
+
+### `POST /interactions`
+Receives Discord slash command interactions. Verifies Ed25519 signature, checks user ID, and dispatches commands as background tasks.
+
+| Command | Parameters | What it does |
+|---|---|---|
+| `/deposit` | `investor`, `amount`, `spy_price` (optional) | Records a cash deposit. Fetches live SPY price if `spy_price` omitted. |
+| `/withdraw` | `investor`, `amount` | Records a cash withdrawal. Validates amount ≤ total deposited. |
+| `/report` | `type` (daily/weekly/both) | Fires a P&L report to Discord. |
+
+All responses are ephemeral (only visible to you). Requires `DISCORD_APP_PUBLIC_KEY`, `DISCORD_APP_ID`, and `DISCORD_YOUR_USER_ID` env vars.
 
 ### `GET /health`
 Returns server uptime and paper/live mode status.
@@ -267,9 +289,9 @@ equity = sum( deposit.amount × (current_SPY / deposit.entry_spy) )
 
 Every deposit has its own entry price so multiple deposits per investor are handled correctly.
 
-**Adding a deposit:** call `POST /deposit` — the file is auto-committed to GitHub so it survives Render redeploys.
+**Adding a deposit:** use `/deposit` in Discord or call `POST /deposit` — auto-committed to GitHub on success.
 
-**Withdrawals:** edit `investors.json` manually and push to GitHub.
+**Withdrawals:** use `/withdraw` in Discord — adds a negative deposit entry at current SPY price.
 
 ---
 
@@ -298,6 +320,18 @@ No real Alpaca or GitHub calls are made — all external clients are mocked.
    - Size: 1 GB
    - Add env var: `PENDING_ORDERS_PATH=/data/pending_orders.json`
 6. Deploy — Render provides a public HTTPS URL automatically
+
+### Discord Slash Commands Setup (one-time)
+
+1. Go to [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application**
+2. Copy **Application ID** and **Public Key** from General Information → add to Render env vars
+3. Enable Developer Mode in Discord (Settings → Advanced) → right-click your username → **Copy User ID** → add as `DISCORD_YOUR_USER_ID`
+4. Set **Interactions Endpoint URL** in Developer Portal → `https://<your-render-url>/interactions`
+5. Add the bot to your server via OAuth2 → URL Generator → scope `applications.commands`
+6. Register the 3 slash commands (run once locally):
+```bash
+DISCORD_APP_ID=... DISCORD_BOT_TOKEN=... py scripts/register_commands.py
+```
 
 ---
 
