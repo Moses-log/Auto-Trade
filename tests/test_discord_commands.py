@@ -110,3 +110,19 @@ async def test_handle_report_both():
 
     msg = mock_edit.call_args[0][1]
     assert "✅" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_deposit_spy_fetch_failure():
+    fake_investor = MagicMock()
+    fake_investor.name = "Moses"
+    fake_investor.deposits = []
+
+    with patch("app.discord_commands.load_investors", return_value=[fake_investor]), \
+         patch("app.discord_commands.get_latest_price", return_value=None), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_deposit
+        await handle_deposit("Moses", 2000.0, None, "test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "Could not fetch SPY price" in msg
