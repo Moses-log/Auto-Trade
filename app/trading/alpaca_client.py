@@ -13,6 +13,7 @@ order_logic.py, not here.
 
 import logging
 import math
+from datetime import date, timedelta
 from typing import Optional
 
 from tenacity import (
@@ -28,6 +29,7 @@ from alpaca.trading.requests import (
     MarketOrderRequest,
     ClosePositionRequest,
     GetPortfolioHistoryRequest,
+    GetCalendarRequest,
 )
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Position, Order
@@ -254,6 +256,25 @@ def get_order(order_id: str) -> Optional[Order]:
     except Exception as exc:
         log.warning("Could not fetch order %s: %s", order_id, exc)
         return None
+
+
+def get_next_trading_day() -> date:
+    """Return the next trading day using Alpaca's market calendar, with a weekday fallback."""
+    today = date.today()
+    try:
+        req = GetCalendarRequest(
+            start=today + timedelta(days=1),
+            end=today + timedelta(days=7),
+        )
+        calendars = get_client().get_calendar(req)
+        if calendars:
+            return calendars[0].date
+    except Exception as exc:
+        log.warning("Could not fetch trading calendar: %s", exc)
+    next_day = today + timedelta(days=1)
+    while next_day.weekday() >= 5:
+        next_day += timedelta(days=1)
+    return next_day
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
