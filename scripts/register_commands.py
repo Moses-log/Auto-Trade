@@ -70,7 +70,11 @@ COMMANDS = [
                 "choices": [
                     {"name": "Daily", "value": "daily"},
                     {"name": "Weekly", "value": "weekly"},
-                    {"name": "Both", "value": "both"},
+                    {"name": "Monthly", "value": "monthly"},
+                    {"name": "Year to Date", "value": "ytd"},
+                    {"name": "1 Year", "value": "1year"},
+                    {"name": "All Time", "value": "alltime"},
+                    {"name": "Daily & Weekly", "value": "both"},
                 ],
             }
         ],
