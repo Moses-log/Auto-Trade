@@ -419,3 +419,31 @@ def test_get_total_deposited_handles_withdrawals():
         Deposit(amount=-500.0, entry_spy=741.0, date="2026-05-16"),
     ])
     assert get_total_deposited(inv) == 1500.0
+
+
+@pytest.mark.asyncio
+async def test_notify_with_chart_posts_multipart_to_webhook():
+    from unittest.mock import AsyncMock, patch, MagicMock
+    with patch("app.notifications.settings") as mock_settings, \
+         patch("httpx.AsyncClient") as mock_cls:
+        mock_settings.discord_webhook_url = "https://discord.com/api/webhooks/test"
+        mock_client = AsyncMock()
+        mock_cls.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+        mock_cls.return_value.__aexit__ = AsyncMock(return_value=False)
+        from app.notifications import notify_with_chart
+        await notify_with_chart("P&L message", b"fake_png")
+    mock_client.post.assert_called_once()
+    call_kwargs = mock_client.post.call_args[1]
+    assert "files" in call_kwargs
+    assert "data" in call_kwargs
+
+
+@pytest.mark.asyncio
+async def test_notify_with_chart_skips_when_no_webhook():
+    from unittest.mock import patch, AsyncMock
+    with patch("app.notifications.settings") as mock_settings:
+        mock_settings.discord_webhook_url = None
+        with patch("httpx.AsyncClient") as mock_cls:
+            from app.notifications import notify_with_chart
+            await notify_with_chart("msg", b"bytes")
+    mock_cls.assert_not_called()

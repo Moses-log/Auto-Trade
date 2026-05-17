@@ -60,6 +60,24 @@ async def notify_trades(message: str) -> None:
         log.warning("Trade Discord notification failed: %s", exc)
 
 
+async def notify_with_chart(message: str, chart_bytes: bytes) -> None:
+    """Send a Discord message with a PNG chart attachment to the main channel."""
+    import json as _json
+    url = settings.discord_webhook_url
+    if not url:
+        log.warning("DISCORD_WEBHOOK_URL not set; skipping chart notification")
+        return
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            await client.post(
+                url,
+                data={"payload_json": _json.dumps({"content": message[:2000]})},
+                files={"file": ("chart.png", chart_bytes, "image/png")},
+            )
+    except Exception as exc:
+        log.warning("Discord chart notification failed: %s", exc)
+
+
 async def _telegram(message: str) -> None:
     url = (
         f"https://api.telegram.org/bot{settings.telegram_bot_token}"
