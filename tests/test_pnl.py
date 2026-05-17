@@ -203,6 +203,41 @@ def test_compute_spy_pct_returns_none_on_exception():
     assert result is None
 
 
+# ── fetch_spy_history tests ───────────────────────────────────────────────────
+
+def test_fetch_spy_history_returns_dataframe():
+    from datetime import date
+    import pandas as pd
+    fake_df = pd.DataFrame(
+        {"Close": [537.0, 539.0]},
+        index=pd.date_range("2026-05-09", periods=2),
+    )
+    with patch("app.pnl.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.return_value = fake_df
+        from app.pnl import fetch_spy_history
+        result = fetch_spy_history(date(2026, 5, 9), date(2026, 5, 16))
+    assert result is not None
+    assert "Close" in result.columns
+
+
+def test_fetch_spy_history_returns_none_on_empty():
+    from datetime import date
+    import pandas as pd
+    with patch("app.pnl.yf.Ticker") as mock_ticker:
+        mock_ticker.return_value.history.return_value = pd.DataFrame()
+        from app.pnl import fetch_spy_history
+        result = fetch_spy_history(date(2026, 5, 9), date(2026, 5, 16))
+    assert result is None
+
+
+def test_fetch_spy_history_returns_none_on_exception():
+    from datetime import date
+    with patch("app.pnl.yf.Ticker", side_effect=Exception("network error")):
+        from app.pnl import fetch_spy_history
+        result = fetch_spy_history(date(2026, 5, 9), date(2026, 5, 16))
+    assert result is None
+
+
 # ── _format_message with spy_pct tests ───────────────────────────────────────
 
 def test_format_message_spy_ahead():

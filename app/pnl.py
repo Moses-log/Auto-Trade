@@ -9,7 +9,7 @@ Jobs are registered in scheduler.py and fire at 4pm ET.
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date as _date
 from typing import Optional
 
 import pytz
@@ -66,6 +66,21 @@ def compute_spy_pct(period: str) -> Optional[float]:
         return (close_price - open_price) / open_price * 100
     except Exception as exc:
         log.warning("yfinance SPY fetch failed: %s", exc)
+        return None
+
+
+def fetch_spy_history(start_date: _date, end_date: _date):
+    """Fetch SPY price history between two dates for chart generation.
+
+    Returns a yfinance DataFrame with a "Close" column, or None on failure.
+    """
+    try:
+        hist = yf.Ticker("SPY").history(start=start_date, end=end_date)
+        if hist.empty:
+            return None
+        return hist
+    except Exception as exc:
+        log.warning("yfinance SPY history fetch failed: %s", exc)
         return None
 
 
