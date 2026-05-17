@@ -465,6 +465,59 @@ async def test_send_weekly_report_sends_chart_when_available(mock_chart_notify, 
 
 
 @pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=1.2)
+@patch("app.pnl.fetch_spy_history", return_value=MagicMock())
+@patch("app.pnl.generate_equity_chart", return_value=b"\x89PNG_fake")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_monthly_report_sends_chart_when_available(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 10500.0])
+    from app.pnl import send_monthly_report
+    await send_monthly_report()
+    mock_chart_notify.assert_called_once()
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=1.2)
+@patch("app.pnl.fetch_spy_history", return_value=MagicMock())
+@patch("app.pnl.generate_equity_chart", return_value=b"\x89PNG_fake")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_yearly_report_sends_chart_when_available(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 12000.0])
+    from app.pnl import send_yearly_report
+    await send_yearly_report()
+    mock_chart_notify.assert_called_once()
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=b"\x89PNG_fake")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_alltime_report_sends_chart_when_available(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
+    import time
+    fake_history = MagicMock()
+    fake_history.equity = [0.0, 10000.0, 11500.0]
+    fake_history.timestamp = [
+        int(time.time()) - 86400 * 10,
+        int(time.time()) - 86400 * 5,
+        int(time.time()),
+    ]
+    mock_get_history.return_value = fake_history
+    from app.pnl import send_alltime_report
+    await send_alltime_report()
+    mock_chart_notify.assert_called_once()
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
 @patch("app.pnl.get_next_trading_day")
 @patch("app.pnl.send_monthly_report", new_callable=AsyncMock)
 @patch("app.pnl.send_yearly_report", new_callable=AsyncMock)

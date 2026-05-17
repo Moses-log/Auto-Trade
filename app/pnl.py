@@ -296,11 +296,10 @@ async def send_alltime_report() -> None:
 
         chart_bytes = None
         try:
-            if spy_df is not None:
-                chart_bytes = generate_equity_chart(
-                    history.equity[start_idx:], history.timestamp[start_idx:],
-                    spy_df, chart_title
-                )
+            chart_bytes = generate_equity_chart(
+                history.equity[start_idx:], history.timestamp[start_idx:],
+                spy_df, chart_title
+            )
         except Exception as exc:
             log.warning("All-time chart generation failed: %s", exc)
 
