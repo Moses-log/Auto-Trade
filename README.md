@@ -23,11 +23,13 @@ Render (FastAPI)
       └── GET  /health       → uptime check
 
 APScheduler (inside Render)
-      ├── 8:31 AM CT Mon–Fri   → Resolve queued orders → full trade alert to Discord
-      ├── 3:00 PM CT Mon–Fri   → Daily P&L report      → Discord (main channel)
-      ├── 3:01 PM CT Friday    → Weekly P&L report     → Discord (main channel)
-      └── 3:02 PM CT Mon–Fri   → Investor breakdown    → Discord (investors channel)
-                                  (3:03 PM on Fridays to avoid colliding with weekly report)
+      ├── 8:31 AM CT Mon–Fri        → Resolve queued orders  → full trade alert to Discord
+      ├── 3:00 PM CT Mon–Fri        → Daily P&L report       → Discord (main channel)
+      ├── 3:01 PM CT Friday         → Weekly P&L + chart     → Discord (main channel)
+      ├── 3:02 PM CT Mon–Fri        → Investor breakdown     → Discord (investors channel)
+      │                                (3:03 PM on Fridays to avoid colliding with weekly report)
+      └── 3:05 PM CT Mon–Fri        → Monthly P&L + chart    → Discord (last trading day of month)
+                                      Yearly P&L + chart     → Discord (last trading day of Dec)
 
 Persistent Disk (/data)
       └── pending_orders.json  → survives restarts and redeploys
@@ -46,7 +48,8 @@ app/
 ├── idempotency.py       # Duplicate-alert suppression with TTL store
 ├── logging_config.py    # Structured JSON logging
 ├── notifications.py     # Discord notifications (main / investors / trades channels)
-├── pnl.py               # Daily & weekly P&L calculation and reporting
+├── pnl.py               # P&L calculation and reporting (daily/weekly/monthly/yearly/YTD/all-time)
+├── chart.py             # Portfolio vs SPY % return equity chart (PNG via matplotlib)
 ├── scheduler.py         # APScheduler job registration
 ├── investors.py         # Investor data model, equity math, Discord formatting
 ├── trade_notifier.py    # Trade alert Discord message (fill price, P&L, queued order handling)
@@ -65,6 +68,7 @@ tests/
 ├── test_pnl.py
 ├── test_trade_notifier.py
 ├── test_github_commit.py
+├── test_chart.py
 ├── conftest.py
 └── sample_payloads.json
 
@@ -172,7 +176,7 @@ Manually fires a P&L report to Discord. Useful if the scheduled report failed.
 }
 ```
 
-`report` accepts `"daily"`, `"weekly"`, or `"both"`.
+`report` accepts `"daily"`, `"weekly"`, `"monthly"`, `"ytd"`, `"1year"`, `"alltime"`, or `"both"`.
 
 ### `POST /interactions`
 Receives Discord slash command interactions. Verifies Ed25519 signature, checks user ID, and dispatches commands as background tasks.
@@ -181,7 +185,7 @@ Receives Discord slash command interactions. Verifies Ed25519 signature, checks 
 |---|---|---|
 | `/deposit` | `investor`, `amount`, `spy_price` (optional) | Records a cash deposit. Fetches live SPY price if `spy_price` omitted. |
 | `/withdraw` | `investor`, `amount` | Records a cash withdrawal. Validates amount ≤ total deposited. |
-| `/report` | `type` (daily/weekly/both) | Fires a P&L report to Discord. |
+| `/report` | `type` (daily/weekly/monthly/ytd/1year/alltime/both) | Fires a P&L report to Discord. Weekly, monthly, yearly, and all-time reports include an equity chart. |
 
 All responses are ephemeral (only visible to you). Requires `DISCORD_APP_PUBLIC_KEY`, `DISCORD_APP_ID`, and `DISCORD_YOUR_USER_ID` env vars.
 
@@ -211,8 +215,20 @@ Returns server uptime and paper/live mode status.
 
 ### Main channel (`DISCORD_WEBHOOK_URL`)
 - ⚠️ / ❌ Trade errors and failures
-- Daily P&L report (3:00 PM CT)
-- Weekly P&L report (3:01 PM CT Fridays)
+- Daily P&L report (3:00 PM CT Mon–Fri)
+- Weekly P&L report + chart (3:01 PM CT Fridays)
+- Monthly P&L report + chart (3:05 PM CT — last trading day of each month)
+- Yearly P&L report + chart (3:05 PM CT — last trading day of December)
+- YTD, 1-Year, All-Time reports available on demand via `/report` or `POST /run-report`
+
+P&L report format:
+```
+📈🟢 Weekly P&L — Week of May 9–16, 2026
+Portfolio: $5,590.32
+P&L: +$290.32 (+5.47%)
+S&P 500: +1.20% (+4.27% ahead)
+[equity chart image attached]
+```
 
 ### Investors channel (`DISCORD_INVESTORS_WEBHOOK_URL`)
 Daily and weekly investor equity breakdown:
