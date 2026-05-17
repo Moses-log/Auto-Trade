@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
-from typing import Optional
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — required for server use
