@@ -19,6 +19,9 @@ tenacity>=8.3.0
 # Ed25519 signature verification for Discord interactions
 cryptography>=42.0.0
 
+# Chart generation for P&L reports
+matplotlib>=3.8.0
+
 # Task scheduler for P&L tracking
 APScheduler>=3.10,<4
 
