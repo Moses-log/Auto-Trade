@@ -1,4 +1,5 @@
 import os
+import time as _time
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 
@@ -31,12 +32,19 @@ def test_get_portfolio_history_calls_sdk(mock_get_client):
 
 # ── pnl.py tests ─────────────────────────────────────────────────────────────
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class FakeHistory:
     equity: list
+    timestamp: list = field(default_factory=list)
+
+    def __post_init__(self):
+        if not self.timestamp:
+            now = int(_time.time())
+            n = len(self.equity)
+            self.timestamp = [now - 86400 * (n - 1 - i) for i in range(n)]
 
 
 def test_compute_pnl_profit():
@@ -107,9 +115,12 @@ async def test_send_daily_report_alpaca_error(mock_notify, mock_get_history, moc
 
 @pytest.mark.asyncio
 @patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_weekly_report_success(mock_notify, mock_get_history, mock_spy):
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_weekly_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10875.20])
     from app.pnl import send_weekly_report
     await send_weekly_report()
@@ -308,9 +319,12 @@ async def test_send_daily_report_spy_fetch_fails(mock_notify, mock_get_history, 
 
 @pytest.mark.asyncio
 @patch("app.pnl.compute_spy_pct", return_value=2.0)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_weekly_report_includes_spy(mock_notify, mock_get_history, mock_spy):
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_weekly_report_includes_spy(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
     """Weekly report must include S&P 500 line when SPY data available."""
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10875.0])
     from app.pnl import send_weekly_report
@@ -351,9 +365,12 @@ def test_get_order_returns_none_on_exception(mock_get_client):
 
 @pytest.mark.asyncio
 @patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_monthly_report_success(mock_notify, mock_get_history, mock_spy):
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_monthly_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10500.0])
     from app.pnl import send_monthly_report
     await send_monthly_report()
@@ -378,9 +395,12 @@ async def test_send_monthly_report_alpaca_error(mock_notify, mock_get_history, m
 
 @pytest.mark.asyncio
 @patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_yearly_report_success(mock_notify, mock_get_history, mock_spy):
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_yearly_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 12000.0])
     from app.pnl import send_yearly_report
     await send_yearly_report()
@@ -406,9 +426,12 @@ async def test_send_ytd_report_success(mock_notify, mock_get_history, mock_spy):
 
 @pytest.mark.asyncio
 @patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_alltime_report_success(mock_notify, mock_get_history, mock_spy):
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_alltime_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
     import time
     fake_history = MagicMock()
     fake_history.equity = [0.0, 10000.0, 11500.0]
@@ -424,6 +447,21 @@ async def test_send_alltime_report_success(mock_notify, mock_get_history, mock_s
     msg = mock_notify.call_args[0][0]
     assert "All-Time P&L" in msg
     assert "since" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=1.2)
+@patch("app.pnl.fetch_spy_history", return_value=MagicMock())
+@patch("app.pnl.generate_equity_chart", return_value=b"\x89PNG_fake")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_weekly_report_sends_chart_when_available(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
+    mock_get_history.return_value = FakeHistory(equity=[10000.0, 10875.20])
+    from app.pnl import send_weekly_report
+    await send_weekly_report()
+    mock_chart_notify.assert_called_once()
+    mock_notify.assert_not_called()
 
 
 @pytest.mark.asyncio

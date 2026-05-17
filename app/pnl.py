@@ -14,8 +14,9 @@ from typing import Optional
 
 import pytz
 
+from app.chart import generate_equity_chart
 from app.investors import compute_breakdown, format_discord_message, load_investors
-from app.notifications import notify, notify_investors
+from app.notifications import notify, notify_investors, notify_with_chart
 import yfinance as yf
 
 from app.trading.alpaca_client import get_latest_price, get_portfolio_history, get_next_trading_day
@@ -134,18 +135,33 @@ async def send_daily_report() -> None:
 
 
 async def send_weekly_report() -> None:
-    """Fetch weekly portfolio history and post P&L to Discord."""
+    """Fetch weekly portfolio history and post P&L + chart to Discord."""
     now = datetime.now(ET)
     monday = now - timedelta(days=now.weekday())
     date_str = f"Week of {monday.strftime('%b')} {monday.day}\u2013{now.day}, {now.year}"
+    chart_title = f"Weekly Performance: {monday.strftime('%b %d')}\u2013{now.strftime('%b %d, %Y')}"
     try:
         history = get_portfolio_history(period="1W", timeframe="1D")
         result = _compute_pnl(history, "weekly")
-
         spy_pct = compute_spy_pct("5d")
-
         msg = _format_message(result, "Weekly P&L", date_str, spy_pct=spy_pct)
-        await notify(msg)
+
+        chart_bytes = None
+        try:
+            start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
+            end_date = now.date() + timedelta(days=1)
+            spy_df = fetch_spy_history(start_date, end_date)
+            if spy_df is not None:
+                chart_bytes = generate_equity_chart(
+                    history.equity, history.timestamp, spy_df, chart_title
+                )
+        except Exception as exc:
+            log.warning("Weekly chart generation failed: %s", exc)
+
+        if chart_bytes:
+            await notify_with_chart(msg, chart_bytes)
+        else:
+            await notify(msg)
         log.info("Weekly P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:
         log.error("Weekly P&L report failed: %s", exc)
@@ -153,15 +169,32 @@ async def send_weekly_report() -> None:
 
 
 async def send_monthly_report() -> None:
-    """Fetch monthly portfolio history and post P&L to Discord."""
+    """Fetch monthly portfolio history and post P&L + chart to Discord."""
     now = datetime.now(ET)
     date_str = f"Month of {now.strftime('%B %Y')}"
+    chart_title = f"Monthly Performance: {now.strftime('%B %Y')}"
     try:
         history = get_portfolio_history(period="1M", timeframe="1D")
         result = _compute_pnl(history, "monthly")
         spy_pct = compute_spy_pct("1mo")
         msg = _format_message(result, "Monthly P&L", date_str, spy_pct=spy_pct)
-        await notify(msg)
+
+        chart_bytes = None
+        try:
+            start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
+            end_date = now.date() + timedelta(days=1)
+            spy_df = fetch_spy_history(start_date, end_date)
+            if spy_df is not None:
+                chart_bytes = generate_equity_chart(
+                    history.equity, history.timestamp, spy_df, chart_title
+                )
+        except Exception as exc:
+            log.warning("Monthly chart generation failed: %s", exc)
+
+        if chart_bytes:
+            await notify_with_chart(msg, chart_bytes)
+        else:
+            await notify(msg)
         log.info("Monthly P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:
         log.error("Monthly P&L report failed: %s", exc)
@@ -169,15 +202,32 @@ async def send_monthly_report() -> None:
 
 
 async def send_yearly_report() -> None:
-    """Fetch trailing 12-month (1 year) portfolio history and post P&L to Discord."""
+    """Fetch trailing 12-month (1 year) portfolio history and post P&L + chart to Discord."""
     now = datetime.now(ET)
     date_str = f"Year {now.year}"
+    chart_title = f"1-Year Performance through {now.strftime('%b %d, %Y')}"
     try:
         history = get_portfolio_history(period="1A", timeframe="1D")
         result = _compute_pnl(history, "yearly")
         spy_pct = compute_spy_pct("1y")
         msg = _format_message(result, "Yearly P&L", date_str, spy_pct=spy_pct)
-        await notify(msg)
+
+        chart_bytes = None
+        try:
+            start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
+            end_date = now.date() + timedelta(days=1)
+            spy_df = fetch_spy_history(start_date, end_date)
+            if spy_df is not None:
+                chart_bytes = generate_equity_chart(
+                    history.equity, history.timestamp, spy_df, chart_title
+                )
+        except Exception as exc:
+            log.warning("Yearly chart generation failed: %s", exc)
+
+        if chart_bytes:
+            await notify_with_chart(msg, chart_bytes)
+        else:
+            await notify(msg)
         log.info("Yearly P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:
         log.error("Yearly P&L report failed: %s", exc)
@@ -204,7 +254,8 @@ async def send_ytd_report() -> None:
 
 
 async def send_alltime_report() -> None:
-    """Fetch all-time portfolio history and post P&L to Discord."""
+    """Fetch all-time portfolio history and post P&L + chart to Discord."""
+    now = datetime.now(ET)
     try:
         history = get_portfolio_history(period="all", timeframe="1D")
 
@@ -225,21 +276,38 @@ async def send_alltime_report() -> None:
             start_dt = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET)
             start_str = start_dt.strftime(f"%b {start_dt.day}, %Y")
         date_str = f"All Time since {start_str}"
+        chart_title = f"All-Time Performance since {start_str}"
 
-        # Fetch SPY return over same date range as portfolio, not all-time SPY history
+        # Fetch SPY over same date range as portfolio
         spy_pct: Optional[float] = None
+        spy_df = None
         if start_dt is not None:
-            try:
-                spy_hist = yf.Ticker("SPY").history(start=start_dt.date())
-                if not spy_hist.empty:
-                    spy_open = float(spy_hist["Open"].iloc[0])
-                    spy_close = float(spy_hist["Close"].iloc[-1])
+            spy_df = fetch_spy_history(start_dt.date(), now.date() + timedelta(days=1))
+            if spy_df is not None and not spy_df.empty:
+                try:
+                    spy_open = float(spy_df["Open"].iloc[0])
+                    spy_close = float(spy_df["Close"].iloc[-1])
                     if spy_open:
                         spy_pct = (spy_close - spy_open) / spy_open * 100
-            except Exception as exc:
-                log.warning("yfinance SPY all-time fetch failed: %s", exc)
+                except Exception as exc:
+                    log.warning("SPY all-time pct calc failed: %s", exc)
+
         msg = _format_message(result, "All-Time P&L", date_str, spy_pct=spy_pct)
-        await notify(msg)
+
+        chart_bytes = None
+        try:
+            if spy_df is not None:
+                chart_bytes = generate_equity_chart(
+                    history.equity[start_idx:], history.timestamp[start_idx:],
+                    spy_df, chart_title
+                )
+        except Exception as exc:
+            log.warning("All-time chart generation failed: %s", exc)
+
+        if chart_bytes:
+            await notify_with_chart(msg, chart_bytes)
+        else:
+            await notify(msg)
         log.info("All-time P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:
         log.error("All-time P&L report failed: %s", exc)
