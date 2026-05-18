@@ -9,13 +9,24 @@ from pathlib import Path
 log = logging.getLogger(__name__)
 
 _RECORD_FILE = Path(os.getenv("TRADE_RECORD_PATH", "trade_record.json"))
+_REPO_FILE = Path("trade_record.json")
 _lock = asyncio.Lock()
 
 
 def _load() -> dict:
+    # Primary: configured path (persistent disk on Render)
     if _RECORD_FILE.exists():
         try:
             return json.loads(_RECORD_FILE.read_text())
+        except Exception:
+            pass
+    # Fallback: repo file — migrate to persistent disk on first startup
+    if _REPO_FILE.exists() and _REPO_FILE != _RECORD_FILE:
+        try:
+            data = json.loads(_REPO_FILE.read_text())
+            _save(data)
+            log.info("Migrated trade_record.json to %s", _RECORD_FILE)
+            return data
         except Exception:
             pass
     return {"wins": 0, "losses": 0}
