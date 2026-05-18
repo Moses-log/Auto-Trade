@@ -42,6 +42,7 @@ from app.pnl import (
     send_yearly_report,
     send_ytd_report,
     send_alltime_report,
+    send_investor_report,
 )
 from app.trade_notifier import notify_trade
 from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders
@@ -364,7 +365,7 @@ async def run_report(request: Request) -> dict:
 
     verify_webhook_secret(body.get("secret", ""))
 
-    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both"}
+    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both", "investors"}
     report = body.get("report", "daily")
     if report not in _VALID:
         return JSONResponse(
@@ -384,6 +385,8 @@ async def run_report(request: Request) -> dict:
         await send_yearly_report()
     if report == "alltime":
         await send_alltime_report()
+    if report == "investors":
+        await send_investor_report()
 
     return {"status": "ok", "report": report}
 
