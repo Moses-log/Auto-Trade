@@ -1,34 +1,30 @@
 """
-idempotency.py — Duplicate-alert protection.
+idempotency.py — Duplicate-alert protection, backed by persistent disk.
 
 TradingView can fire the same alert multiple times (network retries, bar
-replays). We track recently-processed alert IDs in an in-memory TTL store.
+replays). We track recently-processed alert keys in a disk-backed JSON file
+so the store survives Render restarts and redeploys.
 
 The TTL window is controlled by IDEMPOTENCY_TTL (default 300 s / 5 min).
-
-For multi-process / multi-instance deployments swap this out for a Redis
-SET with EXPIRE — the interface is identical, only the backend changes.
+The file path is controlled by IDEMPOTENCY_PATH (default idempotency.json).
+Set IDEMPOTENCY_PATH=/data/idempotency.json when using Render persistent disk.
 """
 
 import hashlib
+import json
+import os
+import threading
 import time
-from typing import Dict, Tuple
+from pathlib import Path
 
 from app.config import settings
 from app.models import AlertPayload
 
-# {alert_key: expiry_unix_timestamp}
-_seen: Dict[str, float] = {}
+_FILE = Path(os.getenv("IDEMPOTENCY_PATH", "idempotency.json"))
+_lock = threading.Lock()
 
 
 def _make_key(payload: AlertPayload) -> str:
-    """
-    Build a deduplication key.
-
-    Priority:
-      1. payload.order_id  — unique per strategy order (best)
-      2. hash(ticker + action + timestamp) — fallback when order_id is absent
-    """
     if payload.order_id:
         raw = f"{payload.ticker}:{payload.order_id}"
     else:
@@ -36,23 +32,34 @@ def _make_key(payload: AlertPayload) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def _evict_expired() -> None:
-    """Remove stale entries so the dict doesn't grow unboundedly."""
-    now = time.monotonic()
-    expired = [k for k, exp in _seen.items() if exp < now]
-    for k in expired:
-        del _seen[k]
+def _load() -> dict:
+    if _FILE.exists():
+        try:
+            return json.loads(_FILE.read_text())
+        except Exception:
+            pass
+    return {}
+
+
+def _save(seen: dict) -> None:
+    _FILE.write_text(json.dumps(seen))
+
+
+def _evict_expired(seen: dict) -> dict:
+    now = time.time()
+    return {k: exp for k, exp in seen.items() if exp > now}
 
 
 def is_duplicate(payload: AlertPayload) -> bool:
     """Return True if this alert was already processed within the TTL window."""
-    _evict_expired()
-    key = _make_key(payload)
-    return key in _seen
+    with _lock:
+        seen = _evict_expired(_load())
+        return _make_key(payload) in seen
 
 
 def mark_processed(payload: AlertPayload) -> None:
     """Record an alert as processed so future duplicates are rejected."""
-    _evict_expired()
-    key = _make_key(payload)
-    _seen[key] = time.monotonic() + settings.idempotency_ttl
+    with _lock:
+        seen = _evict_expired(_load())
+        seen[_make_key(payload)] = time.time() + settings.idempotency_ttl
+        _save(seen)

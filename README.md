@@ -118,6 +118,7 @@ Copy `.env.example` to `.env` and fill in values. All are set in the Render dash
 |---|---|---|
 | `PENDING_ORDERS_PATH` | `pending_orders.json` | Path to store queued orders — set to `/data/pending_orders.json` when using Render's persistent disk |
 | `TRADE_RECORD_PATH` | `trade_record.json` | Path to store win/loss record — set to `/data/trade_record.json` when using Render's persistent disk |
+| `IDEMPOTENCY_PATH` | `idempotency.json` | Path to store seen alert IDs — set to `/data/idempotency.json` when using Render's persistent disk |
 
 ### Optional — Discord Slash Commands
 
@@ -335,7 +336,7 @@ No real Alpaca or GitHub calls are made — all external clients are mocked.
 5. Add a **Persistent Disk** (Disks tab):
    - Mount path: `/data`
    - Size: 1 GB
-   - Add env vars: `PENDING_ORDERS_PATH=/data/pending_orders.json` and `TRADE_RECORD_PATH=/data/trade_record.json`
+   - Add env vars: `PENDING_ORDERS_PATH=/data/pending_orders.json`, `TRADE_RECORD_PATH=/data/trade_record.json`, and `IDEMPOTENCY_PATH=/data/idempotency.json`
 6. Deploy — Render provides a public HTTPS URL automatically
 
 ### Discord Slash Commands Setup (one-time)
