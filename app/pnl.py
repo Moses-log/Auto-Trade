@@ -7,6 +7,7 @@ percentage P&L, formats a Discord message, and sends it via notify().
 Jobs are registered in scheduler.py and fire at 4pm ET.
 """
 
+import asyncio
 import concurrent.futures
 import logging
 from dataclasses import dataclass
@@ -166,7 +167,9 @@ async def send_weekly_report() -> None:
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
             if spy_df is not None:
-                chart_bytes = generate_equity_chart(
+                loop = asyncio.get_running_loop()
+                chart_bytes = await loop.run_in_executor(
+                    None, generate_equity_chart,
                     history.equity, history.timestamp, spy_df, chart_title
                 )
         except Exception as exc:
@@ -199,7 +202,9 @@ async def send_monthly_report() -> None:
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
             if spy_df is not None:
-                chart_bytes = generate_equity_chart(
+                loop = asyncio.get_running_loop()
+                chart_bytes = await loop.run_in_executor(
+                    None, generate_equity_chart,
                     history.equity, history.timestamp, spy_df, chart_title
                 )
         except Exception as exc:
@@ -232,7 +237,9 @@ async def send_yearly_report() -> None:
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
             if spy_df is not None:
-                chart_bytes = generate_equity_chart(
+                loop = asyncio.get_running_loop()
+                chart_bytes = await loop.run_in_executor(
+                    None, generate_equity_chart,
                     history.equity, history.timestamp, spy_df, chart_title
                 )
         except Exception as exc:
@@ -310,7 +317,9 @@ async def send_alltime_report() -> None:
 
         chart_bytes = None
         try:
-            chart_bytes = generate_equity_chart(
+            loop = asyncio.get_running_loop()
+            chart_bytes = await loop.run_in_executor(
+                None, generate_equity_chart,
                 history.equity[start_idx:], history.timestamp[start_idx:],
                 spy_df, chart_title
             )

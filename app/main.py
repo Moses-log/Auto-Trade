@@ -33,7 +33,7 @@ from app.idempotency import is_duplicate, mark_processed
 from app.investors import Deposit, Investor, load_investors, save_investors
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
-from app.notifications import notify
+from app.notifications import notify, close_http_client
 from app.pnl import (
     send_daily_report,
     send_weekly_report,
@@ -82,6 +82,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
+    await close_http_client()
     log.info("Server shutting down.")
 
 
