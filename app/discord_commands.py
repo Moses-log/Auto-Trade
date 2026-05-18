@@ -16,6 +16,7 @@ from app.pnl import (
     send_yearly_report,
     send_ytd_report,
     send_alltime_report,
+    send_investor_report,
 )
 from app.trading.alpaca_client import get_latest_price
 
@@ -116,6 +117,8 @@ async def handle_report(report_type: str, token: str) -> None:
         await send_yearly_report()
     if report_type == "alltime":
         await send_alltime_report()
+    if report_type == "investors":
+        await send_investor_report()
     await _edit_original(token, f"✅ {report_type.capitalize()} report sent")
 
 

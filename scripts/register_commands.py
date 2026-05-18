@@ -75,6 +75,7 @@ COMMANDS = [
                     {"name": "1 Year", "value": "1year"},
                     {"name": "All Time", "value": "alltime"},
                     {"name": "Daily & Weekly", "value": "both"},
+                    {"name": "Investor Breakdown", "value": "investors"},
                 ],
             }
         ],
