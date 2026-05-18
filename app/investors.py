@@ -24,7 +24,7 @@ def load_investors(path: Path = INVESTORS_FILE) -> list[Investor]:
     if not path.exists():
         return []
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
         return [
             Investor(
                 name=inv["name"],
