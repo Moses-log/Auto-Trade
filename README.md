@@ -18,18 +18,15 @@ Render (FastAPI)
       │                                               → if queued:  ⏳ queued alert to Discord
       │                                                             save to persistent disk
       ├── POST /interactions → Discord slash commands (/deposit, /withdraw, /report)
-      ├── POST /deposit      → record investor deposit → auto-commit to GitHub
+      ├── POST /deposit      → record investor deposit → save to persistent disk
       ├── POST /run-report   → manually fire P&L report
       └── GET  /health       → uptime check
 
 APScheduler (inside Render)
-      ├── 8:31 AM CT Mon–Fri        → Resolve queued orders  → full trade alert to Discord
-      ├── 3:00 PM CT Mon–Fri        → Daily P&L report       → Discord (main channel)
-      ├── 3:01 PM CT Friday         → Weekly P&L + chart     → Discord (main channel)
-      ├── 3:02 PM CT Mon–Fri        → Investor breakdown     → Discord (investors channel)
-      │                                (3:03 PM on Fridays to avoid colliding with weekly report)
-      └── 3:05 PM CT Mon–Fri        → Monthly P&L + chart    → Discord (last trading day of month)
-                                      Yearly P&L + chart     → Discord (last trading day of Dec)
+      ├── 8:31 AM CT Mon–Fri  → Resolve queued orders → full trade alert to Discord
+      ├── 3:00 PM CT Mon–Thu  → Daily P&L + Investor breakdown + period check (parallel)
+      └── 3:00 PM CT Friday   → Daily P&L + Weekly P&L + chart + Investor breakdown
+                                + Monthly/Yearly P&L + chart (last trading day) (all parallel)
 
 Persistent Disk (/data)
       ├── investors.json       → deposit records, survives restarts and redeploys
@@ -215,10 +212,10 @@ Returns server uptime and paper/live mode status.
 ### Main channel (`DISCORD_WEBHOOK_URL`)
 - ⚠️ / ❌ Trade errors and failures
 - Daily P&L report (3:00 PM CT Mon–Fri)
-- Weekly P&L report + chart (3:01 PM CT Fridays)
-- Monthly P&L report + chart (3:05 PM CT — last trading day of each month)
-- Yearly P&L report + chart (3:05 PM CT — last trading day of December)
-- YTD, 1-Year, All-Time reports available on demand via `/report` or `POST /run-report`
+- Weekly P&L report + chart (3:00 PM CT Fridays)
+- Monthly P&L report + chart (3:00 PM CT — last trading day of each month)
+- Yearly P&L report + chart (3:00 PM CT — last trading day of December)
+- YTD, 1-Year, All-Time, Investor Breakdown available on demand via `/report` or `POST /run-report`
 
 P&L report format:
 ```
@@ -317,7 +314,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-No real Alpaca or GitHub calls are made — all external clients are mocked.
+No real Alpaca or Discord calls are made — all external clients are mocked.
 
 ---
 
@@ -343,7 +340,7 @@ No real Alpaca or GitHub calls are made — all external clients are mocked.
 3. Enable Developer Mode in Discord (Settings → Advanced) → right-click your username → **Copy User ID** → add as `DISCORD_YOUR_USER_ID`
 4. Set **Interactions Endpoint URL** in Developer Portal → `https://<your-render-url>/interactions`
 5. Add the bot to your server via OAuth2 → URL Generator → scope `applications.commands`
-6. Register the 3 slash commands (run once locally):
+6. Register slash commands (run once locally, and again after adding new choices):
 ```bash
 DISCORD_APP_ID=... DISCORD_BOT_TOKEN=... py scripts/register_commands.py
 ```
