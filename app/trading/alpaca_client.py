@@ -249,10 +249,14 @@ def get_order(order_id: str) -> Optional[Order]:
     """
     Fetch a full order object by ID.
     Used to get fill price after a trade executes.
-    Returns None if order not found or any exception occurs.
+    Returns None if the order genuinely doesn't exist; retries on transient errors.
     """
     try:
         return get_client().get_order_by_id(order_id)
+    except APIError as exc:
+        if "order not found" in str(exc).lower() or "40410000" in str(exc):
+            return None
+        raise
     except Exception as exc:
         log.warning("Could not fetch order %s: %s", order_id, exc)
         return None
