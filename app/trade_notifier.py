@@ -171,6 +171,9 @@ async def notify_pending_order_fill(
 
     if filled_qty is None:
         log.warning("Queued order %s still unfilled after 2 minutes at market open", order_id)
+        await notify_trades(f"⚠️ Queued order for {ticker} ({action.upper()}) did not fill at open — check Alpaca")
+        from app.pending_orders import remove_pending_order
+        remove_pending_order(order_id)
         return
 
     pos = get_position(ticker)
