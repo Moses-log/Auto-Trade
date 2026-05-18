@@ -146,18 +146,14 @@ async def test_send_weekly_report_alpaca_error(mock_notify, mock_get_history, mo
 # ── scheduler.py tests ────────────────────────────────────────────────────────
 
 def test_scheduler_jobs_registered():
-    """setup_jobs() must register the P&L and investor breakdown cron jobs."""
+    """setup_jobs() must register weekday and friday parallel job bundles."""
     from app.scheduler import scheduler, setup_jobs
-    # Start fresh — remove any jobs from previous calls
     scheduler.remove_all_jobs()
     setup_jobs()
     job_ids = {job.id for job in scheduler.get_jobs()}
-    assert "daily_pnl" in job_ids
-    assert "weekly_pnl" in job_ids
-    assert "investor_breakdown_daily" in job_ids
-    assert "investor_breakdown_weekly" in job_ids
-    assert "period_pnl_check" in job_ids
-    assert len(job_ids) == 5
+    assert "weekday_jobs" in job_ids
+    assert "friday_jobs" in job_ids
+    assert len(job_ids) == 2
 
 
 # ── get_spy_bars tests ────────────────────────────────────────────────────────

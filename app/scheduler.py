@@ -5,6 +5,7 @@ The `scheduler` singleton is started/stopped in main.py's lifespan.
 Call setup_jobs() once at startup to register the cron triggers.
 """
 
+import asyncio
 import logging
 from datetime import datetime
 
@@ -22,43 +23,42 @@ ET = pytz.timezone("America/New_York")
 scheduler = AsyncIOScheduler(timezone=ET)
 
 
-def setup_jobs() -> None:
-    """Register daily and weekly P&L cron jobs.
+async def _weekday_jobs() -> None:
+    """Run Mon–Thu reports in parallel: daily P&L, investor breakdown, period check."""
+    await asyncio.gather(
+        send_daily_report(),
+        send_investor_report(),
+        check_period_reports(),
+        return_exceptions=True,
+    )
 
-    Daily:  Mon–Fri at 16:00 ET
-    Weekly: Friday  at 16:01 ET (1 minute after daily to ensure order)
-    """
+
+async def _friday_jobs() -> None:
+    """Run Friday reports in parallel: daily, weekly, investor breakdown, period check."""
+    await asyncio.gather(
+        send_daily_report(),
+        send_weekly_report(),
+        send_investor_report(),
+        check_period_reports(),
+        return_exceptions=True,
+    )
+
+
+def setup_jobs() -> None:
+    """Register cron jobs — two parallel bundles replacing five staggered jobs."""
     scheduler.add_job(
-        send_daily_report,
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=0, timezone=ET),
-        id="daily_pnl",
+        _weekday_jobs,
+        CronTrigger(day_of_week="mon-thu", hour=16, minute=0, timezone=ET),
+        id="weekday_jobs",
         replace_existing=True,
     )
     scheduler.add_job(
-        send_weekly_report,
-        CronTrigger(day_of_week="fri", hour=16, minute=1, timezone=ET),
-        id="weekly_pnl",
+        _friday_jobs,
+        CronTrigger(day_of_week="fri", hour=16, minute=0, timezone=ET),
+        id="friday_jobs",
         replace_existing=True,
     )
-    scheduler.add_job(
-        send_investor_report,
-        CronTrigger(day_of_week="mon-thu", hour=16, minute=2, timezone=ET),
-        id="investor_breakdown_daily",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        send_investor_report,
-        CronTrigger(day_of_week="fri", hour=16, minute=3, timezone=ET),
-        id="investor_breakdown_weekly",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        check_period_reports,
-        CronTrigger(day_of_week="mon-fri", hour=16, minute=5, timezone=ET),
-        id="period_pnl_check",
-        replace_existing=True,
-    )
-    log.info("P&L scheduler jobs registered: daily_pnl, weekly_pnl, period_pnl_check (Mon-Fri 16:05 ET)")
+    log.info("Scheduler jobs registered: weekday_jobs (Mon–Thu 16:00 ET), friday_jobs (Fri 16:00 ET)")
 
 
 def reschedule_pending_orders() -> None:

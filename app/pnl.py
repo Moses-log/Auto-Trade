@@ -7,6 +7,7 @@ percentage P&L, formats a Discord message, and sends it via notify().
 Jobs are registered in scheduler.py and fire at 4pm ET.
 """
 
+import concurrent.futures
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, date as _date
@@ -24,6 +25,19 @@ from app.trading.alpaca_client import get_latest_price, get_portfolio_history, g
 log = logging.getLogger(__name__)
 
 ET = pytz.timezone("America/New_York")
+
+_yf_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="yfinance")
+_YF_TIMEOUT = 15.0
+
+
+def _yf_fetch(fn):
+    """Run a yfinance call with a timeout to prevent indefinite hangs."""
+    future = _yf_executor.submit(fn)
+    try:
+        return future.result(timeout=_YF_TIMEOUT)
+    except concurrent.futures.TimeoutError:
+        log.warning("yfinance fetch timed out after %ss", _YF_TIMEOUT)
+        return None
 
 
 @dataclass
@@ -57,8 +71,8 @@ def compute_spy_pct(period: str) -> Optional[float]:
     """
     try:
         interval = "1m" if period == "1d" else "1d"
-        hist = yf.Ticker("SPY").history(period=period, interval=interval)
-        if hist.empty:
+        hist = _yf_fetch(lambda: yf.Ticker("SPY").history(period=period, interval=interval))
+        if hist is None or hist.empty:
             return None
         open_price = float(hist["Open"].iloc[0])
         close_price = float(hist["Close"].iloc[-1])
@@ -76,8 +90,8 @@ def fetch_spy_history(start_date: _date, end_date: _date):
     Returns a yfinance DataFrame with a "Close" column, or None on failure.
     """
     try:
-        hist = yf.Ticker("SPY").history(start=start_date, end=end_date)
-        if hist.empty:
+        hist = _yf_fetch(lambda: yf.Ticker("SPY").history(start=start_date, end=end_date))
+        if hist is None or hist.empty:
             return None
         return hist
     except Exception as exc:

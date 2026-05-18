@@ -309,15 +309,15 @@ async def test_send_investor_report_sends_message_with_investor_name():
     assert "360.00" in message  # 300 * 600/500
 
 
-def test_setup_jobs_registers_investor_breakdown_jobs():
+def test_setup_jobs_registers_parallel_bundles():
     from unittest.mock import MagicMock, patch
     mock_scheduler = MagicMock()
     with patch("app.scheduler.scheduler", mock_scheduler):
         from app.scheduler import setup_jobs
         setup_jobs()
     registered_ids = [call.kwargs.get("id") for call in mock_scheduler.add_job.call_args_list]
-    assert "investor_breakdown_daily" in registered_ids
-    assert "investor_breakdown_weekly" in registered_ids
+    assert "weekday_jobs" in registered_ids
+    assert "friday_jobs" in registered_ids
 
 
 def test_serialize_investors_returns_valid_json():
