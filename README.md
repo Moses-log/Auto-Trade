@@ -32,7 +32,10 @@ APScheduler (inside Render)
                                       Yearly P&L + chart     → Discord (last trading day of Dec)
 
 Persistent Disk (/data)
-      └── pending_orders.json  → survives restarts and redeploys
+      ├── investors.json       → deposit records, survives restarts and redeploys
+      ├── pending_orders.json  → queued orders awaiting next market open
+      ├── trade_record.json    → win/loss record
+      └── idempotency.json     → seen alert IDs (TTL-based deduplication)
 ```
 
 ---
@@ -45,7 +48,7 @@ app/
 ├── config.py            # All settings loaded from environment variables
 ├── models.py            # Pydantic models for TradingView alerts and deposits
 ├── security.py          # Shared-secret validation (constant-time)
-├── idempotency.py       # Duplicate-alert suppression with TTL store
+├── idempotency.py       # Duplicate-alert suppression with disk-backed TTL store
 ├── logging_config.py    # Structured JSON logging
 ├── notifications.py     # Discord notifications (main / investors / trades channels)
 ├── pnl.py               # P&L calculation and reporting (daily/weekly/monthly/yearly/YTD/all-time)
@@ -56,7 +59,7 @@ app/
 ├── pending_orders.py    # Persist queued orders to disk, reschedule on startup
 ├── interactions.py      # Discord Ed25519 signature verification and routing helpers
 ├── discord_commands.py  # /deposit, /withdraw, /report slash command handlers
-├── github_commit.py     # Auto-commit investors.json to GitHub via REST API
+├── trade_record.py      # Win/loss record — disk-backed, updated after every sell
 └── trading/
     ├── alpaca_client.py # Alpaca API wrapper + retry logic
     └── order_logic.py   # TradingView action → Alpaca order translation
@@ -67,13 +70,13 @@ tests/
 ├── test_investors.py
 ├── test_pnl.py
 ├── test_trade_notifier.py
-├── test_github_commit.py
 ├── test_chart.py
 ├── conftest.py
 └── sample_payloads.json
 
-investors.json           # Investor deposit records (source of truth)
-pending_orders.json      # Queued orders awaiting next market open (written to persistent disk at runtime)
+investors.json           # Seed file — copied to persistent disk on first startup
+trade_record.json        # Seed file — copied to persistent disk on first startup
+pending_orders.json      # Queued orders (written to persistent disk at runtime)
 ```
 
 ---
@@ -104,13 +107,6 @@ Copy `.env.example` to `.env` and fill in values. All are set in the Render dash
 | `DISCORD_WEBHOOK_URL` | Main channel — P&L reports and error alerts |
 | `DISCORD_INVESTORS_WEBHOOK_URL` | Investor breakdown channel (falls back to main if unset) |
 | `DISCORD_TRADES_WEBHOOK_URL` | Trade alert channel — detailed fill info and P&L on sells |
-
-### Optional — GitHub Auto-Commit
-
-| Variable | Default | Description |
-|---|---|---|
-| `GITHUB_TOKEN` | — | GitHub personal access token (`repo` scope) — required for `/deposit` auto-commit |
-| `GITHUB_REPO` | `Moses-log/Auto-Trade` | Target repo for investors.json commits |
 
 ### Optional — Persistent Disk
 
@@ -154,7 +150,7 @@ Receives TradingView alerts. Validates secret, deduplicates, executes trade on A
 ```
 
 ### `POST /deposit`
-Records a new investor deposit. Fetches current SPY price from Alpaca if `spy_price` is omitted. Auto-commits `investors.json` to GitHub on success.
+Records a new investor deposit. Fetches current SPY price from Alpaca if `spy_price` is omitted. Saves to persistent disk immediately.
 
 **Payload:**
 ```json
@@ -179,7 +175,7 @@ Manually fires a P&L report to Discord. Useful if the scheduled report failed.
 }
 ```
 
-`report` accepts `"daily"`, `"weekly"`, `"monthly"`, `"ytd"`, `"1year"`, `"alltime"`, or `"both"`.
+`report` accepts `"daily"`, `"weekly"`, `"monthly"`, `"ytd"`, `"1year"`, `"alltime"`, `"both"`, or `"investors"`.
 
 ### `POST /interactions`
 Receives Discord slash command interactions. Verifies Ed25519 signature, checks user ID, and dispatches commands as background tasks.
@@ -188,7 +184,7 @@ Receives Discord slash command interactions. Verifies Ed25519 signature, checks 
 |---|---|---|
 | `/deposit` | `investor`, `amount`, `spy_price` (optional) | Records a cash deposit. Fetches live SPY price if `spy_price` omitted. |
 | `/withdraw` | `investor`, `amount` | Records a cash withdrawal. Validates amount ≤ total deposited. |
-| `/report` | `type` (daily/weekly/monthly/ytd/1year/alltime/both) | Fires a P&L report to Discord. Weekly, monthly, yearly, and all-time reports include an equity chart. |
+| `/report` | `type` (daily/weekly/monthly/ytd/1year/alltime/both/investors) | Fires a P&L report to Discord. Weekly, monthly, yearly, and all-time reports include an equity chart. |
 
 All responses are ephemeral (only visible to you). Requires `DISCORD_APP_PUBLIC_KEY`, `DISCORD_APP_ID`, and `DISCORD_YOUR_USER_ID` env vars.
 
@@ -286,7 +282,7 @@ Position: 14.5 shares
 
 ## Investor Tracking
 
-`investors.json` at the repo root stores each investor's deposit history:
+`investors.json` stores each investor's deposit history on the persistent disk (`/data/investors.json` on Render). The repo root `investors.json` serves as a seed file — copied to disk on first startup.
 
 ```json
 {
@@ -308,7 +304,7 @@ equity = sum( deposit.amount × (current_SPY / deposit.entry_spy) )
 
 Every deposit has its own entry price so multiple deposits per investor are handled correctly.
 
-**Adding a deposit:** use `/deposit` in Discord or call `POST /deposit` — auto-committed to GitHub on success.
+**Adding a deposit:** use `/deposit` in Discord or call `POST /deposit` — saved to persistent disk immediately.
 
 **Withdrawals:** use `/withdraw` in Discord — adds a negative deposit entry at current SPY price.
 
@@ -374,4 +370,4 @@ Test thoroughly on paper trading before switching.
 - Webhook secret validated with `hmac.compare_digest` to prevent timing attacks
 - Never commit `.env` — it is gitignored by default
 - Swagger UI (`/docs`) is disabled in production
-- GitHub token requires only `repo` scope — nothing broader
+- Discord slash commands restricted to a single user ID (`DISCORD_YOUR_USER_ID`)
