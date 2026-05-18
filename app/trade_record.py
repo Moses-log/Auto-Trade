@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
-_RECORD_FILE = Path("trade_record.json")
+_RECORD_FILE = Path(os.getenv("TRADE_RECORD_PATH", "trade_record.json"))
 _lock = asyncio.Lock()
 
 
@@ -25,7 +26,7 @@ def _save(record: dict) -> None:
 
 
 async def record_trade_result(is_win: bool) -> tuple[int, int]:
-    """Increment win or loss, persist to disk and GitHub, return (wins, losses)."""
+    """Increment win or loss, persist to disk, return (wins, losses)."""
     async with _lock:
         record = _load()
         if is_win:
@@ -33,12 +34,6 @@ async def record_trade_result(is_win: bool) -> tuple[int, int]:
         else:
             record["losses"] += 1
         _save(record)
-
-    try:
-        from app.github_commit import commit_trade_record
-        await commit_trade_record(json.dumps(record))
-    except Exception as exc:
-        log.warning("Failed to commit trade_record.json to GitHub: %s", exc)
 
     return record["wins"], record["losses"]
 
