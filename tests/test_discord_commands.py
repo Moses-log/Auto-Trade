@@ -17,7 +17,6 @@ async def test_handle_deposit_success():
 
     with patch("app.discord_commands.load_investors", return_value=[fake_investor]), \
          patch("app.discord_commands.get_latest_price", return_value=741.20), \
-         patch("app.discord_commands.commit_investors_json", new_callable=AsyncMock), \
          patch("app.discord_commands.save_investors"), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_deposit
@@ -50,7 +49,6 @@ async def test_handle_withdraw_success():
 
     with patch("app.discord_commands.load_investors", return_value=[inv]), \
          patch("app.discord_commands.get_latest_price", return_value=741.20), \
-         patch("app.discord_commands.commit_investors_json", new_callable=AsyncMock), \
          patch("app.discord_commands.save_investors"), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_withdraw

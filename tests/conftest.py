@@ -7,6 +7,9 @@ when no .env file is present during testing.
 """
 
 import os
+import pytest
+from pathlib import Path
+from unittest.mock import patch
 
 # Set these before any app module is imported.  Using setdefault means a real
 # .env file (if present) takes precedence because pydantic-settings reads it
@@ -14,3 +17,10 @@ import os
 os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
+
+
+@pytest.fixture(autouse=True)
+def isolate_idempotency_store(tmp_path):
+    """Redirect the idempotency store to a fresh temp file for every test."""
+    with patch("app.idempotency._FILE", tmp_path / "idempotency.json"):
+        yield

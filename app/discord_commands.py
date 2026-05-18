@@ -7,8 +7,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
-from app.github_commit import commit_investors_json
-from app.investors import Deposit, get_total_deposited, load_investors, save_investors, serialize_investors
+from app.investors import Deposit, get_total_deposited, load_investors, save_investors
 from app.pnl import (
     send_daily_report,
     send_weekly_report,
@@ -52,16 +51,6 @@ async def handle_deposit(
             return
 
     match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
-    content = serialize_investors(investors)
-
-    try:
-        await commit_investors_json(content)
-    except Exception as exc:
-        log.warning("GitHub commit failed: %s", exc)
-        save_investors(investors)
-        await _edit_original(token, f"⚠️ {match.name} — ${amount:,.2f} deposit recorded locally but GitHub commit failed\nSPY entry: ${spy_price:,.2f}")
-        return
-
     save_investors(investors)
     await _edit_original(token, f"✅ {match.name} — ${amount:,.2f} deposit recorded\nSPY entry: ${spy_price:,.2f}")
 
@@ -88,17 +77,6 @@ async def handle_withdraw(investor_name: str, amount: float, token: str) -> None
         return
 
     match.deposits.append(Deposit(amount=-amount, entry_spy=spy_price, date=date.today().isoformat()))
-    content = serialize_investors(investors)
-
-    try:
-        await commit_investors_json(content)
-    except Exception as exc:
-        log.warning("GitHub commit failed: %s", exc)
-        save_investors(investors)
-        remaining = get_total_deposited(match)
-        await _edit_original(token, f"⚠️ {match.name} — ${amount:,.2f} withdrawal recorded locally but GitHub commit failed\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")
-        return
-
     save_investors(investors)
     remaining = get_total_deposited(match)
     await _edit_original(token, f"✅ {match.name} — ${amount:,.2f} withdrawal recorded\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")

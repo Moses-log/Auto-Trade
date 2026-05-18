@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-INVESTORS_FILE = Path(__file__).parent.parent / "investors.json"
+log = logging.getLogger(__name__)
+
+_REPO_FILE = Path(__file__).parent.parent / "investors.json"
+INVESTORS_FILE = Path(os.getenv("INVESTORS_PATH", str(_REPO_FILE)))
 
 
 @dataclass
@@ -22,7 +27,14 @@ class Investor:
 
 def load_investors(path: Path = INVESTORS_FILE) -> list[Investor]:
     if not path.exists():
-        return []
+        if _REPO_FILE != path and _REPO_FILE.exists():
+            try:
+                path.write_text(_REPO_FILE.read_text(encoding="utf-8-sig"), encoding="utf-8")
+                log.info("Migrated investors.json to %s", path)
+            except Exception as exc:
+                log.warning("investors.json migration failed: %s", exc)
+        if not path.exists():
+            return []
     try:
         data = json.loads(path.read_text(encoding="utf-8-sig"))
         return [

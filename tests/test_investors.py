@@ -4,8 +4,11 @@ import pytest
 
 
 def test_load_investors_returns_empty_list_when_file_missing(tmp_path):
+    from unittest.mock import patch
     from app.investors import load_investors
-    result = load_investors(path=tmp_path / "missing.json")
+    # patch _REPO_FILE so migration doesn't pick up the real investors.json
+    with patch("app.investors._REPO_FILE", tmp_path / "no_repo.json"):
+        result = load_investors(path=tmp_path / "missing.json")
     assert result == []
 
 

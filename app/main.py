@@ -29,9 +29,8 @@ from fastapi.responses import JSONResponse
 from pydantic import ValidationError
 
 from app.config import settings
-from app.github_commit import commit_investors_json
 from app.idempotency import is_duplicate, mark_processed
-from app.investors import Deposit, Investor, load_investors, save_investors, serialize_investors
+from app.investors import Deposit, Investor, load_investors, save_investors
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
 from app.notifications import notify
@@ -337,12 +336,6 @@ async def deposit(request: Request) -> dict:
         investors.append(match)
     else:
         match.deposits.append(new_deposit)
-
-    content = serialize_investors(investors)
-    try:
-        await commit_investors_json(content)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
 
     save_investors(investors)
 
