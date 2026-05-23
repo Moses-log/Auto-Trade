@@ -59,8 +59,12 @@ def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
 
     Uses first equity value as open and last as close.
     """
+    if not history.equity or start_idx >= len(history.equity):
+        raise ValueError(f"No equity data available for {period} report")
     open_eq = history.equity[start_idx]
-    close_eq = history.equity[-1]
+    close_eq = next((eq for eq in reversed(history.equity) if eq is not None), None)
+    if close_eq is None:
+        raise ValueError(f"No valid close equity for {period} report")
     dollar = close_eq - open_eq
     pct = (dollar / open_eq * 100) if open_eq else 0.0
     return PnLResult(period=period, close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
