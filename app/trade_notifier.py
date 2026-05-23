@@ -59,7 +59,7 @@ def _format_trade_message(
             result_label = "🟢 WIN"
         else:
             pnl_str = f"-${abs(dollar_pnl):,.2f}"
-            pct_str = f"{pct_pnl:.2f}%"
+            pct_str = f"-{abs(pct_pnl):.2f}%"
             result_label = "🔴 LOSS"
         lines.append(f"P&L: {pnl_str} ({pct_str}) {result_label}")
 
@@ -176,35 +176,39 @@ async def notify_pending_order_fill(
         remove_pending_order(order_id)
         return
 
-    pos = get_position(ticker)
-    position_qty = float(pos.qty) if pos and pos.qty else 0.0
+    try:
+        pos = get_position(ticker)
+        position_qty = float(pos.qty) if pos and pos.qty else 0.0
 
-    dollar_pnl: Optional[float] = None
-    pct_pnl: Optional[float] = None
-    if avg_entry_price and filled_price and filled_qty and avg_entry_price != 0:
-        dollar_pnl = (filled_price - avg_entry_price) * filled_qty
-        pct_pnl = (filled_price - avg_entry_price) / avg_entry_price * 100
+        dollar_pnl: Optional[float] = None
+        pct_pnl: Optional[float] = None
+        if avg_entry_price and filled_price and filled_qty and avg_entry_price != 0:
+            dollar_pnl = (filled_price - avg_entry_price) * filled_qty
+            pct_pnl = (filled_price - avg_entry_price) / avg_entry_price * 100
 
-    record_str: Optional[str] = None
-    if dollar_pnl is not None:
-        wins, losses = await record_trade_result(dollar_pnl >= 0)
-        record_str = format_record(wins, losses)
+        record_str: Optional[str] = None
+        if dollar_pnl is not None:
+            wins, losses = await record_trade_result(dollar_pnl >= 0)
+            record_str = format_record(wins, losses)
 
-    message = _format_trade_message(
-        ticker=ticker,
-        action=f"{action} (filled at open)",
-        filled_price=filled_price,
-        alert_price=alert_price,
-        filled_qty=filled_qty,
-        position_qty=position_qty,
-        dollar_pnl=dollar_pnl,
-        pct_pnl=pct_pnl,
-        record_str=record_str,
-    )
-    await notify_trades(message)
-
-    from app.pending_orders import remove_pending_order
-    remove_pending_order(order_id)
+        message = _format_trade_message(
+            ticker=ticker,
+            action=f"{action} (filled at open)",
+            filled_price=filled_price,
+            alert_price=alert_price,
+            filled_qty=filled_qty,
+            position_qty=position_qty,
+            dollar_pnl=dollar_pnl,
+            pct_pnl=pct_pnl,
+            record_str=record_str,
+        )
+        await notify_trades(message)
+    except Exception as exc:
+        log.warning("Pending fill notification failed for %s: %s", order_id, exc)
+        await notify_trades(f"⚠️ {ticker} ({action.upper()}) filled at open but notification failed — check Alpaca")
+    finally:
+        from app.pending_orders import remove_pending_order
+        remove_pending_order(order_id)
 
 
 async def _schedule_pending_followup(
