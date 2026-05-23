@@ -308,7 +308,8 @@ async def send_ytd_report() -> None:
     date_str = f"YTD Jan 1–{now.strftime('%b')} {now.day}, {now.year}"
     try:
         history = get_portfolio_history(period=f"{days}D", timeframe="1D")
-        result = _compute_pnl(history, "ytd")
+        start_idx = _first_nonzero_idx(history.equity)
+        result = _compute_pnl(history, "ytd", start_idx)
         spy_pct = compute_spy_pct("ytd")
         msg = _format_message(result, "YTD P&L", date_str, spy_pct=spy_pct)
         await notify(msg)

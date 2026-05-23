@@ -34,6 +34,11 @@ def generate_equity_chart(
     """
     dates = [datetime.fromtimestamp(ts, tz=ET).date() for ts in timestamps]
 
+    # Drop any mid-series None values Alpaca returns for market holidays
+    pairs = [(d, eq) for d, eq in zip(dates, equity) if eq is not None]
+    if pairs:
+        dates, equity = map(list, zip(*pairs))
+
     open_eq = equity[0] if equity and equity[0] else 1.0
     port_pct = [(eq - open_eq) / open_eq * 100 for eq in equity]
 
