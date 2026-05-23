@@ -213,11 +213,23 @@ async def send_monthly_report() -> None:
             start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
+
+            equity = list(history.equity)
+            timestamps = list(history.timestamp)
+            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+            if last_date < now.date():
+                try:
+                    account = get_account()
+                    equity.append(float(account.equity))
+                    timestamps.append(int(now.timestamp()))
+                except Exception as exc:
+                    log.warning("Could not fetch current equity for monthly chart: %s", exc)
+
             if spy_df is not None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    history.equity, history.timestamp, spy_df, chart_title
+                    equity, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("Monthly chart generation failed: %s", exc)
@@ -248,11 +260,23 @@ async def send_yearly_report() -> None:
             start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
+
+            equity = list(history.equity)
+            timestamps = list(history.timestamp)
+            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+            if last_date < now.date():
+                try:
+                    account = get_account()
+                    equity.append(float(account.equity))
+                    timestamps.append(int(now.timestamp()))
+                except Exception as exc:
+                    log.warning("Could not fetch current equity for yearly chart: %s", exc)
+
             if spy_df is not None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    history.equity, history.timestamp, spy_df, chart_title
+                    equity, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("Yearly chart generation failed: %s", exc)
