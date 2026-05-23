@@ -49,12 +49,17 @@ class PnLResult:
     pct_pnl: float
 
 
-def _compute_pnl(history, period: str) -> PnLResult:
+def _first_nonzero_idx(equity) -> int:
+    """Return index of first non-zero equity value, or 0 if none found."""
+    return next((i for i, eq in enumerate(equity) if eq and eq > 0), 0)
+
+
+def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
     """Compute P&L from a PortfolioHistory object.
 
     Uses first equity value as open and last as close.
     """
-    open_eq = history.equity[0]
+    open_eq = history.equity[start_idx]
     close_eq = history.equity[-1]
     dollar = close_eq - open_eq
     pct = (dollar / open_eq * 100) if open_eq else 0.0
@@ -157,18 +162,19 @@ async def send_weekly_report() -> None:
     chart_title = f"Weekly Performance: {monday.strftime('%b %d')}\u2013{now.strftime('%b %d, %Y')}"
     try:
         history = get_portfolio_history(period="1W", timeframe="1D")
-        result = _compute_pnl(history, "weekly")
+        start_idx = _first_nonzero_idx(history.equity)
+        result = _compute_pnl(history, "weekly", start_idx)
         spy_pct = compute_spy_pct("5d")
         msg = _format_message(result, "Weekly P&L", date_str, spy_pct=spy_pct)
 
         chart_bytes = None
         try:
-            start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
+            start_date = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET).date()
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
 
-            equity = list(history.equity)
-            timestamps = list(history.timestamp)
+            equity = list(history.equity[start_idx:])
+            timestamps = list(history.timestamp[start_idx:])
             last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
             if last_date < now.date():
                 try:
@@ -204,18 +210,19 @@ async def send_monthly_report() -> None:
     chart_title = f"Monthly Performance: {now.strftime('%B %Y')}"
     try:
         history = get_portfolio_history(period="1M", timeframe="1D")
-        result = _compute_pnl(history, "monthly")
+        start_idx = _first_nonzero_idx(history.equity)
+        result = _compute_pnl(history, "monthly", start_idx)
         spy_pct = compute_spy_pct("1mo")
         msg = _format_message(result, "Monthly P&L", date_str, spy_pct=spy_pct)
 
         chart_bytes = None
         try:
-            start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
+            start_date = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET).date()
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
 
-            equity = list(history.equity)
-            timestamps = list(history.timestamp)
+            equity = list(history.equity[start_idx:])
+            timestamps = list(history.timestamp[start_idx:])
             last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
             if last_date < now.date():
                 try:
@@ -251,18 +258,19 @@ async def send_yearly_report() -> None:
     chart_title = f"1-Year Performance through {now.strftime('%b %d, %Y')}"
     try:
         history = get_portfolio_history(period="1A", timeframe="1D")
-        result = _compute_pnl(history, "yearly")
+        start_idx = _first_nonzero_idx(history.equity)
+        result = _compute_pnl(history, "yearly", start_idx)
         spy_pct = compute_spy_pct("1y")
         msg = _format_message(result, "Yearly P&L", date_str, spy_pct=spy_pct)
 
         chart_bytes = None
         try:
-            start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
+            start_date = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET).date()
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
 
-            equity = list(history.equity)
-            timestamps = list(history.timestamp)
+            equity = list(history.equity[start_idx:])
+            timestamps = list(history.timestamp[start_idx:])
             last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
             if last_date < now.date():
                 try:
