@@ -16,10 +16,10 @@ _BG           = "#07071a"
 _PANEL        = "#0d0d2b"
 _PORT_COLOR   = "#00ff88"   # neon green
 _SPY_COLOR    = "#ff2d78"   # neon magenta
-_ZERO_COLOR   = "#2a2a6a"
-_GRID_COLOR   = "#111133"
-_TEXT_COLOR   = "#a0a0d0"
-_TITLE_COLOR  = "#00e5ff"   # neon cyan
+_ZERO_COLOR   = "#3a3a8a"
+_GRID_COLOR   = "#1a1a40"
+_TEXT_COLOR   = "#d0d0f0"   # bright lavender — readable on dark bg
+_TITLE_COLOR  = "#ffe600"   # neon yellow
 
 
 def _glow(ax, x, y, color, lw: float = 2.0, label: str | None = None, linestyle: str = "-") -> None:
@@ -102,37 +102,37 @@ def generate_equity_chart(
               label=f"S&P 500    {spy_sign}{final_spy:.2f}%")
 
     # Title and labels
-    ax.set_title(title, fontsize=13, fontweight="bold",
-                 color=_TITLE_COLOR, pad=12)
-    ax.set_ylabel("Return (%)", color=_TEXT_COLOR, fontsize=10)
+    ax.set_title(title, fontsize=14, fontweight="bold",
+                 color=_TITLE_COLOR, pad=14)
+    ax.set_ylabel("Return (%)", color=_TEXT_COLOR, fontsize=11, labelpad=8)
 
     # Axis formatting
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:+.1f}%"))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    ax.xaxis.set_major_locator(mdates.AutoDateLocator())
+    ax.xaxis.set_major_locator(mdates.DayLocator())
 
-    # Tick colors
-    ax.tick_params(axis="x", colors=_TEXT_COLOR, rotation=30)
-    ax.tick_params(axis="y", colors=_TEXT_COLOR)
-    plt.setp(ax.get_xticklabels(), ha="right", fontsize=9)
+    # Tick colors and sizes
+    ax.tick_params(axis="x", colors=_TEXT_COLOR, rotation=30, labelsize=10)
+    ax.tick_params(axis="y", colors=_TEXT_COLOR, labelsize=10)
+    plt.setp(ax.get_xticklabels(), ha="right")
 
     # Spine styling
     for spine in ax.spines.values():
         spine.set_edgecolor(_ZERO_COLOR)
-        spine.set_linewidth(0.8)
+        spine.set_linewidth(1.2)
 
-    # Grid
+    # Grid — bright enough to orient, dark enough not to compete with lines
     ax.grid(True, color=_GRID_COLOR, linewidth=0.8, alpha=1.0)
     ax.set_axisbelow(True)
 
     # Legend
     legend = ax.legend(
         loc="upper left",
-        facecolor=_BG,
+        facecolor="#0a0a22",
         edgecolor=_ZERO_COLOR,
         labelcolor=_TEXT_COLOR,
-        fontsize=10,
-        framealpha=0.85,
+        fontsize=11,
+        framealpha=0.90,
     )
     for line in legend.get_lines():
         line.set_linewidth(2.5)
