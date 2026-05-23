@@ -426,7 +426,11 @@ async def send_investor_report() -> None:
 
     now = datetime.now(ET)
     date_str = now.strftime(f"%B {now.day}, %Y")
-    breakdown = compute_breakdown(investors, spy_price)
-    message = format_discord_message(breakdown, date_str)
-    await notify_investors(message)
-    log.info("Investor report sent for %s", date_str)
+    try:
+        breakdown = compute_breakdown(investors, spy_price)
+        message = format_discord_message(breakdown, date_str)
+        await notify_investors(message)
+        log.info("Investor report sent for %s", date_str)
+    except Exception as exc:
+        log.error("Investor report failed: %s", exc)
+        await notify_investors(f"⚠️ Investor report failed: {exc}")

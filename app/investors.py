@@ -96,7 +96,7 @@ def compute_breakdown(investors: list[Investor], spy_price: float) -> InvestorBr
     results: list[InvestorResult] = []
     for inv in investors:
         total_deposited = sum(d.amount for d in inv.deposits)
-        current_equity = sum(d.amount * spy_price / d.entry_spy for d in inv.deposits)
+        current_equity = sum(d.amount * spy_price / d.entry_spy for d in inv.deposits if d.entry_spy)
         dollar_pnl = current_equity - total_deposited
         pct_pnl = (dollar_pnl / total_deposited * 100) if total_deposited else 0.0
         results.append(
@@ -135,20 +135,26 @@ def format_discord_message(breakdown: InvestorBreakdown, date_str: str) -> str:
         "",
     ]
     for r in breakdown.investors:
-        sign = "+" if r.dollar_pnl >= 0 else ""
+        if r.dollar_pnl >= 0:
+            pnl_str = f"+${r.dollar_pnl:,.2f} (+{r.pct_pnl:.2f}%)"
+        else:
+            pnl_str = f"-${abs(r.dollar_pnl):,.2f} ({r.pct_pnl:.2f}%)"
         lines += [
             f"**{r.name}**",
             f"> Deposited: ${r.total_deposited:,.2f}",
             f"> Current Equity: ${r.current_equity:,.2f}",
-            f"> P&L: {sign}${r.dollar_pnl:,.2f} ({sign}{r.pct_pnl:.2f}%)",
+            f"> P&L: {pnl_str}",
             f"> Portfolio Share: {r.portfolio_share:.1f}%",
             "",
         ]
-    overall_sign = "+" if breakdown.overall_dollar_pnl >= 0 else ""
+    if breakdown.overall_dollar_pnl >= 0:
+        overall_pnl_str = f"+${breakdown.overall_dollar_pnl:,.2f} (+{breakdown.overall_pct_pnl:.2f}%)"
+    else:
+        overall_pnl_str = f"-${abs(breakdown.overall_dollar_pnl):,.2f} ({breakdown.overall_pct_pnl:.2f}%)"
     lines += [
         "─" * 25,
         f"**Total Portfolio: ${breakdown.total_portfolio:,.2f}**",
         f"**Total Deposited: ${breakdown.total_deposited:,.2f}**",
-        f"**Overall P&L: {overall_sign}${breakdown.overall_dollar_pnl:,.2f} ({overall_sign}{breakdown.overall_pct_pnl:.2f}%)**",
+        f"**Overall P&L: {overall_pnl_str}**",
     ]
     return "\n".join(lines)
