@@ -353,11 +353,21 @@ async def send_alltime_report() -> None:
 
         chart_bytes = None
         try:
+            equity = list(history.equity[start_idx:])
+            timestamps = list(history.timestamp[start_idx:])
+            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+            if last_date < now.date():
+                try:
+                    account = get_account()
+                    equity.append(float(account.equity))
+                    timestamps.append(int(now.timestamp()))
+                except Exception as exc:
+                    log.warning("Could not fetch current equity for all-time chart: %s", exc)
+
             loop = asyncio.get_running_loop()
             chart_bytes = await loop.run_in_executor(
                 None, generate_equity_chart,
-                history.equity[start_idx:], history.timestamp[start_idx:],
-                spy_df, chart_title
+                equity, timestamps, spy_df, chart_title
             )
         except Exception as exc:
             log.warning("All-time chart generation failed: %s", exc)
