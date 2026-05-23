@@ -21,7 +21,7 @@ from app.investors import compute_breakdown, format_discord_message, load_invest
 from app.notifications import notify, notify_investors, notify_with_chart
 import yfinance as yf
 
-from app.trading.alpaca_client import get_latest_price, get_portfolio_history, get_next_trading_day
+from app.trading.alpaca_client import get_account, get_latest_price, get_portfolio_history, get_next_trading_day
 
 log = logging.getLogger(__name__)
 
@@ -166,11 +166,23 @@ async def send_weekly_report() -> None:
             start_date = datetime.fromtimestamp(history.timestamp[0], tz=ET).date()
             end_date = now.date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
+
+            equity = list(history.equity)
+            timestamps = list(history.timestamp)
+            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+            if last_date < now.date():
+                try:
+                    account = get_account()
+                    equity.append(float(account.equity))
+                    timestamps.append(int(now.timestamp()))
+                except Exception as exc:
+                    log.warning("Could not fetch current equity for weekly chart: %s", exc)
+
             if spy_df is not None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    history.equity, history.timestamp, spy_df, chart_title
+                    equity, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("Weekly chart generation failed: %s", exc)
