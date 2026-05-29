@@ -27,8 +27,12 @@ _lock = threading.Lock()
 def _make_key(payload: AlertPayload) -> str:
     if payload.order_id:
         raw = f"{payload.ticker}:{payload.order_id}"
-    else:
+    elif payload.timestamp:
         raw = f"{payload.ticker}:{payload.action}:{payload.timestamp}"
+    else:
+        # No reliable unique field — use contracts+price to differentiate
+        # distinct alerts while still blocking identical TradingView retries
+        raw = f"{payload.ticker}:{payload.action}:{payload.contracts}:{payload.price}"
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
@@ -54,6 +58,7 @@ def is_duplicate(payload: AlertPayload) -> bool:
     """Return True if this alert was already processed within the TTL window."""
     with _lock:
         seen = _evict_expired(_load())
+        _save(seen)  # persist eviction so expired entries don't accumulate
         return _make_key(payload) in seen
 
 

@@ -3,10 +3,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
 log = logging.getLogger(__name__)
+
+# Serialises all load-modify-save sequences across threads
+investors_lock = threading.Lock()
 
 _REPO_FILE = Path(__file__).parent.parent / "investors.json"
 INVESTORS_FILE = Path(os.getenv("INVESTORS_PATH", str(_REPO_FILE)))

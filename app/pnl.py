@@ -380,59 +380,56 @@ async def send_alltime_report() -> None:
     try:
         history = get_portfolio_history(period="all", timeframe="1D")
 
-        # Find first non-zero equity to skip pre-portfolio zeros
-        start_idx = next(
-            (i for i, eq in enumerate(history.equity) if eq and eq > 0),
-            0,
-        )
-        open_eq = history.equity[start_idx]
-        close_eq = history.equity[-1]
+        start_idx = _first_nonzero_idx(history.equity)
+        if not history.equity or start_idx >= len(history.equity):
+            raise ValueError("No equity data available for all-time report")
+
+        # Build equity/timestamps and extend to today so P&L and chart share identical data
+        equity = list(history.equity[start_idx:])
+        timestamps = list(history.timestamp[start_idx:])
+        last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+        if last_date < now.date():
+            try:
+                account = get_account()
+                equity.append(float(account.equity))
+                timestamps.append(int(now.timestamp()))
+            except Exception as exc:
+                log.warning("Could not fetch current equity for all-time report: %s", exc)
+
+        # P&L from the same equity list the chart uses, with None guard
+        open_eq = equity[0] if equity and equity[0] else 1.0
+        close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
+        if close_eq is None:
+            raise ValueError("No valid close equity for all-time report")
         dollar = close_eq - open_eq
         pct = (dollar / open_eq * 100) if open_eq else 0.0
         result = PnLResult(period="alltime", close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
 
-        start_dt = None
-        start_str = "inception"
-        if start_idx < len(history.timestamp):
-            start_dt = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET)
-            start_str = start_dt.strftime(f"%b {start_dt.day}, %Y")
+        start_dt = datetime.fromtimestamp(timestamps[0], tz=ET)
+        start_str = start_dt.strftime(f"%b {start_dt.day}, %Y")
         date_str = f"All Time since {start_str}"
         chart_title = f"All-Time Performance since {start_str}"
 
-        # Fetch SPY over same date range as portfolio
+        # SPY from same date range and same Close.iloc[0] baseline as chart
+        spy_df = fetch_spy_history(start_dt.date(), now.date() + timedelta(days=1))
+
         spy_pct: Optional[float] = None
-        spy_df = None
-        if start_dt is not None:
-            spy_df = fetch_spy_history(start_dt.date(), now.date() + timedelta(days=1))
-            if spy_df is not None and not spy_df.empty:
-                try:
-                    spy_open = float(spy_df["Open"].iloc[0])
-                    spy_close = float(spy_df["Close"].iloc[-1])
-                    if spy_open:
-                        spy_pct = (spy_close - spy_open) / spy_open * 100
-                except Exception as exc:
-                    log.warning("SPY all-time pct calc failed: %s", exc)
+        if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns:
+            spy_open = float(spy_df["Close"].iloc[0])
+            spy_close = float(spy_df["Close"].iloc[-1])
+            if spy_open:
+                spy_pct = (spy_close - spy_open) / spy_open * 100
 
         msg = _format_message(result, "All-Time P&L", date_str, spy_pct=spy_pct)
 
         chart_bytes = None
         try:
-            equity = list(history.equity[start_idx:])
-            timestamps = list(history.timestamp[start_idx:])
-            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
-            if last_date < now.date():
-                try:
-                    account = get_account()
-                    equity.append(float(account.equity))
-                    timestamps.append(int(now.timestamp()))
-                except Exception as exc:
-                    log.warning("Could not fetch current equity for all-time chart: %s", exc)
-
-            loop = asyncio.get_running_loop()
-            chart_bytes = await loop.run_in_executor(
-                None, generate_equity_chart,
-                equity, timestamps, spy_df, chart_title
-            )
+            if spy_df is not None:
+                loop = asyncio.get_running_loop()
+                chart_bytes = await loop.run_in_executor(
+                    None, generate_equity_chart,
+                    equity, timestamps, spy_df, chart_title
+                )
         except Exception as exc:
             log.warning("All-time chart generation failed: %s", exc)
 

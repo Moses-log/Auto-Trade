@@ -7,7 +7,7 @@ from typing import Optional
 import httpx
 
 from app.config import settings
-from app.investors import Deposit, get_total_deposited, load_investors, save_investors
+from app.investors import Deposit, get_total_deposited, load_investors, save_investors, investors_lock
 from app.pnl import (
     send_daily_report,
     send_weekly_report,
@@ -37,48 +37,52 @@ async def handle_deposit(
     spy_price: Optional[float],
     token: str,
 ) -> None:
-    investors = load_investors()
-    match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
-
-    if match is None:
-        await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
-        return
-
     if spy_price is None:
         spy_price = get_latest_price("SPY")
         if spy_price is None:
             await _edit_original(token, "❌ Could not fetch SPY price — provide spy_price manually")
             return
 
-    match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
-    save_investors(investors)
+    with investors_lock:
+        investors = load_investors()
+        match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
+
+        if match is None:
+            await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
+            return
+
+        match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
+        save_investors(investors)
+
     await _edit_original(token, f"✅ {match.name} — ${amount:,.2f} deposit recorded\nSPY entry: ${spy_price:,.2f}")
 
 
 async def handle_withdraw(investor_name: str, amount: float, token: str) -> None:
-    investors = load_investors()
-    match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
-
-    if match is None:
-        await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
-        return
-
-    total = get_total_deposited(match)
-    if amount > total:
-        await _edit_original(
-            token,
-            f"❌ Withdrawal ${amount:,.2f} exceeds {match.name} total ${total:,.2f}"
-        )
-        return
-
     spy_price = get_latest_price("SPY")
     if spy_price is None:
         await _edit_original(token, "❌ Could not fetch SPY price — try again")
         return
 
-    match.deposits.append(Deposit(amount=-amount, entry_spy=spy_price, date=date.today().isoformat()))
-    save_investors(investors)
-    remaining = get_total_deposited(match)
+    with investors_lock:
+        investors = load_investors()
+        match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
+
+        if match is None:
+            await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
+            return
+
+        total = get_total_deposited(match)
+        if amount > total:
+            await _edit_original(
+                token,
+                f"❌ Withdrawal ${amount:,.2f} exceeds {match.name} total ${total:,.2f}"
+            )
+            return
+
+        match.deposits.append(Deposit(amount=-amount, entry_spy=spy_price, date=date.today().isoformat()))
+        save_investors(investors)
+        remaining = get_total_deposited(match)
+
     await _edit_original(token, f"✅ {match.name} — ${amount:,.2f} withdrawal recorded\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")
 
 

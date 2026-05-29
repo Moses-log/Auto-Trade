@@ -30,7 +30,7 @@ from pydantic import ValidationError
 
 from app.config import settings
 from app.idempotency import is_duplicate, mark_processed
-from app.investors import Deposit, Investor, load_investors, save_investors
+from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
 from app.notifications import notify, close_http_client
@@ -318,12 +318,6 @@ async def deposit(request: Request) -> dict:
             content={"error": "Invalid deposit request.", "detail": _serialisable(exc.errors())},
         )
 
-    investors = load_investors()
-    match = next(
-        (inv for inv in investors if inv.name.lower() == req.investor.lower()),
-        None,
-    )
-
     spy_price = req.spy_price
     if spy_price is None:
         spy_price = get_latest_price("SPY")
@@ -332,13 +326,18 @@ async def deposit(request: Request) -> dict:
 
     new_deposit = Deposit(amount=req.amount, entry_spy=spy_price, date=date.today().isoformat())
 
-    if match is None:
-        match = Investor(name=req.investor, deposits=[new_deposit])
-        investors.append(match)
-    else:
-        match.deposits.append(new_deposit)
-
-    save_investors(investors)
+    with investors_lock:
+        investors = load_investors()
+        match = next(
+            (inv for inv in investors if inv.name.lower() == req.investor.lower()),
+            None,
+        )
+        if match is None:
+            match = Investor(name=req.investor, deposits=[new_deposit])
+            investors.append(match)
+        else:
+            match.deposits.append(new_deposit)
+        save_investors(investors)
 
     return {
         "investor": match.name,
