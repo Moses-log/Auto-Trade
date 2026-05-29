@@ -103,3 +103,10 @@ class DepositRequest(BaseModel):
         if v <= 0:
             raise ValueError("amount must be positive")
         return v
+
+    @field_validator("spy_price")
+    @classmethod
+    def spy_price_must_be_positive(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError("spy_price must be positive")
+        return v

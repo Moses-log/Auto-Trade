@@ -37,53 +37,65 @@ async def handle_deposit(
     spy_price: Optional[float],
     token: str,
 ) -> None:
+    if spy_price is not None and spy_price <= 0:
+        await _edit_original(token, "❌ SPY price must be positive")
+        return
+
     if spy_price is None:
         spy_price = get_latest_price("SPY")
         if spy_price is None:
             await _edit_original(token, "❌ Could not fetch SPY price — provide spy_price manually")
             return
 
-    with investors_lock:
+    # Capture result inside lock, await Discord call outside to avoid deadlock
+    match_name = None
+    async with investors_lock:
         investors = load_investors()
         match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
+        if match is not None:
+            match_name = match.name
+            match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
+            save_investors(investors)
 
-        if match is None:
-            await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
-            return
-
-        match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
-        save_investors(investors)
-
-    await _edit_original(token, f"✅ {match.name} — ${amount:,.2f} deposit recorded\nSPY entry: ${spy_price:,.2f}")
+    if match_name is None:
+        await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
+        return
+    await _edit_original(token, f"✅ {match_name} — ${amount:,.2f} deposit recorded\nSPY entry: ${spy_price:,.2f}")
 
 
 async def handle_withdraw(investor_name: str, amount: float, token: str) -> None:
+    if amount <= 0:
+        await _edit_original(token, "❌ Withdrawal amount must be positive")
+        return
+
     spy_price = get_latest_price("SPY")
     if spy_price is None:
         await _edit_original(token, "❌ Could not fetch SPY price — try again")
         return
 
-    with investors_lock:
+    # Capture result inside lock, await Discord calls outside to avoid deadlock
+    error_msg = None
+    match_name = None
+    remaining = None
+    async with investors_lock:
         investors = load_investors()
         match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
-
         if match is None:
-            await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
-            return
+            error_msg = f'❌ Investor "{investor_name}" not found — check spelling'
+        else:
+            match_name = match.name
+            total = get_total_deposited(match)
+            if amount > total:
+                error_msg = f"❌ Withdrawal ${amount:,.2f} exceeds {match_name} total ${total:,.2f}"
+            else:
+                match.deposits.append(Deposit(amount=-amount, entry_spy=spy_price, date=date.today().isoformat()))
+                save_investors(investors)
+                remaining = get_total_deposited(match)
 
-        total = get_total_deposited(match)
-        if amount > total:
-            await _edit_original(
-                token,
-                f"❌ Withdrawal ${amount:,.2f} exceeds {match.name} total ${total:,.2f}"
-            )
-            return
-
-        match.deposits.append(Deposit(amount=-amount, entry_spy=spy_price, date=date.today().isoformat()))
-        save_investors(investors)
-        remaining = get_total_deposited(match)
-
-    await _edit_original(token, f"✅ {match.name} — ${amount:,.2f} withdrawal recorded\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")
+    if error_msg:
+        await _edit_original(token, error_msg)
+        return
+    await _edit_original(token, f"✅ {match_name} — ${amount:,.2f} withdrawal recorded\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")
 
 
 async def handle_report(report_type: str, token: str) -> None:

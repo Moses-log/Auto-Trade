@@ -326,7 +326,7 @@ async def deposit(request: Request) -> dict:
 
     new_deposit = Deposit(amount=req.amount, entry_spy=spy_price, date=date.today().isoformat())
 
-    with investors_lock:
+    async with investors_lock:
         investors = load_investors()
         match = next(
             (inv for inv in investors if inv.name.lower() == req.investor.lower()),
