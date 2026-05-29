@@ -134,7 +134,7 @@ def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optio
         spy_sign = "+" if spy_pct >= 0 else ""
         relative = result.pct_pnl - spy_pct
         if relative > 0:
-            comparison = f"OUTPERFORM by +{relative:.2f}%"
+            comparison = f"OUTPERFORM by {relative:.2f}%"
         elif relative < 0:
             comparison = f"UNDERPERFORM by {abs(relative):.2f}%"
         else:
