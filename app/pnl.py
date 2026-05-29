@@ -133,9 +133,14 @@ def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optio
     if spy_pct is not None:
         spy_sign = "+" if spy_pct >= 0 else ""
         relative = result.pct_pnl - spy_pct
-        rel_sign = "+" if relative >= 0 else ""
-        rel_word = "ahead" if relative >= 0 else "behind"
-        msg += f"\nS&P 500: {spy_sign}{spy_pct:.2f}% ({rel_sign}{relative:.2f}% {rel_word})"
+        if relative > 0:
+            comparison = f"OUTPERFORM by +{relative:.2f}%"
+        elif relative < 0:
+            comparison = f"UNDERPERFORM by {abs(relative):.2f}%"
+        else:
+            comparison = "IN LINE"
+        msg += f"\nS&P 500: {spy_sign}{spy_pct:.2f}%"
+        msg += f"\n{comparison}"
 
     return msg
 
