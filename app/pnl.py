@@ -167,27 +167,44 @@ async def send_weekly_report() -> None:
     try:
         history = get_portfolio_history(period="1W", timeframe="1D")
         start_idx = _first_nonzero_idx(history.equity)
-        result = _compute_pnl(history, "weekly", start_idx)
-        spy_pct = compute_spy_pct("5d")
+
+        # Build equity/timestamps first so P&L and chart share identical data
+        equity = list(history.equity[start_idx:])
+        timestamps = list(history.timestamp[start_idx:])
+        last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+        if last_date < now.date():
+            try:
+                account = get_account()
+                equity.append(float(account.equity))
+                timestamps.append(int(now.timestamp()))
+            except Exception as exc:
+                log.warning("Could not fetch current equity for weekly report: %s", exc)
+
+        # P&L from the same equity list the chart uses
+        open_eq = equity[0] if equity and equity[0] else 1.0
+        close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
+        if close_eq is None:
+            raise ValueError("No valid close equity for weekly report")
+        dollar_pnl = close_eq - open_eq
+        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        result = PnLResult(period="weekly", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
+
+        # SPY from same date range and same Close.iloc[0] baseline as chart
+        start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
+        end_date = now.date() + timedelta(days=1)
+        spy_df = fetch_spy_history(start_date, end_date)
+
+        spy_pct: Optional[float] = None
+        if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns:
+            spy_open = float(spy_df["Close"].iloc[0])
+            spy_close = float(spy_df["Close"].iloc[-1])
+            if spy_open:
+                spy_pct = (spy_close - spy_open) / spy_open * 100
+
         msg = _format_message(result, "Weekly P&L", date_str, spy_pct=spy_pct)
 
         chart_bytes = None
         try:
-            start_date = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET).date()
-            end_date = now.date() + timedelta(days=1)
-            spy_df = fetch_spy_history(start_date, end_date)
-
-            equity = list(history.equity[start_idx:])
-            timestamps = list(history.timestamp[start_idx:])
-            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
-            if last_date < now.date():
-                try:
-                    account = get_account()
-                    equity.append(float(account.equity))
-                    timestamps.append(int(now.timestamp()))
-                except Exception as exc:
-                    log.warning("Could not fetch current equity for weekly chart: %s", exc)
-
             if spy_df is not None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
@@ -215,27 +232,41 @@ async def send_monthly_report() -> None:
     try:
         history = get_portfolio_history(period="1M", timeframe="1D")
         start_idx = _first_nonzero_idx(history.equity)
-        result = _compute_pnl(history, "monthly", start_idx)
-        spy_pct = compute_spy_pct("1mo")
+
+        equity = list(history.equity[start_idx:])
+        timestamps = list(history.timestamp[start_idx:])
+        last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+        if last_date < now.date():
+            try:
+                account = get_account()
+                equity.append(float(account.equity))
+                timestamps.append(int(now.timestamp()))
+            except Exception as exc:
+                log.warning("Could not fetch current equity for monthly report: %s", exc)
+
+        open_eq = equity[0] if equity and equity[0] else 1.0
+        close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
+        if close_eq is None:
+            raise ValueError("No valid close equity for monthly report")
+        dollar_pnl = close_eq - open_eq
+        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        result = PnLResult(period="monthly", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
+
+        start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
+        end_date = now.date() + timedelta(days=1)
+        spy_df = fetch_spy_history(start_date, end_date)
+
+        spy_pct: Optional[float] = None
+        if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns:
+            spy_open = float(spy_df["Close"].iloc[0])
+            spy_close = float(spy_df["Close"].iloc[-1])
+            if spy_open:
+                spy_pct = (spy_close - spy_open) / spy_open * 100
+
         msg = _format_message(result, "Monthly P&L", date_str, spy_pct=spy_pct)
 
         chart_bytes = None
         try:
-            start_date = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET).date()
-            end_date = now.date() + timedelta(days=1)
-            spy_df = fetch_spy_history(start_date, end_date)
-
-            equity = list(history.equity[start_idx:])
-            timestamps = list(history.timestamp[start_idx:])
-            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
-            if last_date < now.date():
-                try:
-                    account = get_account()
-                    equity.append(float(account.equity))
-                    timestamps.append(int(now.timestamp()))
-                except Exception as exc:
-                    log.warning("Could not fetch current equity for monthly chart: %s", exc)
-
             if spy_df is not None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
@@ -263,27 +294,41 @@ async def send_yearly_report() -> None:
     try:
         history = get_portfolio_history(period="1A", timeframe="1D")
         start_idx = _first_nonzero_idx(history.equity)
-        result = _compute_pnl(history, "yearly", start_idx)
-        spy_pct = compute_spy_pct("1y")
+
+        equity = list(history.equity[start_idx:])
+        timestamps = list(history.timestamp[start_idx:])
+        last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+        if last_date < now.date():
+            try:
+                account = get_account()
+                equity.append(float(account.equity))
+                timestamps.append(int(now.timestamp()))
+            except Exception as exc:
+                log.warning("Could not fetch current equity for yearly report: %s", exc)
+
+        open_eq = equity[0] if equity and equity[0] else 1.0
+        close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
+        if close_eq is None:
+            raise ValueError("No valid close equity for yearly report")
+        dollar_pnl = close_eq - open_eq
+        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        result = PnLResult(period="yearly", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
+
+        start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
+        end_date = now.date() + timedelta(days=1)
+        spy_df = fetch_spy_history(start_date, end_date)
+
+        spy_pct: Optional[float] = None
+        if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns:
+            spy_open = float(spy_df["Close"].iloc[0])
+            spy_close = float(spy_df["Close"].iloc[-1])
+            if spy_open:
+                spy_pct = (spy_close - spy_open) / spy_open * 100
+
         msg = _format_message(result, "Yearly P&L", date_str, spy_pct=spy_pct)
 
         chart_bytes = None
         try:
-            start_date = datetime.fromtimestamp(history.timestamp[start_idx], tz=ET).date()
-            end_date = now.date() + timedelta(days=1)
-            spy_df = fetch_spy_history(start_date, end_date)
-
-            equity = list(history.equity[start_idx:])
-            timestamps = list(history.timestamp[start_idx:])
-            last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
-            if last_date < now.date():
-                try:
-                    account = get_account()
-                    equity.append(float(account.equity))
-                    timestamps.append(int(now.timestamp()))
-                except Exception as exc:
-                    log.warning("Could not fetch current equity for yearly chart: %s", exc)
-
             if spy_df is not None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
