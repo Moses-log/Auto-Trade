@@ -7,6 +7,7 @@ from typing import Optional
 
 import pytz
 
+from app.leverage_state import save_leverage_entry
 from app.notifications import notify_trades
 from app.trading.alpaca_client import get_next_trading_day, get_order, get_position
 from app.trade_record import format_record, record_trade_result
@@ -108,6 +109,9 @@ async def notify_trade(
                 elif order:
                     pending_order_id = order_id
 
+        if action.upper().split(" (")[0] == "ADD_LEVERAGE" and filled_price is not None:
+            await save_leverage_entry(ticker, filled_price)
+
         if pending_order_id:
             await notify_trades(_format_queued_message(ticker, action, alert_price))
             await _schedule_pending_followup(pending_order_id, ticker, action, alert_price, avg_entry_price)
@@ -175,6 +179,9 @@ async def notify_pending_order_fill(
         from app.pending_orders import remove_pending_order
         remove_pending_order(order_id)
         return
+
+    if action.upper().split(" (")[0] == "ADD_LEVERAGE" and filled_price is not None:
+        await save_leverage_entry(ticker, filled_price)
 
     try:
         pos = get_position(ticker)

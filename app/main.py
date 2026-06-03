@@ -48,6 +48,7 @@ from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders
 from app.security import verify_webhook_secret
 from app.discord_commands import dispatch_command
 from app.interactions import extract_user_id, parse_options, verify_discord_signature
+from app.leverage_state import load_leverage_entry
 from app.trading.alpaca_client import get_latest_price, get_position
 from app.trading.order_logic import execute_action
 from alpaca.common.exceptions import APIError
@@ -220,7 +221,13 @@ async def webhook(request: Request):
     # ── 5. Execute trade ──────────────────────────────────────────────────────
     try:
         avg_entry_price: Optional[float] = None
-        if payload.action in _SELL_ACTIONS:
+        if payload.action == TradingAction.REMOVE_LEVERAGE:
+            # Use the stored ADD_LEVERAGE fill price, not the blended position
+            # avg_entry_price. The blended average includes the base position's
+            # (typically lower) cost basis and makes losing leverage trades
+            # appear profitable.
+            avg_entry_price = load_leverage_entry(payload.ticker)
+        elif payload.action in _SELL_ACTIONS:
             pos = get_position(payload.ticker)
             if pos and pos.avg_entry_price:
                 avg_entry_price = float(pos.avg_entry_price)
