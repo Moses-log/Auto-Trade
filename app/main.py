@@ -15,6 +15,7 @@ as TradingView requires.
 """
 
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -206,16 +207,39 @@ async def robinhood_auth(body: _RobinhoodAuthRequest):
         )
 
 
+_PICKLE_MAX_BYTES = 512 * 1024  # 512 KB — a real RH pickle is ~10 KB
+# Valid Python 3 pickle protocol header bytes (protocols 2–5)
+_PICKLE_MAGIC = {b"\x80\x02", b"\x80\x03", b"\x80\x04", b"\x80\x05"}
+
+
 @app.post("/robinhood-upload-pickle", tags=["trading"])
 async def robinhood_upload_pickle(body: _PickleUploadRequest):
     """Upload a locally-generated Robinhood pickle file to activate the session."""
-    import base64
     try:
         verify_webhook_secret(body.secret)
     except Exception:
         return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Unauthorized."})
     try:
         data = base64.b64decode(body.pickle_b64)
+    except Exception:
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": "Invalid base64 encoding."})
+
+    # ── Security checks before touching disk ─────────────────────────────────
+    if len(data) > _PICKLE_MAX_BYTES:
+        log.warning("Pickle upload rejected — size %d bytes exceeds limit", len(data))
+        return JSONResponse(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            content={"detail": f"File too large ({len(data):,} bytes). Maximum is {_PICKLE_MAX_BYTES:,} bytes."},
+        )
+
+    if len(data) < 2 or data[:2] not in _PICKLE_MAGIC:
+        log.warning("Pickle upload rejected — invalid magic bytes: %s", data[:2].hex() if data else "empty")
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": "Invalid file — does not appear to be a valid Python pickle."},
+        )
+
+    try:
         from app.trading.robinhood_client import _PICKLE_BACKUP, _PICKLE_PATH, _TOKENS_DIR
         os.makedirs("/data", exist_ok=True)
         os.makedirs(_TOKENS_DIR, exist_ok=True)
