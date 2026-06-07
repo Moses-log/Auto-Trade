@@ -44,6 +44,7 @@ from app.pnl import (
     send_ytd_report,
     send_alltime_report,
     send_investor_report,
+    _yf_executor,
 )
 from app.trade_notifier import notify_trade
 from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders
@@ -95,6 +96,7 @@ async def lifespan(app: FastAPI):
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
+    _yf_executor.shutdown(wait=False)
     await close_http_client()
     log.info("Server shutting down.")
 

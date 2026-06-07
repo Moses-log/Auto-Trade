@@ -98,13 +98,18 @@ async def handle_withdraw(investor_name: str, amount: float, token: str) -> None
 
 
 async def handle_report(broker: str, report_type: str, token: str) -> None:
+    _RH_VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime"}
+    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both", "investors"}
+
     if broker == "robinhood":
+        if report_type not in _RH_VALID:
+            await _edit_original(token, f"❌ Unknown RH report type: {report_type!r}. Valid: {', '.join(sorted(_RH_VALID))}")
+            return
         await send_rh_report(report_type)
         await _edit_original(token, f"✅ RH {report_type.capitalize()} report sent")
         return
 
     # Alpaca (default)
-    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both", "investors"}
     if report_type not in _VALID:
         await _edit_original(token, f"❌ Unknown report type: {report_type!r}")
         return

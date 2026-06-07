@@ -358,19 +358,63 @@ async def send_yearly_report() -> None:
 
 
 async def send_ytd_report() -> None:
-    """Fetch year-to-date portfolio history (Jan 1 to today) and post P&L to Discord."""
+    """Fetch year-to-date portfolio history (Jan 1 to today) and post P&L + chart to Discord."""
     now = datetime.now(ET)
     today = now.date()
     jan1 = today.replace(month=1, day=1)
     days = max((today - jan1).days, 1)
     date_str = f"YTD Jan 1–{now.strftime('%b')} {now.day}, {now.year}"
+    chart_title = f"YTD Performance: Jan 1–{now.strftime('%b %d, %Y')}"
     try:
         history = get_portfolio_history(period=f"{days}D", timeframe="1D")
         start_idx = _first_nonzero_idx(history.equity)
-        result = _compute_pnl(history, "ytd", start_idx)
-        spy_pct = compute_spy_pct("ytd")
+
+        equity = list(history.equity[start_idx:])
+        timestamps = list(history.timestamp[start_idx:])
+        last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+        if last_date < today:
+            try:
+                account = get_account()
+                equity.append(float(account.equity))
+                timestamps.append(int(now.timestamp()))
+            except Exception as exc:
+                log.warning("Could not fetch current equity for YTD report: %s", exc)
+
+        open_eq = equity[0] if equity and equity[0] else 1.0
+        close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
+        if close_eq is None:
+            raise ValueError("No valid close equity for YTD report")
+        dollar_pnl = close_eq - open_eq
+        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        result = PnLResult(period="ytd", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
+
+        start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
+        spy_df = fetch_spy_history(start_date, today + timedelta(days=1))
+
+        spy_pct: Optional[float] = None
+        if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns:
+            spy_open = float(spy_df["Close"].iloc[0])
+            spy_close = float(spy_df["Close"].iloc[-1])
+            if spy_open:
+                spy_pct = (spy_close - spy_open) / spy_open * 100
+
         msg = _format_message(result, "YTD P&L", date_str, spy_pct=spy_pct)
-        await notify(msg)
+
+        chart_bytes = None
+        try:
+            if spy_df is not None:
+                loop = asyncio.get_running_loop()
+                chart_bytes = await loop.run_in_executor(
+                    None, generate_equity_chart,
+                    equity, timestamps, spy_df, chart_title
+                )
+        except Exception as exc:
+            log.warning("YTD chart generation failed: %s", exc)
+
+        if chart_bytes:
+            await notify_with_chart(msg, chart_bytes)
+        else:
+            await notify(msg)
         log.info("YTD P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:
         log.error("YTD P&L report failed: %s", exc)

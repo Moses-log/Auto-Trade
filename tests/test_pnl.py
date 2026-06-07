@@ -408,9 +408,12 @@ async def test_send_yearly_report_success(mock_chart_notify, mock_notify, mock_g
 
 @pytest.mark.asyncio
 @patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)
-async def test_send_ytd_report_success(mock_notify, mock_get_history, mock_spy):
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_ytd_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10800.0])
     from app.pnl import send_ytd_report
     await send_ytd_report()
