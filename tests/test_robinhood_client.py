@@ -136,10 +136,11 @@ async def test_execute_buy_places_market_order():
                return_value={"id": "rh-order-1"}) as mock_buy:
         mock_settings.rh_enabled = True
         mock_settings.rh_leverage_factor = 0.3
+        mock_settings.rh_account_number = None
         result = await client.execute(TradingAction.BUY, "SPY")
 
     # qty = round(10000 * 0.3 / 500, 6) = 6.0
-    mock_buy.assert_called_once_with("SPY", 6.0)
+    mock_buy.assert_called_once_with("SPY", 6.0, account_number=None)
     assert result["status"] == "ok"
     assert result["side"] == "buy"
     assert result["qty"] == 6.0
@@ -153,7 +154,11 @@ async def test_execute_close_long_sells_full_position():
     client = RobinhoodClient()
     client.available = True
 
-    mock_position = {"instrument": "https://rh.com/instruments/123/", "quantity": "5.0000"}
+    mock_position = {
+        "instrument": "https://rh.com/instruments/123/",
+        "quantity": "5.0000",
+        "average_buy_price": "490.00",
+    }
     mock_instrument = {"symbol": "SPY"}
 
     with patch("app.trading.robinhood_client.settings") as mock_settings, \
@@ -161,14 +166,19 @@ async def test_execute_close_long_sells_full_position():
                return_value=[mock_position]), \
          patch("robin_stocks.robinhood.get_instrument_by_url",
                return_value=mock_instrument), \
+         patch("robin_stocks.robinhood.get_latest_price",
+               return_value=["500.00"]), \
          patch("robin_stocks.robinhood.order_sell_fractional_by_quantity",
                return_value={"id": "rh-close-1"}) as mock_sell:
         mock_settings.rh_enabled = True
+        mock_settings.rh_account_number = None
         result = await client.execute(TradingAction.CLOSE_LONG, "SPY")
 
-    mock_sell.assert_called_once_with("SPY", 5.0)
+    mock_sell.assert_called_once_with("SPY", 5.0, account_number=None)
     assert result["status"] == "ok"
     assert result["side"] == "sell"
+    assert result["avg_buy_price"] == 490.0
+    assert result["qty"] == 5.0
 
 
 @pytest.mark.asyncio

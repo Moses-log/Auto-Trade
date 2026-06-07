@@ -11,3 +11,4 @@ dist/
 .worktrees/
 idempotency.json
 trade_record.json
+rh_trade_record.json

@@ -122,22 +122,37 @@ class RobinhoodClient:
         from app.models import TradingAction
 
         if action in (TradingAction.BUY, TradingAction.ADD_LEVERAGE):
-            qty = self._calculate_buy_qty(ticker)
+            qty, price_est = self._calculate_buy_qty(ticker)
             order = self._place_market_buy(ticker, qty)
-            return {"status": "ok", "side": "buy", "qty": qty, "order_id": order.get("id")}
+            fill_price = float(order.get("average_price") or 0) or price_est
+            return {"status": "ok", "side": "buy", "qty": qty, "fill_price": fill_price, "position_qty": qty, "order_id": order.get("id")}
 
         elif action == TradingAction.REVERSE_TO_LONG:
             self._close_position(ticker)  # close short if any (no-op on standard accounts)
-            qty = self._calculate_buy_qty(ticker)
+            qty, price_est = self._calculate_buy_qty(ticker)
             order = self._place_market_buy(ticker, qty)
-            return {"status": "ok", "side": "buy", "qty": qty, "order_id": order.get("id")}
+            fill_price = float(order.get("average_price") or 0) or price_est
+            return {"status": "ok", "side": "buy", "qty": qty, "fill_price": fill_price, "position_qty": qty, "order_id": order.get("id")}
 
         elif action in (TradingAction.SELL, TradingAction.CLOSE_LONG,
                         TradingAction.REMOVE_LEVERAGE, TradingAction.STOP_LOSS):
-            order = self._close_position(ticker)
-            if order is None:
+            pos = self._get_position(ticker)
+            if pos is None:
                 return {"status": "ok", "note": "no position to close"}
-            return {"status": "ok", "side": "sell", "order_id": order.get("id")}
+            qty = float(pos.get("quantity", 0))
+            if qty <= 0:
+                return {"status": "ok", "note": "no position to close"}
+            avg_buy_price_raw = pos.get("average_buy_price")
+            avg_buy_price = float(avg_buy_price_raw) if avg_buy_price_raw else None
+            price_est = self._get_latest_price(ticker)
+            order = self._place_market_sell(ticker, qty)
+            fill_price = float(order.get("average_price") or 0) or price_est
+            return {
+                "status": "ok", "side": "sell",
+                "qty": qty, "fill_price": fill_price,
+                "avg_buy_price": avg_buy_price, "position_qty": 0.0,
+                "order_id": order.get("id"),
+            }
 
         elif action in (TradingAction.CLOSE_SHORT, TradingAction.REVERSE_TO_SHORT):
             # Shorting not supported on standard Robinhood accounts.
@@ -156,7 +171,8 @@ class RobinhoodClient:
 
     # ── Private helpers ─────────────────────────────────────────────────────────
 
-    def _calculate_buy_qty(self, ticker: str) -> float:
+    def _calculate_buy_qty(self, ticker: str) -> tuple[float, float]:
+        """Returns (qty, price_used) so callers can use price as fill_price estimate."""
         buying_power = self._get_buying_power()
         price        = self._get_latest_price(ticker)
         qty          = round((buying_power * settings.rh_leverage_factor) / price, 6)
@@ -165,7 +181,7 @@ class RobinhoodClient:
                 f"Robinhood buy qty is 0 — buying_power={buying_power}, "
                 f"price={price}, rh_leverage_factor={settings.rh_leverage_factor}"
             )
-        return qty
+        return qty, price
 
     def _account_number(self) -> Optional[str]:
         return settings.rh_account_number or None

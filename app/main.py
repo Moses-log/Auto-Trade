@@ -34,7 +34,8 @@ from app.idempotency import is_duplicate, mark_processed
 from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
-from app.notifications import notify, notify_robinhood, notify_rh_session, close_http_client
+from app.notifications import notify, close_http_client
+from app.rh_trade_notifier import notify_rh_trade
 from app.pnl import (
     send_daily_report,
     send_weekly_report,
@@ -321,24 +322,12 @@ async def webhook(request: Request):
             avg_entry_price=avg_entry_price,
         )
 
-        rh = result.get("robinhood", {})
-        action_str = payload.action.upper()
-        if rh.get("status") == "ok":
-            qty_info = f" — {rh['qty']} shares" if rh.get("qty") else ""
-            await notify_robinhood(f"✅ {action_str} {payload.ticker}{qty_info}")
-        elif rh.get("status") == "failed":
-            reason = rh.get("reason", "unknown")
-            await notify_robinhood(
-                f"❌ Robinhood {action_str} {payload.ticker} FAILED: {reason}"
-            )
-            if reason == "session expired":
-                await notify_rh_session(
-                    "⚠️ Robinhood session expired — POST /robinhood-auth to re-authenticate"
-                )
-        elif rh.get("status") == "skipped" and rh.get("reason") == "session unavailable":
-            await notify_robinhood(
-                f"⚠️ Robinhood {action_str} {payload.ticker} skipped — session unavailable"
-            )
+        await notify_rh_trade(
+            ticker=payload.ticker,
+            action=payload.action.value.upper(),
+            rh_result=result.get("robinhood", {}),
+            alert_price=payload.price,
+        )
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,
