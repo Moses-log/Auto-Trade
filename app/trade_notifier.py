@@ -102,8 +102,13 @@ async def notify_trade(
         pending_order_id: Optional[str] = None
 
         orders = result.get("orders", [])
+        note = result.get("note")
+        if not orders and note:
+            await notify_trades(f"ℹ️ **{action.upper()} — {ticker}**\n{note}")
+            return
+
+        action_base = action.upper().split(" (")[0]
         if orders:
-            action_base = action.upper().split(" (")[0]
             target = orders[-1] if action_base in _REVERSE_ACTIONS and len(orders) > 1 else orders[0]
             order_id = target.get("alpaca_order_id")
             if order_id:
@@ -114,7 +119,7 @@ async def notify_trade(
                 elif order:
                     pending_order_id = order_id
 
-        if action.upper().split(" (")[0] == "ADD_LEVERAGE" and filled_price is not None:
+        if action_base == "ADD_LEVERAGE" and filled_price is not None:
             await save_leverage_entry(ticker, filled_price)
 
         if pending_order_id:

@@ -168,7 +168,10 @@ async def send_weekly_report() -> None:
     """Fetch weekly portfolio history and post P&L + chart to Discord."""
     now = datetime.now(ET)
     monday = now - timedelta(days=now.weekday())
-    date_str = f"Week of {monday.strftime('%b')} {monday.day}\u2013{now.day}, {now.year}"
+    if monday.month == now.month:
+        date_str = f"Week of {monday.strftime('%b')} {monday.day}\u2013{now.day}, {now.year}"
+    else:
+        date_str = f"Week of {monday.strftime('%b')} {monday.day} \u2013 {now.strftime('%b')} {now.day}, {now.year}"
     chart_title = f"Weekly Performance: {monday.strftime('%b %d')}\u2013{now.strftime('%b %d, %Y')}"
     try:
         history = get_portfolio_history(period="1W", timeframe="1D")

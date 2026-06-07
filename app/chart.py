@@ -109,7 +109,7 @@ def generate_equity_chart(
     # Axis formatting
     ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda y, _: f"{y:+.1f}%"))
     ax.xaxis.set_major_formatter(mdates.DateFormatter("%b %d"))
-    ax.xaxis.set_major_locator(mdates.DayLocator())
+    ax.xaxis.set_major_locator(mdates.AutoDateLocator(minticks=4, maxticks=10))
 
     # Tick colors and sizes
     ax.tick_params(axis="x", colors=_TEXT_COLOR, rotation=30, labelsize=10)

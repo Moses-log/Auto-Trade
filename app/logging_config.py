@@ -14,8 +14,6 @@ from app.config import settings
 class _JSONFormatter(logging.Formatter):
     """Minimal structured-log formatter (no external lib required)."""
 
-    import json as _json
-
     def format(self, record: logging.LogRecord) -> str:
         import json, traceback
         data = {
