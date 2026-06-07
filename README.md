@@ -1,6 +1,6 @@
-# Auto-Trade — TradingView → Alpaca
+# Auto-Trade — TradingView → Alpaca + Robinhood
 
-A production-ready Python / FastAPI service that receives TradingView strategy alerts, executes trades through Alpaca, tracks a shared investor portfolio, and posts reports to Discord.
+A production-ready Python / FastAPI service that receives TradingView strategy alerts, executes trades simultaneously on **Alpaca and Robinhood**, tracks a shared investor portfolio, and posts reports to Discord.
 
 Deployed on [Render](https://render.com).
 
@@ -13,26 +13,31 @@ TradingView alert
       │
       ▼
 Render (FastAPI)
-      ├── POST /webhook      → validate → deduplicate → execute on Alpaca
-      │                                               → if filled:  trade alert to Discord
-      │                                               → if queued:  ⏳ queued alert to Discord
-      │                                                             save to persistent disk
-      ├── POST /interactions → Discord slash commands (/deposit, /withdraw, /report)
-      ├── POST /deposit      → record investor deposit → save to persistent disk
-      ├── POST /run-report   → manually fire P&L report
-      └── GET  /health       → uptime check
+      ├── POST /webhook              → validate → deduplicate → execute on Alpaca + Robinhood (parallel)
+      │                                         → Alpaca filled:   trade alert to Discord (main channel)
+      │                                         → Alpaca queued:   ⏳ queued alert to Discord
+      │                                         → Robinhood ok:    trade alert to Discord (RH channel)
+      │                                         → Robinhood error: error alert to Discord (RH channel)
+      ├── POST /interactions         → Discord slash commands (/deposit, /withdraw, /report)
+      ├── POST /deposit              → record investor deposit → save to persistent disk
+      ├── POST /run-report           → manually fire P&L report
+      ├── POST /robinhood-auth       → re-authenticate Robinhood session via SMS code
+      ├── POST /robinhood-upload-pickle → upload locally-generated session pickle
+      └── GET  /health               → uptime check
 
 APScheduler (inside Render)
       ├── 8:31 AM CT Mon–Fri  → Resolve queued orders → full trade alert to Discord
       ├── 3:00 PM CT Mon–Thu  → Daily P&L + Investor breakdown + period check (parallel)
-      └── 3:00 PM CT Friday   → Daily P&L + Weekly P&L + chart + Investor breakdown
-                                + Monthly/Yearly P&L + chart (last trading day) (all parallel)
+      ├── 3:00 PM CT Friday   → Daily P&L + Weekly P&L + chart + Investor breakdown
+      │                         + Monthly/Yearly P&L + chart (last trading day) (all parallel)
+      └── 3:00 AM ET every 3 days → Robinhood session keep-alive (silent token refresh)
 
 Persistent Disk (/data)
       ├── investors.json       → deposit records, survives restarts and redeploys
       ├── pending_orders.json  → queued orders awaiting next market open
       ├── trade_record.json    → win/loss record
-      └── idempotency.json     → seen alert IDs (TTL-based deduplication)
+      ├── idempotency.json     → seen alert IDs (TTL-based deduplication)
+      └── robinhood.pickle     → Robinhood session token (auto-refreshed every 3 days)
 ```
 
 ---
@@ -41,16 +46,16 @@ Persistent Disk (/data)
 
 ```
 app/
-├── main.py              # FastAPI app — /webhook, /interactions, /deposit, /run-report, /health
+├── main.py              # FastAPI app — all endpoints
 ├── config.py            # All settings loaded from environment variables
 ├── models.py            # Pydantic models for TradingView alerts and deposits
 ├── security.py          # Shared-secret validation (constant-time)
 ├── idempotency.py       # Duplicate-alert suppression with disk-backed TTL store
-├── logging_config.py    # Structured JSON logging
-├── notifications.py     # Discord notifications (main / investors / trades channels)
+├���─ logging_config.py    # Structured JSON logging
+├── notifications.py     # Discord notifications (main / investors / trades / robinhood channels)
 ├── pnl.py               # P&L calculation and reporting (daily/weekly/monthly/yearly/YTD/all-time)
 ├── chart.py             # Portfolio vs SPY % return equity chart (PNG via matplotlib)
-├── scheduler.py         # APScheduler job registration
+├── scheduler.py         # APScheduler job registration (P&L reports + Robinhood keep-alive)
 ├── investors.py         # Investor data model, equity math, Discord formatting
 ├── trade_notifier.py    # Trade alert Discord message (fill price, P&L, queued order handling)
 ├── pending_orders.py    # Persist queued orders to disk, reschedule on startup
@@ -58,11 +63,15 @@ app/
 ├── discord_commands.py  # /deposit, /withdraw, /report slash command handlers
 ├── trade_record.py      # Win/loss record — disk-backed, updated after every sell
 └── trading/
-    ├── alpaca_client.py # Alpaca API wrapper + retry logic
-    └── order_logic.py   # TradingView action → Alpaca order translation
+    ├── alpaca_client.py    # Alpaca API wrapper + retry logic
+    ├── order_logic.py      # TradingView action → Alpaca + Robinhood order execution
+    └── robinhood_client.py # Robinhood auth, session management, fractional order execution
 
 tests/
 ├── test_webhook.py
+├── test_config_rh.py
+├── test_notifications_rh.py
+├── test_robinhood_client.py
 ├── test_deposit.py
 ├── test_investors.py
 ├── test_pnl.py
@@ -74,6 +83,8 @@ tests/
 investors.json           # Seed file — copied to persistent disk on first startup
 trade_record.json        # Seed file — copied to persistent disk on first startup
 pending_orders.json      # Queued orders (written to persistent disk at runtime)
+upload_pickle.py         # One-time helper: upload locally-generated Robinhood session to Render
+test_trade.py            # Manual webhook test script
 ```
 
 ---
@@ -96,6 +107,16 @@ Copy `.env.example` to `.env` and fill in values. All are set in the Render dash
 |---|---|---|
 | `ALPACA_BASE_URL` | `https://paper-api.alpaca.markets/v2` | Switch to `https://api.alpaca.markets` for live trading |
 | `ALLOW_FRACTIONAL_SHARES` | `false` | Enable fractional share orders |
+
+### Optional — Robinhood
+
+| Variable | Default | Description |
+|---|---|---|
+| `RH_USERNAME` | — | Robinhood account email |
+| `RH_PASSWORD` | — | Robinhood account password |
+| `RH_LEVERAGE_FACTOR` | `0.3` | Fraction of buying power to use per trade (e.g. `0.9` = 90%) |
+| `RH_ENABLED` | `true` | Kill switch — set to `false` to disable Robinhood without removing config |
+| `RH_DISCORD_WEBHOOK_URL` | — | Robinhood-only Discord channel for trade alerts and session status |
 
 ### Optional — Discord
 
@@ -185,6 +206,30 @@ Receives Discord slash command interactions. Verifies Ed25519 signature, checks 
 
 All responses are ephemeral (only visible to you). Requires `DISCORD_APP_PUBLIC_KEY`, `DISCORD_APP_ID`, and `DISCORD_YOUR_USER_ID` env vars.
 
+### `POST /robinhood-auth`
+Re-authenticates the Robinhood session using an SMS 2FA code. Call this after the server sends a "session expired" Discord alert.
+
+**Payload:**
+```json
+{
+  "secret":   "YOUR_WEBHOOK_SECRET",
+  "sms_code": "123456"
+}
+```
+
+### `POST /robinhood-upload-pickle`
+Uploads a locally-generated Robinhood session pickle to Render's persistent disk. Use this for first-time setup or after a hard session expiry.
+
+**Payload:**
+```json
+{
+  "secret":     "YOUR_WEBHOOK_SECRET",
+  "pickle_b64": "<base64-encoded pickle file>"
+}
+```
+
+See [Robinhood Session Setup](#robinhood-session-setup) below for the full flow.
+
 ### `GET /health`
 Returns server uptime and paper/live mode status.
 
@@ -243,6 +288,17 @@ SPY: $537.42
 **Total Deposited: $5,300.00**
 **Overall P&L: +$228.24 (+4.31%)**
 ```
+
+### Robinhood channel (`RH_DISCORD_WEBHOOK_URL`)
+Robinhood-specific alerts — separate from Alpaca:
+```
+✅ BUY SPY — 0.11 shares
+❌ Robinhood SELL SPY FAILED: session expired
+⚠️ Robinhood session expired — run the two local commands to re-authenticate.
+⚠️ Robinhood session unavailable — POST /robinhood-auth with your SMS code to activate.
+Robinhood session restored via pickle upload ✅
+```
+Falls back to `DISCORD_WEBHOOK_URL` if `RH_DISCORD_WEBHOOK_URL` is not set.
 
 ### Trades channel (`DISCORD_TRADES_WEBHOOK_URL`)
 Fires after every trade. If an order fills immediately:
@@ -307,6 +363,30 @@ Every deposit has its own entry price so multiple deposits per investor are hand
 
 ---
 
+## Robinhood Session Setup
+
+Robinhood uses SMS-only 2FA. The session token is stored at `/data/robinhood.pickle` on Render's persistent disk and auto-refreshed every 3 days.
+
+### First-time setup (run locally)
+
+**1. Generate the pickle on your machine:**
+```powershell
+py -c "import robin_stocks.robinhood as r; r.login('YOUR_EMAIL', 'YOUR_PASSWORD', store_session=True); print('Done!')"
+```
+Enter the SMS code when prompted.
+
+**2. Upload to Render:**
+```powershell
+py upload_pickle.py
+```
+Enter your webhook secret when prompted. You'll see `{"status":"authenticated"}` and a Discord message confirming the session is live.
+
+### Session expiry
+
+The keep-alive job runs every 3 days at 3am ET and silently refreshes the token. If the session truly expires (password change, long inactivity), you'll receive a Discord alert in the RH channel. Re-run the two commands above to restore it.
+
+---
+
 ## Running Tests
 
 ```bash
@@ -331,6 +411,7 @@ No real Alpaca or Discord calls are made — all external clients are mocked.
    - Mount path: `/data`
    - Size: 1 GB
    - Add env vars: `INVESTORS_PATH=/data/investors.json`, `PENDING_ORDERS_PATH=/data/pending_orders.json`, `TRADE_RECORD_PATH=/data/trade_record.json`, and `IDEMPOTENCY_PATH=/data/idempotency.json`
+   - The Robinhood pickle (`/data/robinhood.pickle`) is written automatically by `upload_pickle.py` — no env var needed
 6. Deploy — Render provides a public HTTPS URL automatically
 
 ### Discord Slash Commands Setup (one-time)
