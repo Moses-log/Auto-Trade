@@ -207,3 +207,27 @@ def test_robinhood_auth_success(mock_rh_client):
     assert r.status_code == 200
     assert r.json()["status"] == "authenticated"
     mock_rh_client.login_with_sms.assert_called_once_with("123456")
+
+
+# ── Robinhood parallel execution ──────────────────────────────────────────────
+
+@patch("app.trading.order_logic.rh_client")
+@patch("app.trading.alpaca_client.get_client")
+def test_webhook_result_includes_robinhood_key(mock_get_client, mock_rh_client):
+    from unittest.mock import AsyncMock
+    mock_client = MagicMock()
+    mock_client.submit_order.return_value = _mock_order(side="buy")
+    mock_get_client.return_value = mock_client
+
+    mock_rh_client.execute = AsyncMock(
+        return_value={"status": "ok", "side": "buy", "qty": 3}
+    )
+
+    payload = _load_sample("buy")
+    payload["order_id"] = "rh_parallel_test_001"
+    r = client.post("/webhook", json=payload)
+
+    assert r.status_code == 200
+    result = r.json()["result"]
+    assert "robinhood" in result
+    assert result["robinhood"]["status"] == "ok"

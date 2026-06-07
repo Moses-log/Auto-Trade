@@ -27,6 +27,7 @@ from alpaca.trading.models import Order
 
 from app.models import AlertPayload, TradingAction
 from app.trading import alpaca_client as ac
+from app.trading.robinhood_client import rh_client
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -124,6 +125,9 @@ async def execute_action(payload: AlertPayload) -> dict:
 
     else:
         raise ValueError(f"Unknown action: {action}")
+
+    rh_result = await rh_client.execute(action, ticker)
+    result["robinhood"] = rh_result
 
     return result
 

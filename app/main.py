@@ -211,6 +211,22 @@ async def webhook(request: Request):
             f"| qty={payload.contracts} | price≈{payload.price}"
         )
 
+        rh = result.get("robinhood", {})
+        if rh.get("status") == "ok":
+            qty_info = f" — {rh['qty']} shares" if rh.get("qty") else ""
+            await notify_robinhood(
+                f"✅ {payload.action.upper()} {payload.ticker}{qty_info}"
+            )
+        elif rh.get("status") == "failed":
+            reason = rh.get("reason", "unknown")
+            await notify_robinhood(
+                f"❌ Robinhood {payload.action.upper()} {payload.ticker} FAILED: {reason}"
+            )
+            if reason == "session expired":
+                await notify_robinhood(
+                    "⚠️ Robinhood session expired — POST /robinhood-auth to re-authenticate"
+                )
+
         return JSONResponse(
             status_code=status.HTTP_200_OK,
             content={"status": "ok", "result": result},
