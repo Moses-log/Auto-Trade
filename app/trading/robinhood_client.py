@@ -61,14 +61,15 @@ class RobinhoodClient:
 
     async def keep_alive(self) -> None:
         """Refresh the session token. Runs on a schedule to prevent expiry."""
-        from app.notifications import notify_robinhood
+        from app.notifications import notify_rh_session
         if not settings.rh_enabled:
             return
         if self.login_from_pickle():
             log.info("Robinhood session refreshed via keep-alive")
+            await notify_rh_session("🔄 Robinhood session auto-refreshed ✅")
         else:
             log.warning("Robinhood keep-alive failed — session expired")
-            await notify_robinhood(
+            await notify_rh_session(
                 "⚠️ Robinhood session expired — run the two local commands to re-authenticate."
             )
 

@@ -34,7 +34,7 @@ from app.idempotency import is_duplicate, mark_processed
 from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
-from app.notifications import notify, notify_robinhood, close_http_client
+from app.notifications import notify, notify_robinhood, notify_rh_session, close_http_client
 from app.pnl import (
     send_daily_report,
     send_weekly_report,
@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
     )
     if settings.rh_enabled:
         if not rh_client.login_from_pickle():
-            await notify_robinhood(
+            await notify_rh_session(
                 "⚠️ Robinhood session unavailable — POST /robinhood-auth "
                 "with your SMS code to activate."
             )
@@ -182,7 +182,7 @@ async def robinhood_auth(body: _RobinhoodAuthRequest):
         )
     try:
         rh_client.login_with_sms(body.sms_code)
-        await notify_robinhood("Robinhood session restored ✅")
+        await notify_rh_session("Robinhood session restored ✅")
         log.info("Robinhood session re-authenticated successfully")
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -214,7 +214,7 @@ async def robinhood_upload_pickle(body: _PickleUploadRequest):
         with open(_PICKLE_PATH, "wb") as f:
             f.write(data)
         if rh_client.login_from_pickle():
-            await notify_robinhood("Robinhood session restored via pickle upload ✅")
+            await notify_rh_session("Robinhood session restored via pickle upload ✅")
             log.info("Robinhood session activated via pickle upload")
             return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "authenticated"})
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": "Pickle uploaded but session invalid — regenerate it."})
@@ -335,7 +335,7 @@ async def webhook(request: Request):
                 f"❌ Robinhood {payload.action.upper()} {payload.ticker} FAILED: {reason}"
             )
             if reason == "session expired":
-                await notify_robinhood(
+                await notify_rh_session(
                     "⚠️ Robinhood session expired — POST /robinhood-auth to re-authenticate"
                 )
 

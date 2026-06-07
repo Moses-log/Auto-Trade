@@ -104,6 +104,20 @@ async def _telegram(message: str) -> None:
         log.warning("Telegram notification failed: %s", exc)
 
 
+async def notify_rh_session(message: str) -> None:
+    """Send a Robinhood session status notification (refresh, expiry warnings).
+    Uses RH_SESSION_WEBHOOK_URL, falls back to RH_DISCORD_WEBHOOK_URL, then main channel.
+    """
+    url = settings.rh_session_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url
+    if not url:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(url, json={"content": message[:2000]})
+    except Exception as exc:
+        log.warning("Robinhood session notification failed: %s", exc)
+
+
 async def notify_robinhood(message: str) -> None:
     """Send a notification to the Robinhood Discord channel.
     Falls back to the main Discord channel if RH_DISCORD_WEBHOOK_URL is not set.

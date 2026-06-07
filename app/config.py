@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     rh_leverage_factor: float = 0.3
     rh_enabled: bool = True
     rh_discord_webhook_url: Optional[str] = None
+    rh_session_webhook_url: Optional[str] = None
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
