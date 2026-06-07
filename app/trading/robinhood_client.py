@@ -137,10 +137,10 @@ class RobinhoodClient:
 
     # ── Private helpers ─────────────────────────────────────────────────────────
 
-    def _calculate_buy_qty(self, ticker: str) -> int:
+    def _calculate_buy_qty(self, ticker: str) -> float:
         buying_power = self._get_buying_power()
         price        = self._get_latest_price(ticker)
-        qty          = math.floor((buying_power * settings.rh_leverage_factor) / price)
+        qty          = round((buying_power * settings.rh_leverage_factor) / price, 6)
         if qty <= 0:
             raise ValueError(
                 f"Robinhood buy qty is 0 — buying_power={buying_power}, "
@@ -150,7 +150,7 @@ class RobinhoodClient:
 
     def _get_buying_power(self) -> float:
         profile = r.load_account_profile()
-        bp = profile.get("cash") or profile.get("portfolio_cash") or "0"
+        bp = profile.get("buying_power") or profile.get("cash") or profile.get("portfolio_cash") or "0"
         return float(bp)
 
     def _get_latest_price(self, ticker: str) -> float:
@@ -159,8 +159,8 @@ class RobinhoodClient:
             raise ValueError(f"Could not get price for {ticker}")
         return float(prices[0])
 
-    def _place_market_buy(self, ticker: str, qty: int) -> dict:
-        result = r.order_buy_market(ticker, qty)
+    def _place_market_buy(self, ticker: str, qty: float) -> dict:
+        result = r.order_buy_fractional_by_quantity(ticker, qty)
         log.info("Robinhood BUY placed", extra={"ticker": ticker, "qty": qty})
         return result or {}
 
@@ -181,7 +181,7 @@ class RobinhoodClient:
         pos = self._get_position(ticker)
         if pos is None:
             return None
-        qty = math.floor(float(pos.get("quantity", 0)))
+        qty = float(pos.get("quantity", 0))
         if qty <= 0:
             return None
         return self._place_market_sell(ticker, qty)
