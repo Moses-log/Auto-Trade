@@ -206,11 +206,12 @@ async def robinhood_upload_pickle(body: _PickleUploadRequest):
         return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Unauthorized."})
     try:
         data = base64.b64decode(body.pickle_b64)
+        from app.trading.robinhood_client import _PICKLE_BACKUP, _PICKLE_PATH, _TOKENS_DIR
         os.makedirs("/data", exist_ok=True)
-        os.makedirs(rh_client._TOKENS_DIR, exist_ok=True)
-        with open("/data/robinhood.pickle", "wb") as f:
+        os.makedirs(_TOKENS_DIR, exist_ok=True)
+        with open(_PICKLE_BACKUP, "wb") as f:
             f.write(data)
-        with open(rh_client._PICKLE_PATH, "wb") as f:
+        with open(_PICKLE_PATH, "wb") as f:
             f.write(data)
         if rh_client.login_from_pickle():
             await notify_robinhood("Robinhood session restored via pickle upload ✅")
