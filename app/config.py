@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # Leave blank to use the default (primary) account.
     rh_account_number: Optional[str] = None
 
+    # ── Tax report channels ───────────────────────────────────────────────────
+    alpaca_tax_webhook_url: Optional[str] = None
+    rh_tax_webhook_url: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 

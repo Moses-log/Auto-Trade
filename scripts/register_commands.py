@@ -113,10 +113,30 @@ COMMANDS: list = [
         "description": "Realized gain/loss summary for IRS tax reporting",
         "options": [
             {
-                "name": "year",
-                "description": "Tax year (defaults to current year)",
-                "type": 4,
-                "required": False,
+                "type": 1,
+                "name": "alpaca",
+                "description": "Alpaca fund realized gains/losses with investor breakdown",
+                "options": [
+                    {
+                        "name": "year",
+                        "description": "Tax year (defaults to current year)",
+                        "type": 4,
+                        "required": False,
+                    },
+                ],
+            },
+            {
+                "type": 1,
+                "name": "robinhood",
+                "description": "Robinhood algorithmic trading gains/losses",
+                "options": [
+                    {
+                        "name": "year",
+                        "description": "Tax year (defaults to current year)",
+                        "type": 4,
+                        "required": False,
+                    },
+                ],
             },
         ],
     },

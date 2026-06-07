@@ -157,6 +157,28 @@ async def notify_rh_pnl(message: str) -> None:
         log.warning("Robinhood P&L notification failed: %s", exc)
 
 
+async def notify_alpaca_tax(message: str) -> None:
+    """Send an Alpaca tax summary to ALPACA_TAX_WEBHOOK_URL, falls back to main channel."""
+    url = settings.alpaca_tax_webhook_url or settings.discord_webhook_url
+    if not url:
+        return
+    try:
+        await _client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("Alpaca tax notification failed: %s", exc)
+
+
+async def notify_rh_tax(message: str) -> None:
+    """Send a Robinhood tax summary to RH_TAX_WEBHOOK_URL, falls back to RH channel."""
+    url = settings.rh_tax_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url
+    if not url:
+        return
+    try:
+        await _client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("RH tax notification failed: %s", exc)
+
+
 async def notify_rh_pnl_with_chart(message: str, chart_bytes: bytes) -> None:
     """Send an RH P&L report with a PNG chart to RH_PNL_WEBHOOK_URL."""
     url = settings.rh_pnl_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url

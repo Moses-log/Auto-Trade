@@ -17,7 +17,26 @@ from collections import defaultdict, deque
 from datetime import datetime, timezone
 from typing import Optional
 
+import pytz
+
 log = logging.getLogger(__name__)
+
+_CT = pytz.timezone("America/Chicago")
+
+
+def _d(amount: float) -> str:
+    sign = "+" if amount >= 0 else "-"
+    return f"{sign}${abs(amount):,.2f}"
+
+
+def _net_emoji(amount: float) -> str:
+    return "🟢" if amount >= 0 else "🔴"
+
+
+def _tax_timestamp() -> str:
+    now = datetime.now(_CT)
+    hour = int(now.strftime("%I"))
+    return f"🕐 {hour}:{now.strftime('%M %p %Z')} — {now.strftime('%A, %B')} {now.day}, {now.year}"
 
 
 # ── Robinhood ─────────────────────────────────────────────────────────────────
@@ -162,3 +181,84 @@ async def compute_alpaca_tax_summary(year: int) -> dict:
         "unknown_basis_count":    len(unknown),
         "sell_event_count":       len(events),
     }
+
+
+# ── Standalone report senders ─────────────────────────────────────────────────
+
+async def send_alpaca_tax_report(year: int) -> None:
+    """Build and post the Alpaca tax summary (with investor breakdown) to the Alpaca tax channel."""
+    from app.notifications import notify_alpaca_tax
+    from app.investors import load_investors, get_total_deposited
+
+    alpaca = await compute_alpaca_tax_summary(year)
+    lines = [f"📋 **Alpaca Tax Summary — {year}**"]
+
+    if "error" in alpaca:
+        lines.append(f"> ❌ Could not fetch: {alpaca['error']}")
+    else:
+        st_net = alpaca["short_term_net"]
+        lt_net = alpaca["long_term_net"]
+        alpaca_net = st_net + lt_net
+
+        lines.append("**Short-term** *(held < 1 year)*")
+        lines.append(f"> Gains:   {_d(alpaca['short_term_gains'])}")
+        lines.append(f"> Losses:  {_d(alpaca['short_term_losses'])}")
+        lines.append(f"> **Net:   {_d(st_net)} {_net_emoji(st_net)}**")
+
+        lines.append("**Long-term** *(held ≥ 1 year)*")
+        if alpaca["long_term_gains"] == 0 and alpaca["long_term_losses"] == 0:
+            lines.append("> No long-term trades")
+        else:
+            lines.append(f"> Gains:   {_d(alpaca['long_term_gains'])}")
+            lines.append(f"> Losses:  {_d(alpaca['long_term_losses'])}")
+            lines.append(f"> **Net:   {_d(lt_net)} {_net_emoji(lt_net)}**")
+
+        lines.append(f"*{alpaca['sell_event_count']} taxable sells*")
+        if alpaca["unknown_basis_count"] > 0:
+            lines.append(
+                f"> ⚠️ {alpaca['unknown_basis_count']} sell(s) missing cost basis "
+                f"— position may have been opened before recorded history"
+            )
+
+        try:
+            eligible = [(inv, get_total_deposited(inv)) for inv in load_investors()]
+            eligible = [(inv, dep) for inv, dep in eligible if dep > 0]
+            total_capital = sum(dep for _, dep in eligible)
+            if eligible and total_capital > 0:
+                lines += ["", "**👥 Investor Breakdown** *(estimated by capital share)*"]
+                for inv, inv_dep in eligible:
+                    share = inv_dep / total_capital
+                    inv_st_net = st_net * share
+                    inv_lt_net = lt_net * share
+                    lines.append(f"**{inv.name}** *({share * 100:.1f}%)*")
+                    lines.append(f"> Short-term Net: **{_d(inv_st_net)}** {_net_emoji(inv_st_net)}")
+                    if alpaca["long_term_gains"] != 0 or alpaca["long_term_losses"] != 0:
+                        lines.append(f"> Long-term Net:  **{_d(inv_lt_net)}** {_net_emoji(inv_lt_net)}")
+        except Exception as exc:
+            log.warning("Could not compute investor tax breakdown: %s", exc)
+
+        lines += ["", f"**💰 Alpaca Net Realized: {_d(alpaca_net)} {_net_emoji(alpaca_net)}**"]
+
+    lines += ["⚠️ Estimates only — consult a tax professional.", "", _tax_timestamp()]
+    await notify_alpaca_tax("\n".join(lines))
+
+
+async def send_rh_tax_report(year: int) -> None:
+    """Build and post the Robinhood tax summary to the RH tax channel."""
+    from app.notifications import notify_rh_tax
+
+    rh = compute_rh_tax_summary(year)
+    lines = [f"📋 **Robinhood Tax Summary — {year}**", "*(all short-term — algorithmic)*"]
+
+    if rh["total_trades"] == 0:
+        lines.append(f"> No recorded trades for {year}")
+    else:
+        rh_net = rh["short_term_net"]
+        lines.append(f"> Gains:   {_d(rh['short_term_gains'])} *({rh['win_count']} wins)*")
+        lines.append(f"> Losses:  {_d(rh['short_term_losses'])} *({rh['loss_count']} losses)*")
+        lines.append(f"> **Net:   {_d(rh_net)} {_net_emoji(rh_net)}**")
+        lines.append(f"*{rh['total_trades']} total trades*")
+        lines += ["", f"**💰 Robinhood Net Realized: {_d(rh_net)} {_net_emoji(rh_net)}**"]
+
+    lines += ["⚠️ Estimates only — consult a tax professional.", "", _tax_timestamp()]
+    await notify_rh_tax("\n".join(lines))

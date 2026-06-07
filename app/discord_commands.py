@@ -305,72 +305,18 @@ def _d(amount: float) -> str:
     return f"+${amount:,.2f}" if amount >= 0 else f"-${abs(amount):,.2f}"
 
 
-async def handle_tax(year: int, token: str) -> None:
-    from app.tax import compute_alpaca_tax_summary, compute_rh_tax_summary
+async def handle_tax_alpaca(year: int, token: str) -> None:
+    from app.tax import send_alpaca_tax_report
+    await _edit_original(token, f"⏳ Fetching Alpaca {year} trade history…")
+    await send_alpaca_tax_report(year)
+    await _edit_original(token, f"✅ Alpaca tax summary for {year} posted to channel.")
 
-    await _edit_original(token, f"⏳ Fetching {year} trade history…")
 
-    alpaca = await compute_alpaca_tax_summary(year)
-    rh = compute_rh_tax_summary(year)
-
-    def _net_emoji(amount: float) -> str:
-        return "🟢" if amount >= 0 else "🔴"
-
-    lines = [f"📋 **Tax Summary — {year}**"]
-
-    # ── Alpaca ───────────────────────────────────────────────────────────────
-    lines += ["", "**📊 Alpaca**"]
-    if "error" in alpaca:
-        lines.append(f"> ❌ Could not fetch: {alpaca['error']}")
-        alpaca_net = 0.0
-    else:
-        st_net = alpaca["short_term_net"]
-        lt_net = alpaca["long_term_net"]
-        alpaca_net = st_net + lt_net
-
-        lines.append("**Short-term** *(held < 1 year)*")
-        lines.append(f"> Gains:   {_d(alpaca['short_term_gains'])}")
-        lines.append(f"> Losses:  {_d(alpaca['short_term_losses'])}")
-        lines.append(f"> **Net:   {_d(st_net)} {_net_emoji(st_net)}**")
-
-        lines.append("**Long-term** *(held ≥ 1 year)*")
-        if alpaca["long_term_gains"] == 0 and alpaca["long_term_losses"] == 0:
-            lines.append("> No long-term trades")
-        else:
-            lines.append(f"> Gains:   {_d(alpaca['long_term_gains'])}")
-            lines.append(f"> Losses:  {_d(alpaca['long_term_losses'])}")
-            lines.append(f"> **Net:   {_d(lt_net)} {_net_emoji(lt_net)}**")
-
-        lines.append(f"*{alpaca['sell_event_count']} taxable sells*")
-        if alpaca["unknown_basis_count"] > 0:
-            lines.append(
-                f"> ⚠️ {alpaca['unknown_basis_count']} sell(s) missing cost basis "
-                f"— position may have been opened before recorded history"
-            )
-
-    # ── Robinhood ─────────────────────────────────────────────────────────────
-    lines += ["", "**🤖 Robinhood** *(all short-term — algorithmic)*"]
-    if rh["total_trades"] == 0:
-        lines.append(f"> No recorded trades for {year}")
-        rh_net = 0.0
-    else:
-        rh_net = rh["short_term_net"]
-        lines.append(f"> Gains:   {_d(rh['short_term_gains'])} *({rh['win_count']} wins)*")
-        lines.append(f"> Losses:  {_d(rh['short_term_losses'])} *({rh['loss_count']} losses)*")
-        lines.append(f"> **Net:   {_d(rh_net)} {_net_emoji(rh_net)}**")
-        lines.append(f"*{rh['total_trades']} total trades*")
-
-    # ── Combined ──────────────────────────────────────────────────────────────
-    combined = alpaca_net + rh_net
-    lines += [
-        "",
-        f"**💰 Combined Net Realized: {_d(combined)} {_net_emoji(combined)}**",
-        "⚠️ Estimates only — consult a tax professional.",
-        "",
-        _ct_timestamp(),
-    ]
-
-    await _edit_original(token, "\n".join(lines))
+async def handle_tax_robinhood(year: int, token: str) -> None:
+    from app.tax import send_rh_tax_report
+    await _edit_original(token, f"⏳ Computing Robinhood {year} tax summary…")
+    await send_rh_tax_report(year)
+    await _edit_original(token, f"✅ Robinhood tax summary for {year} posted to channel.")
 
 
 async def dispatch_command(command: str, options: dict, token: str) -> None:
@@ -402,8 +348,12 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
             else:
                 await handle_close(ticker=ticker, broker=options.get("broker", "both"), token=token)
         elif command == "tax":
+            sub = options.get("_subcommand", "alpaca")
             year = int(options.get("year") or datetime.now().year)
-            await handle_tax(year=year, token=token)
+            if sub == "robinhood":
+                await handle_tax_robinhood(year=year, token=token)
+            else:
+                await handle_tax_alpaca(year=year, token=token)
         else:
             await _edit_original(token, f"❌ Unknown command: {command}")
     except Exception as exc:

@@ -71,6 +71,22 @@ async def _robinhood_keep_alive() -> None:
     await rh_client.keep_alive()
 
 
+async def _quarterly_tax_report() -> None:
+    """Post Alpaca + RH tax summaries to their respective channels.
+
+    Jan 1: reports the just-completed year (year - 1).
+    Apr 1, Jul 1, Oct 1: reports the current year YTD.
+    """
+    from app.tax import send_alpaca_tax_report, send_rh_tax_report
+    now = datetime.now(ET)
+    year = now.year - 1 if now.month == 1 else now.year
+    await asyncio.gather(
+        send_alpaca_tax_report(year),
+        send_rh_tax_report(year),
+        return_exceptions=True,
+    )
+
+
 def setup_jobs() -> None:
     """Register cron jobs — two parallel bundles replacing five staggered jobs."""
     scheduler.add_job(
@@ -91,7 +107,13 @@ def setup_jobs() -> None:
         id="robinhood_keep_alive",
         replace_existing=True,
     )
-    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), robinhood_keep_alive (every 72 h)")
+    scheduler.add_job(
+        _quarterly_tax_report,
+        CronTrigger(month="1,4,7,10", day=1, hour=8, minute=0, timezone=ET),
+        id="quarterly_tax_report",
+        replace_existing=True,
+    )
+    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), robinhood_keep_alive (every 72 h), quarterly_tax_report (Jan/Apr/Jul/Oct 1)")
 
 
 def reschedule_pending_orders() -> None:
