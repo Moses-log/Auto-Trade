@@ -103,7 +103,9 @@ async def notify_rh_trade(
             await notify_robinhood(f"❌ RH {action.upper()} {ticker} FAILED: {reason}")
             if reason == "session expired":
                 await notify_rh_session(
-                    "⚠️ Robinhood session expired — POST /robinhood-auth to re-authenticate"
+                    "⚠️ **ROBINHOOD SESSION EXPIRED**\n"
+                    "Trade failed — session expired mid-run.\n"
+                    "POST `/robinhood-auth` to re-authenticate."
                 )
             return
 

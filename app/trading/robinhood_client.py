@@ -70,11 +70,16 @@ class RobinhoodClient:
         ok = await loop.run_in_executor(None, self.login_from_pickle)
         if ok:
             log.info("Robinhood session refreshed via keep-alive")
-            await notify_rh_session("🔄 Robinhood session auto-refreshed ✅")
+            await notify_rh_session(
+                "🔄 **ROBINHOOD SESSION REFRESHED**\n"
+                "Auto keep-alive successful — session remains active."
+            )
         else:
             log.warning("Robinhood keep-alive failed — session expired")
             await notify_rh_session(
-                "⚠️ Robinhood session expired — run the two local commands to re-authenticate."
+                "⚠️ **ROBINHOOD SESSION EXPIRED**\n"
+                "Keep-alive failed — session is dead.\n"
+                "Run the two local commands to re-authenticate and re-upload the pickle."
             )
 
     def login_with_sms(self, sms_code: str) -> None:

@@ -112,12 +112,21 @@ async def _telegram(message: str) -> None:
 async def notify_rh_session(message: str) -> None:
     """Send a Robinhood session status notification (refresh, expiry warnings).
     Uses RH_SESSION_WEBHOOK_URL, falls back to RH_DISCORD_WEBHOOK_URL, then main channel.
+    Automatically appends a CT timestamp to every message.
     """
+    from datetime import datetime
+    import pytz
+    _CT = pytz.timezone("America/Chicago")
+    now = datetime.now(_CT)
+    hour = int(now.strftime("%I"))
+    ts = f"🕐 {hour}:{now.strftime('%M %p')} {now.strftime('%Z')} — {now.strftime('%A, %B')} {now.day}, {now.year}"
+    full_message = f"{message}\n{ts}"
+
     url = settings.rh_session_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url
     if not url:
         return
     try:
-        await _client.post(url, json={"content": message[:2000]}, timeout=5)
+        await _client.post(url, json={"content": full_message[:2000]}, timeout=5)
     except Exception as exc:
         log.warning("Robinhood session notification failed: %s", exc)
 

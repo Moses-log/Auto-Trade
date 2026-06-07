@@ -86,8 +86,9 @@ async def lifespan(app: FastAPI):
         ok = await loop.run_in_executor(None, rh_client.login_from_pickle)
         if not ok:
             await notify_rh_session(
-                "⚠️ Robinhood session unavailable — POST /robinhood-auth "
-                "with your SMS code to activate."
+                "🚨 **ROBINHOOD SESSION OFFLINE**\n"
+                "Session unavailable on startup — trading is paused.\n"
+                "POST `/robinhood-auth` with your SMS code to activate."
             )
     setup_jobs()
     reschedule_pending_orders()
@@ -186,7 +187,10 @@ async def robinhood_auth(body: _RobinhoodAuthRequest):
     try:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, rh_client.login_with_sms, body.sms_code)
-        await notify_rh_session("Robinhood session restored ✅")
+        await notify_rh_session(
+            "🔐 **ROBINHOOD SESSION RESTORED**\n"
+            "Authenticated via SMS — session is live and trading resumes."
+        )
         log.info("Robinhood session re-authenticated successfully")
         return JSONResponse(
             status_code=status.HTTP_200_OK,
@@ -219,7 +223,10 @@ async def robinhood_upload_pickle(body: _PickleUploadRequest):
             f.write(data)
         loop = asyncio.get_running_loop()
         if await loop.run_in_executor(None, rh_client.login_from_pickle):
-            await notify_rh_session("Robinhood session restored via pickle upload ✅")
+            await notify_rh_session(
+                "📦 **ROBINHOOD SESSION RESTORED**\n"
+                "Session activated via pickle upload — ready to trade."
+            )
             log.info("Robinhood session activated via pickle upload")
             return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "authenticated"})
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": "Pickle uploaded but session invalid — regenerate it."})
