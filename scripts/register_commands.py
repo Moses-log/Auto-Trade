@@ -109,6 +109,18 @@ COMMANDS: list = [
         ],
     },
     {
+        "name": "tax",
+        "description": "Realized gain/loss summary for IRS tax reporting",
+        "options": [
+            {
+                "name": "year",
+                "description": "Tax year (defaults to current year)",
+                "type": 4,
+                "required": False,
+            },
+        ],
+    },
+    {
         "name": "status",
         "description": "Show Alpaca + Robinhood account status and open positions",
         "options": [],

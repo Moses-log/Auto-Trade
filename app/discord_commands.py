@@ -300,6 +300,73 @@ async def handle_close(ticker: str, broker: str, token: str) -> None:
     await _edit_original(token, "\n".join(lines))
 
 
+def _d(amount: float) -> str:
+    """Format a dollar amount: +$1,234.56 or -$1,234.56."""
+    return f"+${amount:,.2f}" if amount >= 0 else f"-${abs(amount):,.2f}"
+
+
+async def handle_tax(year: int, token: str) -> None:
+    from app.tax import compute_alpaca_tax_summary, compute_rh_tax_summary
+
+    await _edit_original(token, f"⏳ Fetching {year} trade history…")
+
+    alpaca = await compute_alpaca_tax_summary(year)
+    rh = compute_rh_tax_summary(year)
+
+    lines = [f"📋 **Tax Summary — {year}**", ""]
+
+    # ── Alpaca ──────────────────────────────────────────────────────────────
+    lines.append("**📊 ALPACA**")
+    if "error" in alpaca:
+        lines.append(f"❌ Could not fetch order history: {alpaca['error']}")
+        alpaca_net = 0.0
+    else:
+        st_net = alpaca["short_term_net"]
+        lt_net = alpaca["long_term_net"]
+
+        lines.append("Short-term (held < 1 yr)")
+        lines.append(
+            f"  Gains: {_d(alpaca['short_term_gains'])}  ·  "
+            f"Losses: {_d(alpaca['short_term_losses'])}"
+        )
+        lines.append(f"  **Net: {_d(st_net)}**")
+        lines.append(f"Long-term (held ≥ 1 yr)  **Net: {_d(lt_net)}**")
+        lines.append(f"Sell events: {alpaca['sell_event_count']}")
+        if alpaca["unknown_basis_count"] > 0:
+            lines.append(
+                f"⚠️ {alpaca['unknown_basis_count']} sell(s) with unknown cost basis "
+                f"(position opened before fetch window)"
+            )
+        alpaca_net = st_net + lt_net
+
+    lines.append("")
+
+    # ── Robinhood ────────────────────────────────────────────────────────────
+    lines.append("**🤖 ROBINHOOD** *(all short-term — algorithmic)*")
+    if rh["total_trades"] == 0:
+        lines.append(f"  No recorded trades for {year}")
+        rh_net = 0.0
+    else:
+        lines.append(
+            f"  Gains: {_d(rh['short_term_gains'])} ({rh['win_count']} wins)  ·  "
+            f"Losses: {_d(rh['short_term_losses'])} ({rh['loss_count']} losses)"
+        )
+        lines.append(f"  **Net: {_d(rh['short_term_net'])}**")
+        lines.append(f"  Trades: {rh['total_trades']}")
+        rh_net = rh["short_term_net"]
+
+    lines.append("")
+
+    # ── Combined ─────────────────────────────────────────────────────────────
+    combined = alpaca_net + rh_net
+    lines.append(f"**Combined Net Realized: {_d(combined)}**")
+    lines.append("⚠️ Estimates only — verify with a tax professional.")
+    lines.append("")
+    lines.append(_ct_timestamp())
+
+    await _edit_original(token, "\n".join(lines))
+
+
 async def dispatch_command(command: str, options: dict, token: str) -> None:
     try:
         if command == "deposit":
@@ -328,6 +395,9 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
                 await _edit_original(token, "❌ Ticker is required")
             else:
                 await handle_close(ticker=ticker, broker=options.get("broker", "both"), token=token)
+        elif command == "tax":
+            year = int(options.get("year") or datetime.now().year)
+            await handle_tax(year=year, token=token)
         else:
             await _edit_original(token, f"❌ Unknown command: {command}")
     except Exception as exc:

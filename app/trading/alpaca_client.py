@@ -13,7 +13,7 @@ order_logic.py, not here.
 
 import logging
 import math
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from tenacity import (
@@ -30,7 +30,10 @@ from alpaca.trading.requests import (
     ClosePositionRequest,
     GetPortfolioHistoryRequest,
     GetCalendarRequest,
+    GetOrdersRequest,
 )
+from alpaca.trading.enums import QueryOrderStatus, OrderStatus as AlpacaOrderStatus
+from alpaca.common.enums import Sort
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.models import Position, Order
 from alpaca.common.exceptions import APIError
@@ -242,6 +245,20 @@ def close_position(ticker: str) -> Optional[Order]:
         extra={"order_id": str(order.id), "ticker": ticker},
     )
     return order
+
+
+@_retry
+def get_orders_filled_range(after: datetime, until: datetime) -> list:
+    """Return up to 500 filled orders between after and until, sorted ascending."""
+    req = GetOrdersRequest(
+        status=QueryOrderStatus.CLOSED,
+        after=after,
+        until=until,
+        limit=500,
+        direction=Sort.ASC,
+    )
+    orders = get_client().get_orders(req) or []
+    return [o for o in orders if o.status == AlpacaOrderStatus.FILLED]
 
 
 @_retry

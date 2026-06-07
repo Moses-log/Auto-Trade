@@ -21,7 +21,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import uvicorn
@@ -53,7 +53,7 @@ from app.security import verify_webhook_secret
 from app.discord_commands import dispatch_command
 from app.interactions import extract_user_id, parse_options, verify_discord_signature
 from app.leverage_state import load_leverage_entry
-from app.trading.alpaca_client import get_latest_price, get_position
+from app.trading.alpaca_client import get_account, get_latest_price, get_position
 from app.trading.order_logic import execute_action
 from app.trading.robinhood_client import rh_client
 from alpaca.common.exceptions import APIError
@@ -143,6 +143,35 @@ async def health():
         "status":  "ok",
         "uptime_s": round(time.time() - _start_time, 1),
         "paper":   "paper" in settings.alpaca_base_url,
+    }
+
+
+@app.get("/healthz", tags=["ops"])
+async def healthz():
+    """Deep health check — verifies Alpaca API connectivity and RH session.
+    Always returns 200; check 'status' field for component health.
+    """
+    loop = asyncio.get_running_loop()
+
+    alpaca_status = "up"
+    alpaca_error: Optional[str] = None
+    try:
+        await loop.run_in_executor(None, get_account)
+    except Exception as exc:
+        alpaca_status = "down"
+        alpaca_error = str(exc)[:200]
+
+    rh_status = "active" if rh_client.available else "offline"
+    overall = "healthy" if alpaca_status == "up" else "degraded"
+
+    return {
+        "status":       overall,
+        "alpaca":       alpaca_status,
+        "alpaca_error": alpaca_error,
+        "robinhood":    rh_status,
+        "rh_enabled":   settings.rh_enabled,
+        "uptime_s":     round(time.time() - _start_time, 1),
+        "timestamp":    datetime.now(timezone.utc).isoformat(),
     }
 
 
