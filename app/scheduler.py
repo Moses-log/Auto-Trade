@@ -44,6 +44,11 @@ async def _friday_jobs() -> None:
     )
 
 
+async def _robinhood_keep_alive() -> None:
+    from app.trading.robinhood_client import rh_client
+    await rh_client.keep_alive()
+
+
 def setup_jobs() -> None:
     """Register cron jobs — two parallel bundles replacing five staggered jobs."""
     scheduler.add_job(
@@ -58,7 +63,13 @@ def setup_jobs() -> None:
         id="friday_jobs",
         replace_existing=True,
     )
-    log.info("Scheduler jobs registered: weekday_jobs (Mon–Thu 16:00 ET), friday_jobs (Fri 16:00 ET)")
+    scheduler.add_job(
+        _robinhood_keep_alive,
+        CronTrigger(day="*/3", hour=3, minute=0, timezone=ET),
+        id="robinhood_keep_alive",
+        replace_existing=True,
+    )
+    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs, robinhood_keep_alive (every 3 days 03:00 ET)")
 
 
 def reschedule_pending_orders() -> None:

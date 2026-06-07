@@ -59,6 +59,19 @@ class RobinhoodClient:
             self.available = False
             return False
 
+    async def keep_alive(self) -> None:
+        """Refresh the session token. Runs on a schedule to prevent expiry."""
+        from app.notifications import notify_robinhood
+        if not settings.rh_enabled:
+            return
+        if self.login_from_pickle():
+            log.info("Robinhood session refreshed via keep-alive")
+        else:
+            log.warning("Robinhood keep-alive failed — session expired")
+            await notify_robinhood(
+                "⚠️ Robinhood session expired — run the two local commands to re-authenticate."
+            )
+
     def login_with_sms(self, sms_code: str) -> None:
         """Authenticate with SMS 2FA code. Saves new session to disk. Raises on failure."""
         r.login(
