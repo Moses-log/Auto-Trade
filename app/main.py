@@ -22,16 +22,17 @@ import uvicorn
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.config import settings
 from app.idempotency import is_duplicate, mark_processed
 from app.logging_config import setup_logging
 from app.models import AlertPayload
-from app.notifications import notify
+from app.notifications import notify, notify_robinhood
 from app.scheduler import scheduler, setup_jobs
 from app.security import verify_webhook_secret
 from app.trading.order_logic import execute_action
+from app.trading.robinhood_client import rh_client
 from alpaca.common.exceptions import APIError
 
 # ── Logging must be set up before the first log call ─────────────────────────
@@ -49,6 +50,12 @@ async def lifespan(app: FastAPI):
         "TradingView → Alpaca webhook server starting",
         extra={"paper_trading": "paper" in settings.alpaca_base_url},
     )
+    if settings.rh_enabled:
+        if not rh_client.login_from_pickle():
+            await notify_robinhood(
+                "⚠️ Robinhood session unavailable — POST /robinhood-auth "
+                "with your SMS code to activate."
+            )
     setup_jobs()
     scheduler.start()
     yield
@@ -76,6 +83,13 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
     )
 
 
+# ── Request models ────────────────────────────────────────────────────────────
+
+class _RobinhoodAuthRequest(BaseModel):
+    secret: str
+    sms_code: str
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
@@ -86,6 +100,32 @@ async def health():
         "uptime_s": round(time.time() - _start_time, 1),
         "paper":   "paper" in settings.alpaca_base_url,
     }
+
+
+@app.post("/robinhood-auth", tags=["trading"])
+async def robinhood_auth(body: _RobinhoodAuthRequest):
+    """Re-authenticate Robinhood session using an SMS 2FA code."""
+    try:
+        verify_webhook_secret(body.secret)
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Unauthorized."},
+        )
+    try:
+        rh_client.login_with_sms(body.sms_code)
+        await notify_robinhood("Robinhood session restored ✅")
+        log.info("Robinhood session re-authenticated successfully")
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"status": "authenticated"},
+        )
+    except Exception as exc:
+        log.warning("Robinhood re-auth failed: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "Invalid SMS code or credentials."},
+        )
 
 
 @app.post("/webhook", tags=["trading"])

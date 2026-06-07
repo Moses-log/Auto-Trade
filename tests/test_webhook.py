@@ -182,3 +182,28 @@ def test_missing_ticker_rejected():
     del payload["ticker"]
     r = client.post("/webhook", json=payload)
     assert r.status_code == 422
+
+
+# ── /robinhood-auth ───────────────────────────────────────────────────────────
+
+@patch("app.main.rh_client")
+def test_robinhood_auth_wrong_secret(mock_rh_client):
+    r = client.post("/robinhood-auth", json={"secret": "WRONG", "sms_code": "123456"})
+    assert r.status_code == 401
+
+
+@patch("app.main.rh_client")
+def test_robinhood_auth_bad_sms_code(mock_rh_client):
+    mock_rh_client.login_with_sms.side_effect = Exception("Invalid MFA code")
+    r = client.post("/robinhood-auth", json={"secret": "MY_SHARED_SECRET", "sms_code": "000000"})
+    assert r.status_code == 400
+    assert "Invalid" in r.json()["detail"]
+
+
+@patch("app.main.rh_client")
+def test_robinhood_auth_success(mock_rh_client):
+    mock_rh_client.login_with_sms.return_value = None
+    r = client.post("/robinhood-auth", json={"secret": "MY_SHARED_SECRET", "sms_code": "123456"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "authenticated"
+    mock_rh_client.login_with_sms.assert_called_once_with("123456")
