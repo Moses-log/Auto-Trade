@@ -15,6 +15,25 @@ CT = pytz.timezone("America/Chicago")
 _BUY_ACTIONS = {"BUY", "BASE_ENTRY", "ADD_LEVERAGE", "REVERSE_TO_LONG"}
 
 
+def _format_rh_queued_message(
+    ticker: str,
+    action: str,
+    qty: Optional[float],
+    price_est: Optional[float],
+) -> str:
+    now = datetime.now(CT)
+    hour = int(now.strftime("%I"))
+    tz_label = now.strftime("%Z")
+    time_str = f"{hour}:{now.strftime('%M %p')} {tz_label} — {now.strftime('%B')} {now.day}, {now.year}"
+    price_str = f"≈${price_est:,.2f}" if price_est else "unknown price"
+    qty_str = f"{qty:g}" if qty is not None else "?"
+    return "\n".join([
+        f"⏳ **RH {action.upper()} — {ticker}**",
+        f"Qty: {qty_str} shares queued for next market open @ {price_str}",
+        f"🕐 {time_str}",
+    ])
+
+
 def _format_rh_message(
     ticker: str,
     action: str,
@@ -96,6 +115,17 @@ async def notify_rh_trade(
             return
 
         if status != "ok":
+            return
+
+        # Order accepted but markets are closed — queued for next open
+        if rh_result.get("queued"):
+            message = _format_rh_queued_message(
+                ticker=ticker,
+                action=action,
+                qty=rh_result.get("qty"),
+                price_est=rh_result.get("price_est") or alert_price,
+            )
+            await notify_robinhood(message)
             return
 
         # "no position to close" — no P&L to show
