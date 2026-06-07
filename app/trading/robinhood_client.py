@@ -167,8 +167,11 @@ class RobinhoodClient:
             )
         return qty
 
+    def _account_number(self) -> Optional[str]:
+        return settings.rh_account_number or None
+
     def _get_buying_power(self) -> float:
-        profile = r.load_account_profile()
+        profile = r.load_account_profile(account_number=self._account_number())
         bp = profile.get("cash") or profile.get("portfolio_cash") or "0"
         return float(bp)
 
@@ -179,21 +182,25 @@ class RobinhoodClient:
         return float(prices[0])
 
     def _place_market_buy(self, ticker: str, qty: float) -> dict:
-        result = r.order_buy_fractional_by_quantity(ticker, qty) or {}
+        result = r.order_buy_fractional_by_quantity(
+            ticker, qty, account_number=self._account_number()
+        ) or {}
         if not result.get("id") and not result.get("cancel"):
             raise ValueError(f"Robinhood order rejected: {result}")
         log.info("Robinhood BUY placed", extra={"ticker": ticker, "qty": qty})
         return result
 
     def _place_market_sell(self, ticker: str, qty: float) -> dict:
-        result = r.order_sell_fractional_by_quantity(ticker, qty) or {}
+        result = r.order_sell_fractional_by_quantity(
+            ticker, qty, account_number=self._account_number()
+        ) or {}
         if not result.get("id") and not result.get("cancel"):
             raise ValueError(f"Robinhood sell order rejected: {result}")
         log.info("Robinhood SELL placed", extra={"ticker": ticker, "qty": qty})
         return result
 
     def _get_position(self, ticker: str) -> Optional[dict]:
-        positions = r.get_open_stock_positions()
+        positions = r.get_open_stock_positions(account_number=self._account_number())
         for pos in (positions or []):
             instrument = r.get_instrument_by_url(pos["instrument"])
             if instrument.get("symbol", "").upper() == ticker.upper():
