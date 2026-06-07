@@ -9,3 +9,5 @@ venv/
 dist/
 .DS_Store
 .worktrees/
+idempotency.json
+trade_record.json
