@@ -245,6 +245,12 @@ def close_position(ticker: str) -> Optional[Order]:
 
 
 @_retry
+def get_all_positions() -> list:
+    """Return all open positions as a list of Position objects."""
+    return get_client().get_all_positions()
+
+
+@_retry
 def get_order(order_id: str) -> Optional[Order]:
     """
     Fetch a full order object by ID.

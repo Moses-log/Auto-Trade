@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import pytz
 
-from app.notifications import notify_rh_pnl
+from app.notifications import notify_rh_pnl, notify_rh_pnl_with_chart
 from app.rh_trade_record import format_rh_record, get_all_trades, get_totals
 
 log = logging.getLogger(__name__)
@@ -105,6 +105,15 @@ async def send_rh_report(period: str) -> None:
         all_wins, all_losses = get_totals()
         label = _period_label(period)
         msg = _format_rh_report(label, period_trades, all_wins, all_losses)
+
+        if len(period_trades) >= 2:
+            from app.chart import generate_rh_pnl_chart
+            chart = generate_rh_pnl_chart(period_trades, f"RH P&L — {label}")
+            if chart:
+                await notify_rh_pnl_with_chart(msg, chart)
+                log.info("RH %s P&L report with chart sent (%d trades)", period, len(period_trades))
+                return
+
         await notify_rh_pnl(msg)
         log.info("RH %s P&L report sent (%d trades)", period, len(period_trades))
     except Exception as exc:

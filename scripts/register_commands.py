@@ -15,7 +15,7 @@ if not APP_ID or not BOT_TOKEN:
     print("ERROR: Set DISCORD_APP_ID and DISCORD_BOT_TOKEN env vars")
     sys.exit(1)
 
-COMMANDS = [
+COMMANDS: list = [
     {
         "name": "deposit",
         "description": "Record an investor cash deposit",
@@ -104,6 +104,51 @@ COMMANDS = [
                             {"name": "All Time", "value": "alltime"},
                         ],
                     }
+                ],
+            },
+        ],
+    },
+    {
+        "name": "status",
+        "description": "Show Alpaca + Robinhood account status and open positions",
+        "options": [],
+    },
+    {
+        "name": "positions",
+        "description": "List all open positions with real-time P&L",
+        "options": [
+            {
+                "name": "broker",
+                "description": "Which broker to query (default: both)",
+                "type": 3,
+                "required": False,
+                "choices": [
+                    {"name": "Both", "value": "both"},
+                    {"name": "Alpaca", "value": "alpaca"},
+                    {"name": "Robinhood", "value": "robinhood"},
+                ],
+            },
+        ],
+    },
+    {
+        "name": "close",
+        "description": "Close a position by ticker symbol",
+        "options": [
+            {
+                "name": "ticker",
+                "description": "Ticker symbol (e.g. SPY)",
+                "type": 3,
+                "required": True,
+            },
+            {
+                "name": "broker",
+                "description": "Which broker to close on (default: both)",
+                "type": 3,
+                "required": False,
+                "choices": [
+                    {"name": "Both", "value": "both"},
+                    {"name": "Alpaca", "value": "alpaca"},
+                    {"name": "Robinhood", "value": "robinhood"},
                 ],
             },
         ],

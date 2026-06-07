@@ -178,3 +178,111 @@ async def test_handle_report_robinhood():
     mock_rh.assert_called_once_with("daily")
     msg = mock_edit.call_args[0][1]
     assert "RH" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_status_alpaca_up_rh_down():
+    mock_account = MagicMock()
+    mock_account.equity = "52341.18"
+    mock_account.cash = "12500.00"
+
+    mock_pos = MagicMock()
+    mock_pos.symbol = "SPY"
+    mock_pos.qty = "10"
+    mock_pos.unrealized_pl = "345.20"
+    mock_pos.unrealized_plpc = "0.0264"
+
+    mock_rh = MagicMock()
+    mock_rh.available = False
+    mock_rh.get_all_positions_async = AsyncMock(return_value=[])
+    mock_rh.get_buying_power_async = AsyncMock(return_value=None)
+
+    with patch("app.discord_commands.get_account", return_value=mock_account), \
+         patch("app.discord_commands.get_all_positions", return_value=[mock_pos]), \
+         patch("app.discord_commands.rh_client", mock_rh), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_status
+        await handle_status("test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "ALPACA" in msg
+    assert "ROBINHOOD" in msg
+    assert "52,341" in msg
+    assert "Session Offline" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_status_alpaca_down():
+    mock_rh = MagicMock()
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(return_value=[])
+    mock_rh.get_buying_power_async = AsyncMock(return_value=3200.0)
+
+    with patch("app.discord_commands.get_account", side_effect=Exception("connection error")), \
+         patch("app.discord_commands.get_all_positions", return_value=[]), \
+         patch("app.discord_commands.rh_client", mock_rh), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_status
+        await handle_status("test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "Unavailable" in msg
+    assert "ROBINHOOD" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_positions_alpaca_only():
+    mock_pos = MagicMock()
+    mock_pos.symbol = "SPY"
+    mock_pos.qty = "5"
+    mock_pos.avg_entry_price = "520.00"
+    mock_pos.current_price = "535.60"
+    mock_pos.unrealized_pl = "78.00"
+    mock_pos.unrealized_plpc = "0.03"
+
+    with patch("app.discord_commands.get_all_positions", return_value=[mock_pos]), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_positions
+        await handle_positions("alpaca", "test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "SPY" in msg
+    assert "Alpaca" in msg
+    assert "520.00" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_close_alpaca_success():
+    mock_order = MagicMock()
+    mock_order.qty = "10"
+
+    mock_rh = MagicMock()
+    mock_rh.available = True
+    mock_rh.close_ticker_async = AsyncMock(return_value={"status": "ok", "qty": 5.0})
+
+    with patch("app.discord_commands.close_position", return_value=mock_order), \
+         patch("app.discord_commands.rh_client", mock_rh), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_close
+        await handle_close("SPY", "both", "test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "CLOSE SPY" in msg
+    assert "Alpaca" in msg
+    assert "Robinhood" in msg
+    assert "✅" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_close_no_position():
+    mock_rh = MagicMock()
+    mock_rh.close_ticker_async = AsyncMock(return_value={"status": "ok", "note": "no position to close", "qty": 0.0})
+
+    with patch("app.discord_commands.close_position", return_value=None), \
+         patch("app.discord_commands.rh_client", mock_rh), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_close
+        await handle_close("SPY", "both", "test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "No position to close" in msg or "no position" in msg.lower()

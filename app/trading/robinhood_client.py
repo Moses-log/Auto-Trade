@@ -248,6 +248,82 @@ class RobinhoodClient:
         except Exception:
             return None
 
+    def get_all_positions_detail(self) -> list:
+        """Return all open RH stock positions with current price and unrealized P&L."""
+        raw = r.get_open_stock_positions(account_number=self._account_number()) or []
+        result = []
+        for pos in raw:
+            try:
+                instrument = r.get_instrument_by_url(pos.get("instrument", "")) or {}
+                symbol = instrument.get("symbol", "").upper()
+                if not symbol:
+                    continue
+                qty = float(pos.get("quantity", 0))
+                if qty <= 0:
+                    continue
+                avg_entry = float(pos.get("average_buy_price") or 0)
+                prices = r.get_latest_price(symbol)
+                current = float(prices[0]) if prices and prices[0] else avg_entry
+                unreal_pl = (current - avg_entry) * qty
+                unreal_plpc = (current - avg_entry) / avg_entry * 100 if avg_entry else 0.0
+                result.append({
+                    "symbol": symbol,
+                    "qty": qty,
+                    "avg_entry_price": avg_entry,
+                    "current_price": current,
+                    "unrealized_pl": unreal_pl,
+                    "unrealized_plpc": unreal_plpc,
+                })
+            except Exception as exc:
+                log.warning("RH position detail failed: %s", exc)
+        return result
+
+    async def get_all_positions_async(self) -> list:
+        """Async wrapper for get_all_positions_detail."""
+        if not self.available:
+            return []
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, self.get_all_positions_detail)
+        except Exception as exc:
+            log.warning("RH get_all_positions_async failed: %s", exc)
+            return []
+
+    async def get_buying_power_async(self) -> Optional[float]:
+        """Async wrapper for _get_buying_power."""
+        if not self.available:
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, self._get_buying_power)
+        except Exception as exc:
+            log.warning("RH get_buying_power_async failed: %s", exc)
+            return None
+
+    def _close_ticker_sync(self, ticker: str) -> dict:
+        pos = self._get_position(ticker)
+        if pos is None:
+            return {"status": "ok", "note": "no position to close", "qty": 0.0}
+        qty = float(pos.get("quantity", 0))
+        if qty <= 0:
+            return {"status": "ok", "note": "no position to close", "qty": 0.0}
+        order = self._place_market_sell(ticker, qty)
+        fill_price = float(order.get("average_price") or 0) or None
+        return {"status": "ok", "qty": qty, "fill_price": fill_price, "order_id": order.get("id")}
+
+    async def close_ticker_async(self, ticker: str) -> dict:
+        """Close the full position for ticker. Returns a status dict."""
+        if not self.available:
+            return {"status": "skipped", "reason": "session unavailable"}
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, self._close_ticker_sync, ticker)
+        except Exception as exc:
+            if _is_auth_error(exc):
+                self.available = False
+                return {"status": "failed", "reason": "session expired"}
+            return {"status": "failed", "reason": str(exc)}
+
     def _close_position(self, ticker: str) -> Optional[dict]:
         pos = self._get_position(ticker)
         if pos is None:

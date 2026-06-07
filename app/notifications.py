@@ -155,3 +155,20 @@ async def notify_rh_pnl(message: str) -> None:
         await _client.post(url, json={"content": message[:2000]}, timeout=5)
     except Exception as exc:
         log.warning("Robinhood P&L notification failed: %s", exc)
+
+
+async def notify_rh_pnl_with_chart(message: str, chart_bytes: bytes) -> None:
+    """Send an RH P&L report with a PNG chart to RH_PNL_WEBHOOK_URL."""
+    url = settings.rh_pnl_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url
+    if not url:
+        log.warning("No webhook configured for RH P&L chart; skipping")
+        return
+    try:
+        await _client.post(
+            url,
+            data={"payload_json": _json.dumps({"content": message[:2000]})},
+            files={"file": ("rh_pnl.png", chart_bytes, "image/png")},
+            timeout=15,
+        )
+    except Exception as exc:
+        log.warning("RH P&L chart notification failed: %s", exc)
