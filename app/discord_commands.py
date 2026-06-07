@@ -142,6 +142,21 @@ def _ct_timestamp() -> str:
     return f"🕐 {hour}:{now.strftime('%M %p')} {now.strftime('%Z')} — {now.strftime('%A, %B')} {now.day}, {now.year}"
 
 
+def _fmt_qty(qty: float) -> str:
+    """7.0 → '7'  ·  7.5769 → '7.5769'  ·  7.57693000 → '7.5769'"""
+    if qty == int(qty):
+        return str(int(qty))
+    return f"{qty:.4f}".rstrip("0")
+
+
+def _fmt_pl(pl: float, plpc: float) -> str:
+    """🟢 +$45.23 (+0.80%)  or  🔴 -$45.23 (-0.80%)"""
+    emoji = "🟢" if pl >= 0 else "🔴"
+    dollar = f"+${pl:,.2f}" if pl >= 0 else f"-${abs(pl):,.2f}"
+    pct = f"+{plpc:.2f}%" if plpc >= 0 else f"{plpc:.2f}%"
+    return f"{emoji} {dollar} ({pct})"
+
+
 async def handle_status(token: str) -> None:
     loop = asyncio.get_running_loop()
 
@@ -169,8 +184,7 @@ async def handle_status(token: str) -> None:
             for pos in alpaca_positions:
                 pl = float(pos.unrealized_pl or 0)
                 plpc = float(pos.unrealized_plpc or 0) * 100
-                sign = "+" if pl >= 0 else ""
-                lines.append(f"  📍 {pos.symbol} · {float(pos.qty):g} sh · {sign}${pl:,.2f} ({sign}{plpc:.2f}%)")
+                lines.append(f"  📍 {pos.symbol} · {_fmt_qty(float(pos.qty))} sh · {_fmt_pl(pl, plpc)}")
         else:
             lines.append("  No open positions")
     else:
@@ -186,8 +200,7 @@ async def handle_status(token: str) -> None:
         for pos in rh_positions:
             pl = pos.get("unrealized_pl", 0.0)
             plpc = pos.get("unrealized_plpc", 0.0)
-            sign = "+" if pl >= 0 else ""
-            lines.append(f"  📍 {pos['symbol']} · {pos['qty']:g} sh · {sign}${pl:,.2f} ({sign}{plpc:.2f}%)")
+            lines.append(f"  📍 {pos['symbol']} · {_fmt_qty(pos['qty'])} sh · {_fmt_pl(pl, plpc)}")
     elif rh_client.available:
         lines.append("  No open positions")
     else:
@@ -203,10 +216,11 @@ async def handle_positions(broker: str, token: str) -> None:
     show_alpaca = broker in ("alpaca", "both")
     show_rh = broker in ("robinhood", "both")
 
-    lines = ["📈 **Open Positions**", ""]
+    lines = ["📈 **Open Positions**"]
 
     if show_alpaca:
-        lines.append("**Alpaca**")
+        lines.append("")
+        lines.append("**📊 Alpaca**")
         try:
             positions = await loop.run_in_executor(None, get_all_positions)
             if positions:
@@ -216,41 +230,33 @@ async def handle_positions(broker: str, token: str) -> None:
                     current = float(pos.current_price or 0)
                     pl = float(pos.unrealized_pl or 0)
                     plpc = float(pos.unrealized_plpc or 0) * 100
-                    sign = "+" if pl >= 0 else ""
-                    lines.append(
-                        f"  {pos.symbol} · {qty:g} sh · "
-                        f"Entry ${entry:,.2f} → ${current:,.2f} · "
-                        f"{sign}${pl:,.2f} ({sign}{plpc:.2f}%)"
-                    )
+                    lines.append(f"> **{pos.symbol}** — {_fmt_qty(qty)} shares @ ${current:,.2f}")
+                    lines.append(f"> {_fmt_pl(pl, plpc)}  ·  Entry ${entry:,.2f}")
             else:
-                lines.append("  No open positions")
+                lines.append("> No open positions")
         except Exception as exc:
-            lines.append(f"  ❌ Could not fetch: {exc}")
-        lines.append("")
+            lines.append(f"> ❌ Could not fetch: {exc}")
 
     if show_rh:
-        lines.append("**Robinhood**")
+        lines.append("")
+        lines.append("**🤖 Robinhood**")
         if not rh_client.available:
-            lines.append("  🔴 Session offline")
+            lines.append("> 🔴 Session offline")
         else:
             positions = await rh_client.get_all_positions_async()
             if positions:
                 for pos in positions:
-                    qty = pos.get("qty", 0)
+                    qty = pos.get("qty", 0.0)
                     entry = pos.get("avg_entry_price", 0.0)
                     current = pos.get("current_price", 0.0)
                     pl = pos.get("unrealized_pl", 0.0)
                     plpc = pos.get("unrealized_plpc", 0.0)
-                    sign = "+" if pl >= 0 else ""
-                    lines.append(
-                        f"  {pos['symbol']} · {qty:g} sh · "
-                        f"Entry ${entry:,.2f} → ${current:,.2f} · "
-                        f"{sign}${pl:,.2f} ({sign}{plpc:.2f}%)"
-                    )
+                    lines.append(f"> **{pos['symbol']}** — {_fmt_qty(qty)} shares @ ${current:,.2f}")
+                    lines.append(f"> {_fmt_pl(pl, plpc)}  ·  Entry ${entry:,.2f}")
             else:
-                lines.append("  No open positions")
-        lines.append("")
+                lines.append("> No open positions")
 
+    lines.append("")
     lines.append(_ct_timestamp())
     await _edit_original(token, "\n".join(lines))
 
