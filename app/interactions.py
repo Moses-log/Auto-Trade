@@ -33,4 +33,15 @@ def extract_user_id(data: dict) -> Optional[str]:
 
 
 def parse_options(options: list) -> dict:
+    """Parse Discord interaction options.
+
+    For sub-commands (type=1), flattens the nested options into the result
+    dict and adds "_subcommand" with the sub-command name so callers can
+    branch on it without knowing the raw Discord structure.
+    """
+    if options and options[0].get("type") == 1:  # SUB_COMMAND
+        sub = options[0]
+        result = {"_subcommand": sub["name"]}
+        result.update({opt["name"]: opt["value"] for opt in sub.get("options", [])})
+        return result
     return {opt["name"]: opt["value"] for opt in options}

@@ -4,7 +4,9 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import List
 
 log = logging.getLogger(__name__)
 
@@ -15,10 +17,12 @@ _lock = asyncio.Lock()
 def _load() -> dict:
     if _RECORD_FILE.exists():
         try:
-            return json.loads(_RECORD_FILE.read_text())
+            data = json.loads(_RECORD_FILE.read_text())
+            data.setdefault("trades", [])  # backward compat with records that predate trade history
+            return data
         except Exception:
             pass
-    return {"wins": 0, "losses": 0}
+    return {"wins": 0, "losses": 0, "trades": []}
 
 
 def _save(record: dict) -> None:
@@ -26,16 +30,37 @@ def _save(record: dict) -> None:
     _RECORD_FILE.write_text(json.dumps(record))
 
 
-async def record_rh_trade_result(is_win: bool) -> tuple[int, int]:
-    """Increment RH win or loss, persist to disk, return (wins, losses)."""
+async def record_rh_trade(
+    is_win: bool,
+    ticker: str,
+    dollar_pnl: float,
+) -> tuple[int, int]:
+    """Record a closed RH trade with timestamp. Returns (wins, losses)."""
     async with _lock:
         record = _load()
         if is_win:
             record["wins"] += 1
         else:
             record["losses"] += 1
+        record["trades"].append({
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "ticker": ticker,
+            "dollar_pnl": round(dollar_pnl, 4),
+            "is_win": is_win,
+        })
         _save(record)
     return record["wins"], record["losses"]
+
+
+def get_all_trades() -> List[dict]:
+    """Return all stored trade entries."""
+    return _load().get("trades", [])
+
+
+def get_totals() -> tuple[int, int]:
+    """Return (wins, losses) all-time."""
+    record = _load()
+    return record.get("wins", 0), record.get("losses", 0)
 
 
 def format_rh_record(wins: int, losses: int) -> str:

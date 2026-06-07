@@ -92,7 +92,7 @@ async def test_handle_report_daily():
     with patch("app.discord_commands.send_daily_report", new_callable=AsyncMock), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_report
-        await handle_report("daily", "test-token")
+        await handle_report("alpaca", "daily", "test-token")
 
     msg = mock_edit.call_args[0][1]
     assert "daily" in msg.lower()
@@ -104,7 +104,7 @@ async def test_handle_report_both():
          patch("app.discord_commands.send_weekly_report", new_callable=AsyncMock), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_report
-        await handle_report("both", "test-token")
+        await handle_report("alpaca", "both", "test-token")
 
     msg = mock_edit.call_args[0][1]
     assert "✅" in msg
@@ -131,7 +131,7 @@ async def test_handle_report_monthly():
     with patch("app.discord_commands.send_monthly_report", new_callable=AsyncMock), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_report
-        await handle_report("monthly", "test-token")
+        await handle_report("alpaca", "monthly", "test-token")
     msg = mock_edit.call_args[0][1]
     assert "monthly" in msg.lower()
 
@@ -141,7 +141,7 @@ async def test_handle_report_ytd():
     with patch("app.discord_commands.send_ytd_report", new_callable=AsyncMock), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_report
-        await handle_report("ytd", "test-token")
+        await handle_report("alpaca", "ytd", "test-token")
     msg = mock_edit.call_args[0][1]
     assert "✅" in msg
 
@@ -151,7 +151,7 @@ async def test_handle_report_1year():
     with patch("app.discord_commands.send_yearly_report", new_callable=AsyncMock), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_report
-        await handle_report("1year", "test-token")
+        await handle_report("alpaca", "1year", "test-token")
     msg = mock_edit.call_args[0][1]
     assert "✅" in msg
 
@@ -161,6 +161,17 @@ async def test_handle_report_alltime():
     with patch("app.discord_commands.send_alltime_report", new_callable=AsyncMock), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_report
-        await handle_report("alltime", "test-token")
+        await handle_report("alpaca", "alltime", "test-token")
     msg = mock_edit.call_args[0][1]
     assert "✅" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_report_robinhood():
+    with patch("app.discord_commands.send_rh_report", new_callable=AsyncMock) as mock_rh, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("robinhood", "daily", "test-token")
+    mock_rh.assert_called_once_with("daily")
+    msg = mock_edit.call_args[0][1]
+    assert "RH" in msg

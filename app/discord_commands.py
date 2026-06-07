@@ -17,6 +17,7 @@ from app.pnl import (
     send_alltime_report,
     send_investor_report,
 )
+from app.rh_pnl import send_rh_report
 from app.trading.alpaca_client import get_latest_price
 
 log = logging.getLogger(__name__)
@@ -98,7 +99,13 @@ async def handle_withdraw(investor_name: str, amount: float, token: str) -> None
     await _edit_original(token, f"✅ {match_name} — ${amount:,.2f} withdrawal recorded\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")
 
 
-async def handle_report(report_type: str, token: str) -> None:
+async def handle_report(broker: str, report_type: str, token: str) -> None:
+    if broker == "robinhood":
+        await send_rh_report(report_type)
+        await _edit_original(token, f"✅ RH {report_type.capitalize()} report sent")
+        return
+
+    # Alpaca (default)
     if report_type in ("daily", "both"):
         await send_daily_report()
     if report_type in ("weekly", "both"):
@@ -132,7 +139,8 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
                 token=token,
             )
         elif command == "report":
-            await handle_report(report_type=options["type"], token=token)
+            broker = options.get("_subcommand", "alpaca")
+            await handle_report(broker=broker, report_type=options.get("type", "daily"), token=token)
         else:
             await _edit_original(token, f"❌ Unknown command: {command}")
     except Exception as exc:

@@ -7,7 +7,7 @@ from typing import Optional
 import pytz
 
 from app.notifications import notify_robinhood, notify_rh_session
-from app.rh_trade_record import format_rh_record, record_rh_trade_result
+from app.rh_trade_record import format_rh_record, record_rh_trade
 
 log = logging.getLogger(__name__)
 CT = pytz.timezone("America/Chicago")
@@ -148,7 +148,7 @@ async def notify_rh_trade(
         if side == "sell" and avg_buy_price and fill_price and qty and avg_buy_price != 0:
             dollar_pnl = (fill_price - avg_buy_price) * qty
             pct_pnl = (fill_price - avg_buy_price) / avg_buy_price * 100
-            wins, losses = await record_rh_trade_result(dollar_pnl >= 0)
+            wins, losses = await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
             record_str = format_rh_record(wins, losses)
 
         message = _format_rh_message(
