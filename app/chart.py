@@ -14,14 +14,14 @@ ET = pytz.timezone("America/New_York")
 # Cyberpunk palette
 _RH_LINE_COLOR = "#39ff14"   # neon bright green (RH P&L chart)
 
-_BG           = "#07071a"
-_PANEL        = "#0d0d2b"
-_PORT_COLOR   = "#00ff88"   # neon green
-_SPY_COLOR    = "#ff2d78"   # neon magenta
-_ZERO_COLOR   = "#3a3a8a"
-_GRID_COLOR   = "#1a1a40"
-_TEXT_COLOR   = "#d0d0f0"   # bright lavender — readable on dark bg
-_TITLE_COLOR  = "#ffe600"   # neon yellow
+_BG           = "#030303"    # near-black
+_PANEL        = "#0a0a0a"    # slightly lighter black panel
+_PORT_COLOR   = "#ffe600"    # neon yellow
+_SPY_COLOR    = "#ff2d78"    # neon magenta
+_ZERO_COLOR   = "#2a2a2a"    # dark gray baseline
+_GRID_COLOR   = "#181818"    # very dark gray grid
+_TEXT_COLOR   = "#d0d0f0"    # bright lavender — readable on dark bg
+_TITLE_COLOR  = "#ffe600"    # neon yellow
 
 
 def _glow(ax, x, y, color, lw: float = 2.0, label: str | None = None, linestyle: str = "-") -> None:
