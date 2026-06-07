@@ -26,14 +26,14 @@ import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from app.config import settings
 from app.idempotency import is_duplicate, mark_processed
 from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
-from app.notifications import notify, close_http_client
+from app.notifications import notify, notify_robinhood, close_http_client
 from app.pnl import (
     send_daily_report,
     send_weekly_report,
@@ -51,6 +51,7 @@ from app.interactions import extract_user_id, parse_options, verify_discord_sign
 from app.leverage_state import load_leverage_entry
 from app.trading.alpaca_client import get_latest_price, get_position
 from app.trading.order_logic import execute_action
+from app.trading.robinhood_client import rh_client
 from alpaca.common.exceptions import APIError
 
 # ── Logging must be set up before the first log call ─────────────────────────
@@ -78,6 +79,12 @@ async def lifespan(app: FastAPI):
         "TradingView → Alpaca webhook server starting",
         extra={"paper_trading": "paper" in settings.alpaca_base_url},
     )
+    if settings.rh_enabled:
+        if not rh_client.login_from_pickle():
+            await notify_robinhood(
+                "⚠️ Robinhood session unavailable — POST /robinhood-auth "
+                "with your SMS code to activate."
+            )
     setup_jobs()
     reschedule_pending_orders()
     scheduler.start()
@@ -105,6 +112,13 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
         content={"error": "Invalid payload", "detail": exc.errors()},
     )
+
+
+# ── Request models ────────────────────────────────────────────────────────────
+
+class _RobinhoodAuthRequest(BaseModel):
+    secret: str
+    sms_code: str
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
@@ -148,6 +162,32 @@ async def interactions(request: Request, background_tasks: BackgroundTasks):
 
     background_tasks.add_task(dispatch_command, command, options, token)
     return {"type": 5, "data": {"flags": 64}}
+
+
+@app.post("/robinhood-auth", tags=["trading"])
+async def robinhood_auth(body: _RobinhoodAuthRequest):
+    """Re-authenticate Robinhood session using an SMS 2FA code."""
+    try:
+        verify_webhook_secret(body.secret)
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Unauthorized."},
+        )
+    try:
+        rh_client.login_with_sms(body.sms_code)
+        await notify_robinhood("Robinhood session restored ✅")
+        log.info("Robinhood session re-authenticated successfully")
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={"status": "authenticated"},
+        )
+    except Exception as exc:
+        log.warning("Robinhood re-auth failed: %s", exc)
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"detail": "Invalid SMS code or credentials."},
+        )
 
 
 @app.post("/webhook", tags=["trading"])
@@ -249,6 +289,22 @@ async def webhook(request: Request):
                 avg_entry_price=avg_entry_price,
             )
         )
+
+        rh = result.get("robinhood", {})
+        if rh.get("status") == "ok":
+            qty_info = f" — {rh['qty']} shares" if rh.get("qty") else ""
+            await notify_robinhood(
+                f"✅ {payload.action.upper()} {payload.ticker}{qty_info}"
+            )
+        elif rh.get("status") == "failed":
+            reason = rh.get("reason", "unknown")
+            await notify_robinhood(
+                f"❌ Robinhood {payload.action.upper()} {payload.ticker} FAILED: {reason}"
+            )
+            if reason == "session expired":
+                await notify_robinhood(
+                    "⚠️ Robinhood session expired — POST /robinhood-auth to re-authenticate"
+                )
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,

@@ -216,3 +216,52 @@ def test_pre_trade_position_fetched_for_sell(mock_get_client, mock_get_position,
     mock_get_position.return_value = None
     client.post("/webhook", json=payload)
     mock_get_position.assert_called_once_with(payload["ticker"])
+
+
+# ── /robinhood-auth ───────────────────────────────────────────────────────────
+
+@patch("app.main.rh_client")
+def test_robinhood_auth_wrong_secret(mock_rh_client):
+    r = client.post("/robinhood-auth", json={"secret": "WRONG", "sms_code": "123456"})
+    assert r.status_code == 401
+
+
+@patch("app.main.rh_client")
+def test_robinhood_auth_bad_sms_code(mock_rh_client):
+    mock_rh_client.login_with_sms.side_effect = Exception("Invalid MFA code")
+    r = client.post("/robinhood-auth", json={"secret": "MY_SHARED_SECRET", "sms_code": "000000"})
+    assert r.status_code == 400
+    assert "Invalid" in r.json()["detail"]
+
+
+@patch("app.main.rh_client")
+def test_robinhood_auth_success(mock_rh_client):
+    mock_rh_client.login_with_sms.return_value = None
+    r = client.post("/robinhood-auth", json={"secret": "MY_SHARED_SECRET", "sms_code": "123456"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "authenticated"
+    mock_rh_client.login_with_sms.assert_called_once_with("123456")
+
+
+# ── Robinhood parallel execution ──────────────────────────────────────────────
+
+@patch("app.trading.order_logic.rh_client")
+@patch("app.trading.alpaca_client.get_client")
+def test_webhook_result_includes_robinhood_key(mock_get_client, mock_rh_client):
+    from unittest.mock import AsyncMock
+    mock_client = MagicMock()
+    mock_client.submit_order.return_value = _mock_order(side="buy")
+    mock_get_client.return_value = mock_client
+
+    mock_rh_client.execute = AsyncMock(
+        return_value={"status": "ok", "side": "buy", "qty": 3}
+    )
+
+    payload = _load_sample("buy")
+    payload["order_id"] = "rh_parallel_test_001"
+    r = client.post("/webhook", json=payload)
+
+    assert r.status_code == 200
+    result = r.json()["result"]
+    assert "robinhood" in result
+    assert result["robinhood"]["status"] == "ok"

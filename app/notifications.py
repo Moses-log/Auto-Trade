@@ -102,3 +102,17 @@ async def _telegram(message: str) -> None:
         )
     except Exception as exc:
         log.warning("Telegram notification failed: %s", exc)
+
+
+async def notify_robinhood(message: str) -> None:
+    """Send a notification to the Robinhood Discord channel.
+    Falls back to the main Discord channel if RH_DISCORD_WEBHOOK_URL is not set.
+    """
+    url = settings.rh_discord_webhook_url or settings.discord_webhook_url
+    if not url:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(url, json={"content": message[:2000]})
+    except Exception as exc:
+        log.warning("Robinhood Discord notification failed: %s", exc)
