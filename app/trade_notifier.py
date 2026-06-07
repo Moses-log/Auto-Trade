@@ -16,7 +16,10 @@ log = logging.getLogger(__name__)
 CT = pytz.timezone("America/Chicago")
 _ET = pytz.timezone("America/New_York")
 
-_BUY_ACTIONS = {"BUY", "BASE_ENTRY", "ADD_LEVERAGE"}
+_BUY_ACTIONS = {"BUY", "BASE_ENTRY", "ADD_LEVERAGE", "REVERSE_TO_LONG"}
+# For REVERSE_* actions, order_logic appends [close_old, open_new].
+# We always want the last order — the one that opens the new position.
+_REVERSE_ACTIONS = {"REVERSE_TO_LONG", "REVERSE_TO_SHORT"}
 
 
 def _format_trade_message(
@@ -100,7 +103,9 @@ async def notify_trade(
 
         orders = result.get("orders", [])
         if orders:
-            order_id = orders[0].get("alpaca_order_id")
+            action_base = action.upper().split(" (")[0]
+            target = orders[-1] if action_base in _REVERSE_ACTIONS and len(orders) > 1 else orders[0]
+            order_id = target.get("alpaca_order_id")
             if order_id:
                 order = get_order(order_id)
                 if order and order.filled_avg_price:

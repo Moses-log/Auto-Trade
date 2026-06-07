@@ -22,6 +22,11 @@ log = logging.getLogger(__name__)
 _client = httpx.AsyncClient()
 
 
+def get_http_client() -> httpx.AsyncClient:
+    """Return the shared AsyncClient for reuse outside this module."""
+    return _client
+
+
 async def close_http_client() -> None:
     """Close the shared httpx client. Call once on app shutdown."""
     await _client.aclose()

@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
         extra={"paper_trading": "paper" in settings.alpaca_base_url},
     )
     if settings.rh_enabled:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         ok = await loop.run_in_executor(None, rh_client.login_from_pickle)
         if not ok:
             await notify_rh_session(
@@ -184,7 +184,8 @@ async def robinhood_auth(body: _RobinhoodAuthRequest):
             content={"error": "Unauthorized."},
         )
     try:
-        rh_client.login_with_sms(body.sms_code)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, rh_client.login_with_sms, body.sms_code)
         await notify_rh_session("Robinhood session restored ✅")
         log.info("Robinhood session re-authenticated successfully")
         return JSONResponse(
@@ -216,7 +217,8 @@ async def robinhood_upload_pickle(body: _PickleUploadRequest):
             f.write(data)
         with open(_PICKLE_PATH, "wb") as f:
             f.write(data)
-        if rh_client.login_from_pickle():
+        loop = asyncio.get_running_loop()
+        if await loop.run_in_executor(None, rh_client.login_from_pickle):
             await notify_rh_session("Robinhood session restored via pickle upload ✅")
             log.info("Robinhood session activated via pickle upload")
             return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "authenticated"})

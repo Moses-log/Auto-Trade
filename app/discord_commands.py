@@ -4,10 +4,9 @@ import logging
 from datetime import date
 from typing import Optional
 
-import httpx
-
 from app.config import settings
 from app.investors import Deposit, get_total_deposited, load_investors, save_investors, investors_lock
+from app.notifications import get_http_client
 from app.pnl import (
     send_daily_report,
     send_weekly_report,
@@ -26,8 +25,7 @@ log = logging.getLogger(__name__)
 async def _edit_original(token: str, content: str) -> None:
     url = f"https://discord.com/api/v10/webhooks/{settings.discord_app_id}/{token}/messages/@original"
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.patch(url, json={"content": content})
+        await get_http_client().patch(url, json={"content": content}, timeout=10)
     except Exception as exc:
         log.warning("Failed to edit Discord follow-up: %s", exc)
 
@@ -106,6 +104,10 @@ async def handle_report(broker: str, report_type: str, token: str) -> None:
         return
 
     # Alpaca (default)
+    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both", "investors"}
+    if report_type not in _VALID:
+        await _edit_original(token, f"❌ Unknown report type: {report_type!r}")
+        return
     if report_type in ("daily", "both"):
         await send_daily_report()
     if report_type in ("weekly", "both"):
