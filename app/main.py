@@ -17,6 +17,7 @@ as TradingView requires.
 import asyncio
 import json
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
 from datetime import date
