@@ -14,6 +14,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
+from app.rh_pnl import send_rh_report
 
 log = logging.getLogger(__name__)
 
@@ -23,23 +24,43 @@ ET = pytz.timezone("America/New_York")
 scheduler = AsyncIOScheduler(timezone=ET)
 
 
+async def _check_rh_period_reports() -> None:
+    """Fire RH monthly/yearly reports on the last trading day of the period."""
+    from app.trading.alpaca_client import get_next_trading_day
+    today = datetime.now(ET).date()
+    try:
+        next_trading = get_next_trading_day()
+    except Exception as exc:
+        log.warning("Could not fetch next trading day for RH period check: %s", exc)
+        return
+    if next_trading.month != today.month:
+        await send_rh_report("monthly")
+    if next_trading.year != today.year:
+        await send_rh_report("1year")
+
+
 async def _weekday_jobs() -> None:
-    """Run Mon–Thu reports in parallel: daily P&L, investor breakdown, period check."""
+    """Run Mon–Thu reports in parallel: Alpaca + RH daily, investor breakdown, period checks."""
     await asyncio.gather(
         send_daily_report(),
         send_investor_report(),
         check_period_reports(),
+        send_rh_report("daily"),
+        _check_rh_period_reports(),
         return_exceptions=True,
     )
 
 
 async def _friday_jobs() -> None:
-    """Run Friday reports in parallel: daily, weekly, investor breakdown, period check."""
+    """Run Friday reports in parallel: Alpaca + RH daily/weekly, investor breakdown, period checks."""
     await asyncio.gather(
         send_daily_report(),
         send_weekly_report(),
         send_investor_report(),
         check_period_reports(),
+        send_rh_report("daily"),
+        send_rh_report("weekly"),
+        _check_rh_period_reports(),
         return_exceptions=True,
     )
 
@@ -69,7 +90,7 @@ def setup_jobs() -> None:
         id="robinhood_keep_alive",
         replace_existing=True,
     )
-    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs, robinhood_keep_alive (every 3 days 03:00 ET)")
+    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), robinhood_keep_alive (every 3 days 03:00 ET)")
 
 
 def reschedule_pending_orders() -> None:

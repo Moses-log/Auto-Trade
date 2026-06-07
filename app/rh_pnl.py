@@ -14,18 +14,20 @@ ET = pytz.timezone("America/New_York")
 
 
 def _period_start(period: str) -> datetime:
-    now = datetime.now(timezone.utc)
+    # Use ET midnight so "daily" aligns with calendar days in Eastern time,
+    # not UTC (which would start at 8pm ET the prior evening).
+    now_et = datetime.now(ET)
     if period == "daily":
-        return now.replace(hour=0, minute=0, second=0, microsecond=0)
+        return now_et.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     if period == "weekly":
-        days_since_monday = now.weekday()
-        return (now - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0)
+        days_since_monday = now_et.weekday()
+        return (now_et - timedelta(days=days_since_monday)).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     if period == "monthly":
-        return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        return now_et.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     if period == "ytd":
-        return now.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+        return now_et.replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
     if period == "1year":
-        return now - timedelta(days=365)
+        return datetime.now(timezone.utc) - timedelta(days=365)
     return datetime.min.replace(tzinfo=timezone.utc)  # alltime
 
 
@@ -70,8 +72,6 @@ def _format_rh_report(period_label: str, trades: List[dict], all_wins: int, all_
     else:
         emoji = "📉🔴"
         pnl_str = f"-${abs(period_pnl):,.2f}"
-
-    period_label_title = period_label.split(" of ")[-1] if " of " in period_label else period_label
 
     if not trades:
         all_record = format_rh_record(all_wins, all_losses)

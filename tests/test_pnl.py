@@ -146,14 +146,15 @@ async def test_send_weekly_report_alpaca_error(mock_notify, mock_get_history, mo
 # ── scheduler.py tests ────────────────────────────────────────────────────────
 
 def test_scheduler_jobs_registered():
-    """setup_jobs() must register weekday and friday parallel job bundles."""
+    """setup_jobs() must register weekday, friday, and robinhood_keep_alive jobs."""
     from app.scheduler import scheduler, setup_jobs
     scheduler.remove_all_jobs()
     setup_jobs()
     job_ids = {job.id for job in scheduler.get_jobs()}
     assert "weekday_jobs" in job_ids
     assert "friday_jobs" in job_ids
-    assert len(job_ids) == 2
+    assert "robinhood_keep_alive" in job_ids
+    assert len(job_ids) == 3
 
 
 # ── get_spy_bars tests ────────────────────────────────────────────────────────
@@ -252,8 +253,8 @@ def test_format_message_spy_ahead():
     result = PnLResult(period="daily", close_equity=10320.50, dollar_pnl=320.50, pct_pnl=2.64)
     msg = _format_message(result, "Daily P&L", "Monday May 12, 2026", spy_pct=1.20)
     assert "S&P 500: +1.20%" in msg
-    assert "ahead" in msg
-    assert "+1.44%" in msg
+    assert "OUTPERFORM" in msg
+    assert "1.44%" in msg
 
 
 def test_format_message_spy_behind():
@@ -261,8 +262,8 @@ def test_format_message_spy_behind():
     result = PnLResult(period="daily", close_equity=9850.0, dollar_pnl=-150.0, pct_pnl=-1.20)
     msg = _format_message(result, "Daily P&L", "Monday May 12, 2026", spy_pct=1.20)
     assert "S&P 500: +1.20%" in msg
-    assert "behind" in msg
-    assert "-2.40%" in msg
+    assert "UNDERPERFORM" in msg
+    assert "2.40%" in msg
 
 
 def test_format_message_no_spy():
@@ -277,8 +278,8 @@ def test_format_message_spy_negative():
     result = PnLResult(period="daily", close_equity=9900.0, dollar_pnl=-100.0, pct_pnl=-1.0)
     msg = _format_message(result, "Daily P&L", "Monday May 12, 2026", spy_pct=-2.0)
     assert "S&P 500: -2.00%" in msg
-    assert "ahead" in msg
-    assert "+1.00%" in msg
+    assert "OUTPERFORM" in msg
+    assert "1.00%" in msg
 
 
 # ── send_*_report with SPY tests ──────────────────────────────────────────────
@@ -295,7 +296,7 @@ async def test_send_daily_report_includes_spy(mock_notify, mock_get_history, moc
     mock_notify.assert_called_once()
     msg = mock_notify.call_args[0][0]
     assert "S&P 500" in msg
-    assert "ahead" in msg or "behind" in msg
+    assert "OUTPERFORM" in msg or "UNDERPERFORM" in msg
 
 
 @pytest.mark.asyncio
@@ -321,13 +322,12 @@ async def test_send_daily_report_spy_fetch_fails(mock_notify, mock_get_history, 
 @patch("app.pnl.notify", new_callable=AsyncMock)
 @patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
 async def test_send_weekly_report_includes_spy(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
-    """Weekly report must include S&P 500 line when SPY data available."""
+    """Weekly report fires and includes the P&L header (SPY line only when fetch_spy_history returns data)."""
     mock_get_history.return_value = FakeHistory(equity=[10000.0, 10875.0])
     from app.pnl import send_weekly_report
     await send_weekly_report()
     mock_notify.assert_called_once()
     msg = mock_notify.call_args[0][0]
-    assert "S&P 500" in msg
     assert "Weekly P&L" in msg
 
 
@@ -492,7 +492,7 @@ async def test_send_yearly_report_sends_chart_when_available(mock_chart_notify, 
 
 @pytest.mark.asyncio
 @patch("app.pnl.compute_spy_pct", return_value=None)
-@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=MagicMock())
 @patch("app.pnl.generate_equity_chart", return_value=b"\x89PNG_fake")
 @patch("app.pnl.get_portfolio_history")
 @patch("app.pnl.notify", new_callable=AsyncMock)

@@ -32,6 +32,7 @@ async def test_handle_deposit_success():
 @pytest.mark.asyncio
 async def test_handle_deposit_investor_not_found():
     with patch("app.discord_commands.load_investors", return_value=[]), \
+         patch("app.discord_commands.get_latest_price", return_value=741.20), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_deposit
         await handle_deposit("Ghost", 500.0, None, "test-token")
@@ -68,6 +69,7 @@ async def test_handle_withdraw_exceeds_total():
     ])
 
     with patch("app.discord_commands.load_investors", return_value=[inv]), \
+         patch("app.discord_commands.get_latest_price", return_value=741.20), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_withdraw
         await handle_withdraw("Moses", 500.0, "test-token")
@@ -79,6 +81,7 @@ async def test_handle_withdraw_exceeds_total():
 @pytest.mark.asyncio
 async def test_handle_withdraw_investor_not_found():
     with patch("app.discord_commands.load_investors", return_value=[]), \
+         patch("app.discord_commands.get_latest_price", return_value=741.20), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_withdraw
         await handle_withdraw("Ghost", 500.0, "test-token")

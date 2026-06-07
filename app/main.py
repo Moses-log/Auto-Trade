@@ -34,7 +34,7 @@ from app.idempotency import is_duplicate, mark_processed
 from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
-from app.notifications import notify, close_http_client
+from app.notifications import notify, close_http_client, notify_rh_session
 from app.rh_trade_notifier import notify_rh_trade
 from app.pnl import (
     send_daily_report,
@@ -82,7 +82,9 @@ async def lifespan(app: FastAPI):
         extra={"paper_trading": "paper" in settings.alpaca_base_url},
     )
     if settings.rh_enabled:
-        if not rh_client.login_from_pickle():
+        loop = asyncio.get_event_loop()
+        ok = await loop.run_in_executor(None, rh_client.login_from_pickle)
+        if not ok:
             await notify_rh_session(
                 "⚠️ Robinhood session unavailable — POST /robinhood-auth "
                 "with your SMS code to activate."

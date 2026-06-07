@@ -13,7 +13,6 @@ code and saves a fresh token.
 
 import asyncio
 import logging
-import math
 import os
 import shutil
 from typing import Optional
@@ -193,7 +192,7 @@ class RobinhoodClient:
         return settings.rh_account_number or None
 
     def _get_buying_power(self) -> float:
-        profile = r.load_account_profile(account_number=self._account_number())
+        profile = r.load_account_profile(account_number=self._account_number()) or {}
         bp = profile.get("cash") or profile.get("portfolio_cash") or "0"
         return float(bp)
 
@@ -224,7 +223,10 @@ class RobinhoodClient:
     def _get_position(self, ticker: str) -> Optional[dict]:
         positions = r.get_open_stock_positions(account_number=self._account_number())
         for pos in (positions or []):
-            instrument = r.get_instrument_by_url(pos["instrument"])
+            try:
+                instrument = r.get_instrument_by_url(pos.get("instrument", "")) or {}
+            except Exception:
+                continue
             if instrument.get("symbol", "").upper() == ticker.upper():
                 return pos
         return None
