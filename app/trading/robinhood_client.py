@@ -51,6 +51,9 @@ class RobinhoodClient:
                 store_session=True,
             )
             r.load_account_profile()  # verify token is actually valid
+            # Save refreshed token back to persistent disk
+            if os.path.exists(_PICKLE_PATH):
+                shutil.copy2(_PICKLE_PATH, _PICKLE_BACKUP)
             self.available = True
             log.info("Robinhood session restored from pickle")
             return True
@@ -64,7 +67,9 @@ class RobinhoodClient:
         from app.notifications import notify_rh_session
         if not settings.rh_enabled:
             return
-        if self.login_from_pickle():
+        loop = asyncio.get_running_loop()
+        ok = await loop.run_in_executor(None, self.login_from_pickle)
+        if ok:
             log.info("Robinhood session refreshed via keep-alive")
             await notify_rh_session("🔄 Robinhood session auto-refreshed ✅")
         else:
@@ -180,10 +185,12 @@ class RobinhoodClient:
         log.info("Robinhood BUY placed", extra={"ticker": ticker, "qty": qty})
         return result
 
-    def _place_market_sell(self, ticker: str, qty: int) -> dict:
-        result = r.order_sell_market(ticker, qty)
+    def _place_market_sell(self, ticker: str, qty: float) -> dict:
+        result = r.order_sell_fractional_by_quantity(ticker, qty) or {}
+        if not result.get("id") and not result.get("cancel"):
+            raise ValueError(f"Robinhood sell order rejected: {result}")
         log.info("Robinhood SELL placed", extra={"ticker": ticker, "qty": qty})
-        return result or {}
+        return result
 
     def _get_position(self, ticker: str) -> Optional[dict]:
         positions = r.get_open_stock_positions()
