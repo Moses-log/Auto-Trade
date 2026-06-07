@@ -313,56 +313,62 @@ async def handle_tax(year: int, token: str) -> None:
     alpaca = await compute_alpaca_tax_summary(year)
     rh = compute_rh_tax_summary(year)
 
-    lines = [f"📋 **Tax Summary — {year}**", ""]
+    def _net_emoji(amount: float) -> str:
+        return "🟢" if amount >= 0 else "🔴"
 
-    # ── Alpaca ──────────────────────────────────────────────────────────────
-    lines.append("**📊 ALPACA**")
+    lines = [f"📋 **Tax Summary — {year}**"]
+
+    # ── Alpaca ───────────────────────────────────────────────────────────────
+    lines += ["", "**📊 Alpaca**"]
     if "error" in alpaca:
-        lines.append(f"❌ Could not fetch order history: {alpaca['error']}")
+        lines.append(f"> ❌ Could not fetch: {alpaca['error']}")
         alpaca_net = 0.0
     else:
         st_net = alpaca["short_term_net"]
         lt_net = alpaca["long_term_net"]
-
-        lines.append("Short-term (held < 1 yr)")
-        lines.append(
-            f"  Gains: {_d(alpaca['short_term_gains'])}  ·  "
-            f"Losses: {_d(alpaca['short_term_losses'])}"
-        )
-        lines.append(f"  **Net: {_d(st_net)}**")
-        lines.append(f"Long-term (held ≥ 1 yr)  **Net: {_d(lt_net)}**")
-        lines.append(f"Sell events: {alpaca['sell_event_count']}")
-        if alpaca["unknown_basis_count"] > 0:
-            lines.append(
-                f"⚠️ {alpaca['unknown_basis_count']} sell(s) with unknown cost basis "
-                f"(position opened before fetch window)"
-            )
         alpaca_net = st_net + lt_net
 
-    lines.append("")
+        lines.append("**Short-term** *(held < 1 year)*")
+        lines.append(f"> Gains:   {_d(alpaca['short_term_gains'])}")
+        lines.append(f"> Losses:  {_d(alpaca['short_term_losses'])}")
+        lines.append(f"> **Net:   {_d(st_net)} {_net_emoji(st_net)}**")
 
-    # ── Robinhood ────────────────────────────────────────────────────────────
-    lines.append("**🤖 ROBINHOOD** *(all short-term — algorithmic)*")
+        lines.append("**Long-term** *(held ≥ 1 year)*")
+        if alpaca["long_term_gains"] == 0 and alpaca["long_term_losses"] == 0:
+            lines.append("> No long-term trades")
+        else:
+            lines.append(f"> Gains:   {_d(alpaca['long_term_gains'])}")
+            lines.append(f"> Losses:  {_d(alpaca['long_term_losses'])}")
+            lines.append(f"> **Net:   {_d(lt_net)} {_net_emoji(lt_net)}**")
+
+        lines.append(f"*{alpaca['sell_event_count']} taxable sells*")
+        if alpaca["unknown_basis_count"] > 0:
+            lines.append(
+                f"> ⚠️ {alpaca['unknown_basis_count']} sell(s) missing cost basis "
+                f"— position may have been opened before recorded history"
+            )
+
+    # ── Robinhood ─────────────────────────────────────────────────────────────
+    lines += ["", "**🤖 Robinhood** *(all short-term — algorithmic)*"]
     if rh["total_trades"] == 0:
-        lines.append(f"  No recorded trades for {year}")
+        lines.append(f"> No recorded trades for {year}")
         rh_net = 0.0
     else:
-        lines.append(
-            f"  Gains: {_d(rh['short_term_gains'])} ({rh['win_count']} wins)  ·  "
-            f"Losses: {_d(rh['short_term_losses'])} ({rh['loss_count']} losses)"
-        )
-        lines.append(f"  **Net: {_d(rh['short_term_net'])}**")
-        lines.append(f"  Trades: {rh['total_trades']}")
         rh_net = rh["short_term_net"]
+        lines.append(f"> Gains:   {_d(rh['short_term_gains'])} *({rh['win_count']} wins)*")
+        lines.append(f"> Losses:  {_d(rh['short_term_losses'])} *({rh['loss_count']} losses)*")
+        lines.append(f"> **Net:   {_d(rh_net)} {_net_emoji(rh_net)}**")
+        lines.append(f"*{rh['total_trades']} total trades*")
 
-    lines.append("")
-
-    # ── Combined ─────────────────────────────────────────────────────────────
+    # ── Combined ──────────────────────────────────────────────────────────────
     combined = alpaca_net + rh_net
-    lines.append(f"**Combined Net Realized: {_d(combined)}**")
-    lines.append("⚠️ Estimates only — verify with a tax professional.")
-    lines.append("")
-    lines.append(_ct_timestamp())
+    lines += [
+        "",
+        f"**💰 Combined Net Realized: {_d(combined)} {_net_emoji(combined)}**",
+        "⚠️ Estimates only — consult a tax professional.",
+        "",
+        _ct_timestamp(),
+    ]
 
     await _edit_original(token, "\n".join(lines))
 
