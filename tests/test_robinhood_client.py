@@ -132,17 +132,17 @@ async def test_execute_buy_places_market_order():
                return_value={"cash": "10000.00"}), \
          patch("robin_stocks.robinhood.get_latest_price",
                return_value=["500.00"]), \
-         patch("robin_stocks.robinhood.order_buy_market",
+         patch("robin_stocks.robinhood.order_buy_fractional_by_quantity",
                return_value={"id": "rh-order-1"}) as mock_buy:
         mock_settings.rh_enabled = True
         mock_settings.rh_leverage_factor = 0.3
         result = await client.execute(TradingAction.BUY, "SPY")
 
-    # qty = floor(10000 * 0.3 / 500) = floor(6.0) = 6
-    mock_buy.assert_called_once_with("SPY", 6)
+    # qty = round(10000 * 0.3 / 500, 6) = 6.0
+    mock_buy.assert_called_once_with("SPY", 6.0)
     assert result["status"] == "ok"
     assert result["side"] == "buy"
-    assert result["qty"] == 6
+    assert result["qty"] == 6.0
 
 
 # ── execute() — CLOSE_LONG / SELL / STOP_LOSS ─────────────────────────────────
@@ -161,12 +161,12 @@ async def test_execute_close_long_sells_full_position():
                return_value=[mock_position]), \
          patch("robin_stocks.robinhood.get_instrument_by_url",
                return_value=mock_instrument), \
-         patch("robin_stocks.robinhood.order_sell_market",
+         patch("robin_stocks.robinhood.order_sell_fractional_by_quantity",
                return_value={"id": "rh-close-1"}) as mock_sell:
         mock_settings.rh_enabled = True
         result = await client.execute(TradingAction.CLOSE_LONG, "SPY")
 
-    mock_sell.assert_called_once_with("SPY", 5)
+    mock_sell.assert_called_once_with("SPY", 5.0)
     assert result["status"] == "ok"
     assert result["side"] == "sell"
 

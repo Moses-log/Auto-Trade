@@ -313,31 +313,32 @@ async def webhook(request: Request):
             extra={"ticker": payload.ticker, "action": payload.action, "result": result},
         )
 
-        asyncio.create_task(
-            notify_trade(
-                ticker=payload.ticker,
-                action=payload.action.value.upper(),
-                result=result,
-                alert_price=payload.price,
-                avg_entry_price=avg_entry_price,
-            )
+        await notify_trade(
+            ticker=payload.ticker,
+            action=payload.action.value.upper(),
+            result=result,
+            alert_price=payload.price,
+            avg_entry_price=avg_entry_price,
         )
 
         rh = result.get("robinhood", {})
+        action_str = payload.action.upper()
         if rh.get("status") == "ok":
             qty_info = f" — {rh['qty']} shares" if rh.get("qty") else ""
-            await notify_robinhood(
-                f"✅ {payload.action.upper()} {payload.ticker}{qty_info}"
-            )
+            await notify_robinhood(f"✅ {action_str} {payload.ticker}{qty_info}")
         elif rh.get("status") == "failed":
             reason = rh.get("reason", "unknown")
             await notify_robinhood(
-                f"❌ Robinhood {payload.action.upper()} {payload.ticker} FAILED: {reason}"
+                f"❌ Robinhood {action_str} {payload.ticker} FAILED: {reason}"
             )
             if reason == "session expired":
                 await notify_rh_session(
                     "⚠️ Robinhood session expired — POST /robinhood-auth to re-authenticate"
                 )
+        elif rh.get("status") == "skipped" and rh.get("reason") == "session unavailable":
+            await notify_robinhood(
+                f"⚠️ Robinhood {action_str} {payload.ticker} skipped — session unavailable"
+            )
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,

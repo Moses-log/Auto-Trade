@@ -112,8 +112,7 @@ async def notify_rh_session(message: str) -> None:
     if not url:
         return
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(url, json={"content": message[:2000]})
+        await _client.post(url, json={"content": message[:2000]}, timeout=5)
     except Exception as exc:
         log.warning("Robinhood session notification failed: %s", exc)
 
@@ -126,7 +125,6 @@ async def notify_robinhood(message: str) -> None:
     if not url:
         return
     try:
-        async with httpx.AsyncClient(timeout=5) as client:
-            await client.post(url, json={"content": message[:2000]})
+        await _client.post(url, json={"content": message[:2000]}, timeout=5)
     except Exception as exc:
         log.warning("Robinhood Discord notification failed: %s", exc)
