@@ -63,21 +63,49 @@ COMMANDS = [
         "description": "Trigger a P&L report to Discord",
         "options": [
             {
-                "name": "type",
-                "description": "Report type",
-                "type": 3,
-                "required": True,
-                "choices": [
-                    {"name": "Daily", "value": "daily"},
-                    {"name": "Weekly", "value": "weekly"},
-                    {"name": "Monthly", "value": "monthly"},
-                    {"name": "Year to Date", "value": "ytd"},
-                    {"name": "1 Year", "value": "1year"},
-                    {"name": "All Time", "value": "alltime"},
-                    {"name": "Daily & Weekly", "value": "both"},
-                    {"name": "Investor Breakdown", "value": "investors"},
+                "type": 1,
+                "name": "alpaca",
+                "description": "Alpaca account P&L report",
+                "options": [
+                    {
+                        "name": "type",
+                        "description": "Report period",
+                        "type": 3,
+                        "required": True,
+                        "choices": [
+                            {"name": "Daily", "value": "daily"},
+                            {"name": "Weekly", "value": "weekly"},
+                            {"name": "Monthly", "value": "monthly"},
+                            {"name": "Year to Date", "value": "ytd"},
+                            {"name": "1 Year", "value": "1year"},
+                            {"name": "All Time", "value": "alltime"},
+                            {"name": "Daily & Weekly", "value": "both"},
+                            {"name": "Investor Breakdown", "value": "investors"},
+                        ],
+                    }
                 ],
-            }
+            },
+            {
+                "type": 1,
+                "name": "robinhood",
+                "description": "Robinhood Agentic account P&L report",
+                "options": [
+                    {
+                        "name": "type",
+                        "description": "Report period",
+                        "type": 3,
+                        "required": True,
+                        "choices": [
+                            {"name": "Daily", "value": "daily"},
+                            {"name": "Weekly", "value": "weekly"},
+                            {"name": "Monthly", "value": "monthly"},
+                            {"name": "Year to Date", "value": "ytd"},
+                            {"name": "1 Year", "value": "1year"},
+                            {"name": "All Time", "value": "alltime"},
+                        ],
+                    }
+                ],
+            },
         ],
     },
 ]
