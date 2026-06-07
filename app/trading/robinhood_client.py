@@ -150,7 +150,7 @@ class RobinhoodClient:
 
     def _get_buying_power(self) -> float:
         profile = r.load_account_profile()
-        bp = profile.get("buying_power") or profile.get("cash") or profile.get("portfolio_cash") or "0"
+        bp = profile.get("cash") or profile.get("portfolio_cash") or "0"
         return float(bp)
 
     def _get_latest_price(self, ticker: str) -> float:
@@ -160,9 +160,11 @@ class RobinhoodClient:
         return float(prices[0])
 
     def _place_market_buy(self, ticker: str, qty: float) -> dict:
-        result = r.order_buy_fractional_by_quantity(ticker, qty)
+        result = r.order_buy_fractional_by_quantity(ticker, qty) or {}
+        if not result.get("id") and not result.get("cancel"):
+            raise ValueError(f"Robinhood order rejected: {result}")
         log.info("Robinhood BUY placed", extra={"ticker": ticker, "qty": qty})
-        return result or {}
+        return result
 
     def _place_market_sell(self, ticker: str, qty: int) -> dict:
         result = r.order_sell_market(ticker, qty)
