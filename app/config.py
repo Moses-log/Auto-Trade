@@ -58,6 +58,7 @@ class Settings(BaseSettings):
     rh_enabled: bool = True
     rh_discord_webhook_url: Optional[str] = None
     rh_session_webhook_url: Optional[str] = None
+    rh_pnl_webhook_url: Optional[str] = None
     # Set to the account_number of the Robinhood account to trade on.
     # Leave blank to use the default (primary) account.
     rh_account_number: Optional[str] = None

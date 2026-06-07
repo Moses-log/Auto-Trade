@@ -6,7 +6,7 @@ from typing import List, Optional
 
 import pytz
 
-from app.notifications import notify_robinhood
+from app.notifications import notify_rh_pnl
 from app.rh_trade_record import format_rh_record, get_all_trades, get_totals
 
 log = logging.getLogger(__name__)
@@ -103,8 +103,8 @@ async def send_rh_report(period: str) -> None:
         all_wins, all_losses = get_totals()
         label = _period_label(period)
         msg = _format_rh_report(label, period_trades, all_wins, all_losses)
-        await notify_robinhood(msg)
+        await notify_rh_pnl(msg)
         log.info("RH %s P&L report sent (%d trades)", period, len(period_trades))
     except Exception as exc:
         log.error("RH %s P&L report failed: %s", period, exc)
-        await notify_robinhood(f"⚠️ RH {period} P&L report failed: {exc}")
+        await notify_rh_pnl(f"⚠️ RH {period} P&L report failed: {exc}")

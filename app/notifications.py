@@ -118,7 +118,7 @@ async def notify_rh_session(message: str) -> None:
 
 
 async def notify_robinhood(message: str) -> None:
-    """Send a notification to the Robinhood Discord channel.
+    """Send a notification to the Robinhood trades Discord channel.
     Falls back to the main Discord channel if RH_DISCORD_WEBHOOK_URL is not set.
     """
     url = settings.rh_discord_webhook_url or settings.discord_webhook_url
@@ -128,3 +128,16 @@ async def notify_robinhood(message: str) -> None:
         await _client.post(url, json={"content": message[:2000]}, timeout=5)
     except Exception as exc:
         log.warning("Robinhood Discord notification failed: %s", exc)
+
+
+async def notify_rh_pnl(message: str) -> None:
+    """Send a Robinhood P&L report to RH_PNL_WEBHOOK_URL.
+    Falls back to RH_DISCORD_WEBHOOK_URL, then main channel.
+    """
+    url = settings.rh_pnl_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url
+    if not url:
+        return
+    try:
+        await _client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("Robinhood P&L notification failed: %s", exc)
