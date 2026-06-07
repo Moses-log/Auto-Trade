@@ -121,6 +121,11 @@ class _RobinhoodAuthRequest(BaseModel):
     sms_code: str
 
 
+class _PickleUploadRequest(BaseModel):
+    secret: str
+    pickle_b64: str
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
@@ -188,6 +193,32 @@ async def robinhood_auth(body: _RobinhoodAuthRequest):
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"detail": "Invalid SMS code or credentials."},
         )
+
+
+@app.post("/robinhood-upload-pickle", tags=["trading"])
+async def robinhood_upload_pickle(body: _PickleUploadRequest):
+    """Upload a locally-generated Robinhood pickle file to activate the session."""
+    import base64
+    try:
+        verify_webhook_secret(body.secret)
+    except Exception:
+        return JSONResponse(status_code=status.HTTP_401_UNAUTHORIZED, content={"error": "Unauthorized."})
+    try:
+        data = base64.b64decode(body.pickle_b64)
+        os.makedirs("/data", exist_ok=True)
+        os.makedirs(rh_client._TOKENS_DIR, exist_ok=True)
+        with open("/data/robinhood.pickle", "wb") as f:
+            f.write(data)
+        with open(rh_client._PICKLE_PATH, "wb") as f:
+            f.write(data)
+        if rh_client.login_from_pickle():
+            await notify_robinhood("Robinhood session restored via pickle upload ✅")
+            log.info("Robinhood session activated via pickle upload")
+            return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "authenticated"})
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": "Pickle uploaded but session invalid — regenerate it."})
+    except Exception as exc:
+        log.warning("Pickle upload failed: %s", exc)
+        return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})
 
 
 @app.post("/webhook", tags=["trading"])
