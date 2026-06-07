@@ -130,11 +130,15 @@ async def notify_rh_trade(
             await notify_robinhood(message)
             return
 
-        # "no position to close" — no P&L to show
+        # "no position to close" or "short not supported" — no P&L to show
         if rh_result.get("note"):
-            await notify_robinhood(
-                f"ℹ️ RH {action.upper()} {ticker}: {rh_result['note']}"
-            )
+            note = rh_result["note"]
+            closed_long = rh_result.get("closed_long")
+            if closed_long is True:
+                note += " ✅ Long position closed."
+            elif closed_long is False:
+                note += " ℹ️ No long position found."
+            await notify_robinhood(f"ℹ️ RH {action.upper()} {ticker}: {note}")
             return
 
         side = rh_result.get("side", "buy")

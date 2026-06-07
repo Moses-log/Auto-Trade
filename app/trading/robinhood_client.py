@@ -131,7 +131,8 @@ class RobinhoodClient:
             if _is_queued(order):
                 return {"status": "ok", "side": "buy", "qty": qty, "price_est": price_est, "position_qty": qty, "order_id": order.get("id"), "queued": True}
             fill_price = float(order.get("average_price") or 0) or price_est
-            return {"status": "ok", "side": "buy", "qty": qty, "fill_price": fill_price, "position_qty": qty, "order_id": order.get("id")}
+            position_qty = self._get_position_qty(ticker) or qty
+            return {"status": "ok", "side": "buy", "qty": qty, "fill_price": fill_price, "position_qty": position_qty, "order_id": order.get("id")}
 
         elif action == TradingAction.REVERSE_TO_LONG:
             self._close_position(ticker)  # close short if any (no-op on standard accounts)
@@ -140,7 +141,8 @@ class RobinhoodClient:
             if _is_queued(order):
                 return {"status": "ok", "side": "buy", "qty": qty, "price_est": price_est, "position_qty": qty, "order_id": order.get("id"), "queued": True}
             fill_price = float(order.get("average_price") or 0) or price_est
-            return {"status": "ok", "side": "buy", "qty": qty, "fill_price": fill_price, "position_qty": qty, "order_id": order.get("id")}
+            position_qty = self._get_position_qty(ticker) or qty
+            return {"status": "ok", "side": "buy", "qty": qty, "fill_price": fill_price, "position_qty": position_qty, "order_id": order.get("id")}
 
         elif action in (TradingAction.SELL, TradingAction.CLOSE_LONG,
                         TradingAction.REMOVE_LEVERAGE, TradingAction.STOP_LOSS):
@@ -235,6 +237,16 @@ class RobinhoodClient:
             if instrument.get("symbol", "").upper() == ticker.upper():
                 return pos
         return None
+
+    def _get_position_qty(self, ticker: str) -> Optional[float]:
+        """Return total quantity held for ticker, or None if no position / error."""
+        try:
+            pos = self._get_position(ticker)
+            if pos is None:
+                return None
+            return float(pos.get("quantity", 0)) or None
+        except Exception:
+            return None
 
     def _close_position(self, ticker: str) -> Optional[dict]:
         pos = self._get_position(ticker)

@@ -12,6 +12,7 @@ from datetime import datetime
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
 from app.rh_pnl import send_rh_report
@@ -86,11 +87,11 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _robinhood_keep_alive,
-        CronTrigger(day="*/3", hour=3, minute=0, timezone=ET),
+        IntervalTrigger(days=3, timezone=ET),
         id="robinhood_keep_alive",
         replace_existing=True,
     )
-    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), robinhood_keep_alive (every 3 days 03:00 ET)")
+    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), robinhood_keep_alive (every 72 h)")
 
 
 def reschedule_pending_orders() -> None:

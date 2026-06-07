@@ -51,7 +51,9 @@ def _period_label(period: str) -> str:
         return f"{now.strftime('%A %B')} {now.day}, {now.year}"
     if period == "weekly":
         monday = now - timedelta(days=now.weekday())
-        return f"Week of {monday.strftime('%b')} {monday.day}–{now.day}, {now.year}"
+        if monday.month == now.month:
+            return f"Week of {monday.strftime('%b')} {monday.day}–{now.day}, {now.year}"
+        return f"Week of {monday.strftime('%b')} {monday.day} – {now.strftime('%b')} {now.day}, {now.year}"
     if period == "monthly":
         return f"Month of {now.strftime('%B %Y')}"
     if period == "ytd":
