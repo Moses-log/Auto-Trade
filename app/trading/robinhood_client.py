@@ -20,6 +20,7 @@ from typing import Optional
 import robin_stocks.robinhood as r
 
 from app.config import settings
+from app.trading import alpaca_client as ac
 
 log = logging.getLogger(__name__)
 
@@ -125,10 +126,16 @@ class RobinhoodClient:
     def _execute_sync(self, action, ticker: str) -> dict:
         from app.models import TradingAction
 
+        # Whether the order will queue for the next session rather than fill now.
+        # robin_stocks always returns state="unconfirmed" on submission regardless
+        # of market hours, so that field can't tell us this — Alpaca's market
+        # clock can, since both brokers trade the same US equities session.
+        queued = not ac.is_market_open()
+
         if action in (TradingAction.BUY, TradingAction.ADD_LEVERAGE):
             qty, price_est = self._calculate_buy_qty(ticker)
             order = self._place_market_buy(ticker, qty)
-            if _is_queued(order):
+            if queued:
                 return {"status": "ok", "side": "buy", "qty": qty, "price_est": price_est, "position_qty": qty, "order_id": order.get("id"), "queued": True}
             fill_price = float(order.get("average_price") or 0) or price_est
             position_qty = self._get_position_qty(ticker) or qty
@@ -138,7 +145,7 @@ class RobinhoodClient:
             self._close_position(ticker)  # close short if any (no-op on standard accounts)
             qty, price_est = self._calculate_buy_qty(ticker)
             order = self._place_market_buy(ticker, qty)
-            if _is_queued(order):
+            if queued:
                 return {"status": "ok", "side": "buy", "qty": qty, "price_est": price_est, "position_qty": qty, "order_id": order.get("id"), "queued": True}
             fill_price = float(order.get("average_price") or 0) or price_est
             position_qty = self._get_position_qty(ticker) or qty
@@ -156,7 +163,7 @@ class RobinhoodClient:
             avg_buy_price = float(avg_buy_price_raw) if avg_buy_price_raw else None
             price_est = self._get_latest_price(ticker)
             order = self._place_market_sell(ticker, qty)
-            if _is_queued(order):
+            if queued:
                 return {"status": "ok", "side": "sell", "qty": qty, "price_est": price_est, "avg_buy_price": avg_buy_price, "position_qty": 0.0, "order_id": order.get("id"), "queued": True}
             fill_price = float(order.get("average_price") or 0) or price_est
             return {
@@ -337,10 +344,6 @@ class RobinhoodClient:
 def _is_auth_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(k in msg for k in ("token", "unauthorized", "401", "login", "unauthenticated"))
-
-
-def _is_queued(order: dict) -> bool:
-    return order.get("state") in ("queued", "unconfirmed")
 
 
 # Module-level singleton — import this in order_logic.py and main.py
