@@ -33,19 +33,24 @@ def save_pending_order(
     alert_price: Optional[float],
     avg_entry_price: Optional[float],
     run_at: str,
+    broker: str = "alpaca",
+    **extra,
 ) -> None:
     with _lock:
         orders = _load()
-        orders.append({
+        entry = {
             "order_id": order_id,
             "ticker": ticker,
             "action": action,
             "alert_price": alert_price,
             "avg_entry_price": avg_entry_price,
             "run_at": run_at,
-        })
+            "broker": broker,
+        }
+        entry.update(extra)
+        orders.append(entry)
         _save(orders)
-    log.info("Saved pending order %s to disk", order_id)
+    log.info("Saved pending %s order %s to disk", broker, order_id)
 
 
 def remove_pending_order(order_id: str) -> None:

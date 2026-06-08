@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, time as dtime
 from typing import Optional
 
 import pytz
@@ -11,6 +12,7 @@ from app.rh_trade_record import format_rh_record, record_rh_trade
 
 log = logging.getLogger(__name__)
 CT = pytz.timezone("America/Chicago")
+_ET = pytz.timezone("America/New_York")
 
 _BUY_ACTIONS = {"BUY", "BASE_ENTRY", "ADD_LEVERAGE", "REVERSE_TO_LONG"}
 
@@ -121,13 +123,25 @@ async def notify_rh_trade(
 
         # Order accepted but markets are closed — queued for next open
         if rh_result.get("queued"):
+            qty = rh_result.get("qty")
             message = _format_rh_queued_message(
                 ticker=ticker,
                 action=action,
-                qty=rh_result.get("qty"),
+                qty=qty,
                 price_est=rh_result.get("price_est") or alert_price,
             )
             await notify_robinhood(message)
+            order_id = rh_result.get("order_id")
+            if order_id:
+                await _schedule_rh_pending_followup(
+                    order_id=order_id,
+                    ticker=ticker,
+                    action=action,
+                    side=rh_result.get("side", "buy"),
+                    qty=qty,
+                    alert_price=alert_price,
+                    avg_buy_price=rh_result.get("avg_buy_price"),
+                )
             return
 
         # "no position to close" or "short not supported" — no P&L to show
@@ -172,3 +186,95 @@ async def notify_rh_trade(
 
     except Exception as exc:
         log.warning("RH trade notification failed: %s", exc)
+
+
+async def notify_rh_pending_fill(
+    order_id: str,
+    ticker: str,
+    action: str,
+    side: str,
+    qty: Optional[float],
+    alert_price: Optional[float],
+    avg_buy_price: Optional[float],
+) -> None:
+    """Called at next market open to resolve fill details for a queued RH order."""
+    import robin_stocks.robinhood as r
+
+    fill_price: Optional[float] = None
+    loop = asyncio.get_running_loop()
+
+    for attempt in range(12):
+        try:
+            info = await loop.run_in_executor(None, r.get_stock_order_info, order_id)
+            if info and info.get("state") == "filled" and info.get("average_price"):
+                fill_price = float(info["average_price"])
+                break
+        except Exception as exc:
+            log.warning("Error polling RH order %s (attempt %d): %s", order_id, attempt, exc)
+        if attempt < 11:
+            await asyncio.sleep(10)
+
+    from app.pending_orders import remove_pending_order
+    remove_pending_order(order_id)
+
+    if fill_price is None:
+        log.warning("RH queued order %s still unfilled after 2 minutes at market open", order_id)
+        await notify_robinhood(
+            f"⚠️ RH queued order for {ticker} ({action.upper()}) did not fill at open — check Robinhood"
+        )
+        return
+
+    dollar_pnl: Optional[float] = None
+    pct_pnl: Optional[float] = None
+    record_str: Optional[str] = None
+
+    if side == "sell" and avg_buy_price and qty and avg_buy_price != 0:
+        dollar_pnl = (fill_price - avg_buy_price) * qty
+        pct_pnl = (fill_price - avg_buy_price) / avg_buy_price * 100
+        wins, losses = await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
+        record_str = format_rh_record(wins, losses)
+
+    position_qty = qty if side == "buy" else 0.0
+    message = _format_rh_message(
+        ticker=ticker,
+        action=f"{action} (filled at open)",
+        fill_price=fill_price,
+        alert_price=alert_price,
+        qty=qty,
+        position_qty=position_qty or 0.0,
+        dollar_pnl=dollar_pnl,
+        pct_pnl=pct_pnl,
+        record_str=record_str,
+    )
+    await notify_robinhood(message)
+
+
+async def _schedule_rh_pending_followup(
+    order_id: str,
+    ticker: str,
+    action: str,
+    side: str,
+    qty: Optional[float],
+    alert_price: Optional[float],
+    avg_buy_price: Optional[float],
+) -> None:
+    from app.scheduler import scheduler
+    from app.pending_orders import save_pending_order
+    from app.trading.alpaca_client import get_next_trading_day
+
+    next_day = get_next_trading_day()
+    run_dt = _ET.localize(datetime.combine(next_day, dtime(9, 31)))
+
+    scheduler.add_job(
+        notify_rh_pending_fill,
+        "date",
+        run_date=run_dt,
+        args=[order_id, ticker, action, side, qty, alert_price, avg_buy_price],
+        id=f"pending_{order_id}",
+        replace_existing=True,
+    )
+    save_pending_order(
+        order_id, ticker, action, alert_price, None, run_dt.isoformat(),
+        broker="rh", side=side, qty=qty, avg_buy_price=avg_buy_price,
+    )
+    log.info("RH queued order %s scheduled for resolution at %s", order_id, run_dt)

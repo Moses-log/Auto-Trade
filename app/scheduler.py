@@ -122,6 +122,7 @@ def setup_jobs() -> None:
 def reschedule_pending_orders() -> None:
     from app.pending_orders import load_pending_orders
     from app.trade_notifier import notify_pending_order_fill
+    from app.rh_trade_notifier import notify_rh_pending_fill
 
     orders = load_pending_orders()
     if not orders:
@@ -130,6 +131,7 @@ def reschedule_pending_orders() -> None:
     now = datetime.now(ET)
     for entry in orders:
         order_id = entry["order_id"]
+        broker = entry.get("broker", "alpaca")
         try:
             run_dt = datetime.fromisoformat(entry["run_at"])
             if run_dt.tzinfo is None:
@@ -139,13 +141,25 @@ def reschedule_pending_orders() -> None:
 
         effective_run = run_dt if run_dt > now else now
 
-        scheduler.add_job(
-            notify_pending_order_fill,
-            "date",
-            run_date=effective_run,
-            args=[order_id, entry["ticker"], entry["action"],
-                  entry.get("alert_price"), entry.get("avg_entry_price")],
-            id=f"pending_{order_id}",
-            replace_existing=True,
-        )
-        log.info("Rescheduled pending order %s for %s", order_id, effective_run)
+        if broker == "rh":
+            scheduler.add_job(
+                notify_rh_pending_fill,
+                "date",
+                run_date=effective_run,
+                args=[order_id, entry["ticker"], entry["action"],
+                      entry.get("side", "buy"), entry.get("qty"),
+                      entry.get("alert_price"), entry.get("avg_buy_price")],
+                id=f"pending_{order_id}",
+                replace_existing=True,
+            )
+        else:
+            scheduler.add_job(
+                notify_pending_order_fill,
+                "date",
+                run_date=effective_run,
+                args=[order_id, entry["ticker"], entry["action"],
+                      entry.get("alert_price"), entry.get("avg_entry_price")],
+                id=f"pending_{order_id}",
+                replace_existing=True,
+            )
+        log.info("Rescheduled pending %s order %s for %s", broker, order_id, effective_run)

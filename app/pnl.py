@@ -493,7 +493,7 @@ async def send_alltime_report() -> None:
 async def check_period_reports() -> None:
     """Fire monthly/yearly reports when today is the last trading day of the period.
 
-    Called Mon-Fri at 4:05 PM ET by APScheduler. Uses get_next_trading_day()
+    Called Mon-Fri at 4:00 PM ET by APScheduler. Uses get_next_trading_day()
     to detect month/year boundaries correctly, including market holidays.
     """
     today = datetime.now(ET).date()
