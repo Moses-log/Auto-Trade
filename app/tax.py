@@ -15,8 +15,6 @@ from __future__ import annotations
 import logging
 from collections import defaultdict, deque
 from datetime import datetime, timezone
-from typing import Optional
-
 import pytz
 
 log = logging.getLogger(__name__)

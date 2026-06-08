@@ -80,11 +80,14 @@ async def _quarterly_tax_report() -> None:
     from app.tax import send_alpaca_tax_report, send_rh_tax_report
     now = datetime.now(ET)
     year = now.year - 1 if now.month == 1 else now.year
-    await asyncio.gather(
+    results = await asyncio.gather(
         send_alpaca_tax_report(year),
         send_rh_tax_report(year),
         return_exceptions=True,
     )
+    for name, result in zip(("alpaca_tax", "rh_tax"), results):
+        if isinstance(result, Exception):
+            log.error("Quarterly tax report failed for %s: %s", name, result)
 
 
 def setup_jobs() -> None:
