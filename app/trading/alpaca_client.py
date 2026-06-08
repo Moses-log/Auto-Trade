@@ -285,6 +285,22 @@ def get_order(order_id: str) -> Optional[Order]:
         return None
 
 
+def is_market_open() -> bool:
+    """Return whether US equities markets are open right now, via Alpaca's clock.
+
+    Used as a broker-agnostic signal for Robinhood order classification, since
+    robin_stocks returns the same "unconfirmed" acknowledgment state for orders
+    regardless of whether they'll fill immediately or queue for the next session.
+    Defaults to True on error — most orders are placed during market hours, so
+    this minimises the more common misclassification.
+    """
+    try:
+        return bool(get_client().get_clock().is_open)
+    except Exception as exc:
+        log.warning("Could not fetch market clock — assuming market is open: %s", exc)
+        return True
+
+
 def get_next_trading_day() -> date:
     """Return the next trading day using Alpaca's market calendar, with a weekday fallback."""
     today = date.today()

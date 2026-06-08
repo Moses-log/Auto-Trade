@@ -146,6 +146,66 @@ async def test_execute_buy_places_market_order():
     assert result["qty"] == 6.0
 
 
+# ── execute() — order classification (queued vs. filled) ─────────────────────
+#
+# robin_stocks always returns state="unconfirmed" on submission, whether or not
+# the market is open, so that field can't tell us if the order will fill now or
+# queue for the next session. The classification must come from Alpaca's market
+# clock instead — these tests pin down both branches of that decision.
+
+@pytest.mark.asyncio
+async def test_execute_buy_reports_immediate_fill_when_market_open():
+    from app.trading.robinhood_client import RobinhoodClient
+    client = RobinhoodClient()
+    client.available = True
+
+    with patch("app.trading.robinhood_client.settings") as mock_settings, \
+         patch("app.trading.robinhood_client.ac.is_market_open", return_value=True), \
+         patch("robin_stocks.robinhood.load_account_profile",
+               return_value={"cash": "10000.00"}), \
+         patch("robin_stocks.robinhood.get_latest_price",
+               return_value=["500.00"]), \
+         patch("robin_stocks.robinhood.get_open_stock_positions",
+               return_value=[{"instrument": "url", "quantity": "6.0"}]), \
+         patch("robin_stocks.robinhood.get_instrument_by_url",
+               return_value={"symbol": "SPY"}), \
+         patch("robin_stocks.robinhood.order_buy_fractional_by_quantity",
+               return_value={"id": "rh-order-1", "state": "unconfirmed", "average_price": "501.00"}):
+        mock_settings.rh_enabled = True
+        mock_settings.rh_leverage_factor = 0.3
+        mock_settings.rh_account_number = None
+        result = await client.execute(TradingAction.BUY, "SPY")
+
+    assert result["status"] == "ok"
+    assert "queued" not in result
+    assert result["fill_price"] == 501.00
+
+
+@pytest.mark.asyncio
+async def test_execute_buy_reports_queued_when_market_closed():
+    from app.trading.robinhood_client import RobinhoodClient
+    client = RobinhoodClient()
+    client.available = True
+
+    with patch("app.trading.robinhood_client.settings") as mock_settings, \
+         patch("app.trading.robinhood_client.ac.is_market_open", return_value=False), \
+         patch("robin_stocks.robinhood.load_account_profile",
+               return_value={"cash": "10000.00"}), \
+         patch("robin_stocks.robinhood.get_latest_price",
+               return_value=["500.00"]), \
+         patch("robin_stocks.robinhood.order_buy_fractional_by_quantity",
+               return_value={"id": "rh-order-1", "state": "unconfirmed"}):
+        mock_settings.rh_enabled = True
+        mock_settings.rh_leverage_factor = 0.3
+        mock_settings.rh_account_number = None
+        result = await client.execute(TradingAction.BUY, "SPY")
+
+    assert result["status"] == "ok"
+    assert result["queued"] is True
+    assert result["price_est"] == 500.00
+    assert "fill_price" not in result
+
+
 # ── execute() — CLOSE_LONG / SELL / STOP_LOSS ─────────────────────────────────
 
 @pytest.mark.asyncio
