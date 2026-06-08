@@ -67,6 +67,11 @@ class Settings(BaseSettings):
     alpaca_tax_webhook_url: Optional[str] = None
     rh_tax_webhook_url: Optional[str] = None
 
+    # ── Claude Autopilot Portfolio ────────────────────────────────────────────
+    # Fraction of RH buying power to use for each Claude portfolio trade.
+    claude_leverage_factor: float = 0.05
+    claude_portfolio_webhook_url: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 

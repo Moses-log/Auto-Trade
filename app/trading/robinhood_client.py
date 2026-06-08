@@ -190,15 +190,18 @@ class RobinhoodClient:
 
     # ── Private helpers ─────────────────────────────────────────────────────────
 
-    def _calculate_buy_qty(self, ticker: str) -> tuple[float, float]:
+    def _calculate_buy_qty(
+        self, ticker: str, fraction: Optional[float] = None
+    ) -> tuple[float, float]:
         """Returns (qty, price_used) so callers can use price as fill_price estimate."""
         buying_power = self._get_buying_power()
         price        = self._get_latest_price(ticker)
-        qty          = round((buying_power * settings.rh_leverage_factor) / price, 6)
+        f            = fraction if fraction is not None else settings.rh_leverage_factor
+        qty          = round((buying_power * f) / price, 6)
         if qty <= 0:
             raise ValueError(
                 f"Robinhood buy qty is 0 — buying_power={buying_power}, "
-                f"price={price}, rh_leverage_factor={settings.rh_leverage_factor}"
+                f"price={price}, fraction={f}"
             )
         return qty, price
 
@@ -339,6 +342,61 @@ class RobinhoodClient:
         if qty <= 0:
             return None
         return self._place_market_sell(ticker, qty)
+
+    async def execute_for_claude(self, action: str, ticker: str) -> dict:
+        """Execute a Claude portfolio trade using CLAUDE_LEVERAGE_FACTOR sizing. Never raises."""
+        if not settings.rh_enabled:
+            return {"status": "skipped", "reason": "RH_ENABLED=false"}
+        if not self.available:
+            return {"status": "skipped", "reason": "session unavailable"}
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(
+                None, self._execute_claude_sync, action.upper(), ticker.upper()
+            )
+        except Exception as exc:
+            if _is_auth_error(exc):
+                self.available = False
+                log.error("Robinhood auth error (Claude trade) — marking unavailable: %s", exc)
+                return {"status": "failed", "reason": "session expired"}
+            log.error("Claude portfolio trade error %s %s: %s", action, ticker, exc)
+            return {"status": "failed", "reason": str(exc)}
+
+    def _execute_claude_sync(self, action: str, ticker: str) -> dict:
+        queued = not ac.is_market_open()
+        fraction = settings.claude_leverage_factor
+
+        if action == "BUY":
+            qty, price_est = self._calculate_buy_qty(ticker, fraction=fraction)
+            order = self._place_market_buy(ticker, qty)
+            if queued:
+                return {"status": "ok", "side": "buy", "qty": qty, "price_est": price_est,
+                        "position_qty": qty, "order_id": order.get("id"), "queued": True}
+            fill_price = float(order.get("average_price") or 0) or price_est
+            position_qty = self._get_position_qty(ticker) or qty
+            return {"status": "ok", "side": "buy", "qty": qty, "fill_price": fill_price,
+                    "position_qty": position_qty, "order_id": order.get("id")}
+
+        elif action == "SELL":
+            pos = self._get_position(ticker)
+            if pos is None:
+                return {"status": "ok", "note": "no position to close"}
+            qty = float(pos.get("quantity", 0))
+            if qty <= 0:
+                return {"status": "ok", "note": "no position to close"}
+            avg_buy_price_raw = pos.get("average_buy_price")
+            avg_buy_price = float(avg_buy_price_raw) if avg_buy_price_raw else None
+            price_est = self._get_latest_price(ticker)
+            order = self._place_market_sell(ticker, qty)
+            if queued:
+                return {"status": "ok", "side": "sell", "qty": qty, "price_est": price_est,
+                        "avg_buy_price": avg_buy_price, "position_qty": 0.0,
+                        "order_id": order.get("id"), "queued": True}
+            fill_price = float(order.get("average_price") or 0) or price_est
+            return {"status": "ok", "side": "sell", "qty": qty, "fill_price": fill_price,
+                    "avg_buy_price": avg_buy_price, "position_qty": 0.0, "order_id": order.get("id")}
+
+        return {"status": "skipped", "reason": f"unknown action: {action}"}
 
 
 def _is_auth_error(exc: Exception) -> bool:

@@ -168,6 +168,23 @@ async def notify_alpaca_tax(message: str) -> None:
         log.warning("Alpaca tax notification failed: %s", exc)
 
 
+async def notify_claude_portfolio(message: str) -> None:
+    """Send a Claude portfolio trade notification to CLAUDE_PORTFOLIO_WEBHOOK_URL.
+    Falls back to RH channel, then main channel.
+    """
+    url = (
+        settings.claude_portfolio_webhook_url
+        or settings.rh_discord_webhook_url
+        or settings.discord_webhook_url
+    )
+    if not url:
+        return
+    try:
+        await _client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("Claude portfolio notification failed: %s", exc)
+
+
 async def notify_rh_tax(message: str) -> None:
     """Send a Robinhood tax summary to RH_TAX_WEBHOOK_URL, falls back to RH channel."""
     url = settings.rh_tax_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url

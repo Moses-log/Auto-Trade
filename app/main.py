@@ -134,6 +134,13 @@ class _PickleUploadRequest(BaseModel):
     pickle_b64: str
 
 
+class _ClaudeSignalRequest(BaseModel):
+    secret: str
+    ticker: str
+    action: str  # "BUY" or "SELL"
+    tweet_url: Optional[str] = None
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.get("/health", tags=["ops"])
@@ -288,6 +295,125 @@ async def robinhood_upload_pickle(body: _PickleUploadRequest):
     except Exception as exc:
         log.warning("Pickle upload failed: %s", exc)
         return JSONResponse(status_code=status.HTTP_400_BAD_REQUEST, content={"detail": str(exc)})
+
+
+@app.post("/claude-signal", tags=["trading"])
+async def claude_signal(body: _ClaudeSignalRequest):
+    """
+    Manually trigger a Claude portfolio trade from @theaiportfolios Twitter signal.
+
+    Body: {"secret": "...", "ticker": "MSFT", "action": "BUY"|"SELL", "tweet_url": "..."}
+
+    Executes on Robinhood using CLAUDE_LEVERAGE_FACTOR sizing (separate from Kimi trades),
+    records in claude_portfolio.json, and notifies CLAUDE_PORTFOLIO_WEBHOOK_URL.
+    """
+    try:
+        verify_webhook_secret(body.secret)
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            content={"error": "Unauthorized."},
+        )
+
+    action = body.action.upper()
+    ticker = body.ticker.upper()
+    if action not in ("BUY", "SELL"):
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"error": "action must be BUY or SELL"},
+        )
+
+    rh_result = await rh_client.execute_for_claude(action, ticker)
+
+    from app.claude_portfolio import open_position, close_position, get_record
+    from app.notifications import notify_claude_portfolio
+    import pytz
+
+    CT = pytz.timezone("America/Chicago")
+    now = datetime.now(CT)
+    hour = int(now.strftime("%I"))
+    time_str = f"{hour}:{now.strftime('%M %p')} {now.strftime('%Z')} — {now.strftime('%B')} {now.day}, {now.year}"
+
+    rh_status = rh_result.get("status")
+
+    if rh_status == "failed":
+        reason = rh_result.get("reason", "unknown")
+        await notify_claude_portfolio(f"❌ 🤖 CLAUDE {action} {ticker} FAILED: {reason}")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content={"status": "failed", "reason": reason},
+        )
+
+    if rh_status == "skipped":
+        log.info("Claude signal skipped: %s", rh_result.get("reason"))
+        return JSONResponse(status_code=status.HTTP_200_OK, content=rh_result)
+
+    note = rh_result.get("note")
+    if note:
+        await notify_claude_portfolio(f"ℹ️ 🤖 CLAUDE {action} {ticker}: {note}")
+        return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ok", "note": note})
+
+    queued = rh_result.get("queued", False)
+    qty: float = rh_result.get("qty", 0)
+
+    if action == "BUY":
+        fill_price = rh_result.get("fill_price") or rh_result.get("price_est")
+        if fill_price:
+            open_position(ticker, qty, fill_price, body.tweet_url)
+
+        if queued:
+            price_str = f"≈${fill_price:,.2f}" if fill_price else "unknown"
+            lines = [
+                f"⏳ 🤖 **CLAUDE BUY — {ticker}**",
+                f"Qty: {qty:g} shares queued for next market open @ {price_str}",
+                f"🕐 {time_str}",
+            ]
+        else:
+            price_str = f"${fill_price:,.2f}" if fill_price else "unknown"
+            lines = [
+                f"🟢 🤖 **CLAUDE BUY — {ticker}**",
+                f"Qty: {qty:g} shares @ {price_str}",
+                f"🕐 {time_str}",
+            ]
+        if body.tweet_url:
+            lines.append(f"📌 {body.tweet_url}")
+        await notify_claude_portfolio("\n".join(lines))
+
+    else:  # SELL
+        fill_price = rh_result.get("fill_price") or rh_result.get("price_est")
+        sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill_price or 0.0, body.tweet_url)
+        wins, losses = get_record()
+        record_str = f"{wins}W - {losses}L"
+
+        if queued:
+            price_str = f"≈${fill_price:,.2f}" if fill_price else "unknown"
+            lines = [
+                f"⏳ 🤖 **CLAUDE SELL — {ticker}**",
+                f"Qty: {qty:g} shares queued for next market open @ {price_str}",
+                f"🕐 {time_str}",
+            ]
+        else:
+            price_str = f"${fill_price:,.2f}" if fill_price else "unknown"
+            lines = [
+                f"🔴 🤖 **CLAUDE SELL — {ticker}**",
+                f"Qty: {qty:g} shares @ {price_str}",
+            ]
+            if dollar_pnl is not None and pct_pnl is not None:
+                if dollar_pnl >= 0:
+                    lines.append(f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN")
+                else:
+                    lines.append(f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS")
+            lines.append(f"Claude Record: {record_str}")
+            lines.append(f"🕐 {time_str}")
+        if body.tweet_url:
+            lines.append(f"📌 {body.tweet_url}")
+        await notify_claude_portfolio("\n".join(lines))
+
+    log.info("Claude signal processed: %s %s (queued=%s)", action, ticker, queued)
+    return JSONResponse(
+        status_code=status.HTTP_200_OK,
+        content={"status": "ok", "result": rh_result},
+    )
 
 
 @app.post("/webhook", tags=["trading"])
