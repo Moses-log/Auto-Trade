@@ -74,8 +74,7 @@ class Settings(BaseSettings):
 
     # ── Claude Portfolio Manager (autonomous monthly rebalancer) ──────────────
     anthropic_api_key: Optional[str] = None
-    claude_manager_webhook_url: Optional[str] = None   # trade signals channel
-    claude_analysis_webhook_url: Optional[str] = None  # monthly analysis channel
+    claude_manager_webhook_url: Optional[str] = None
 
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 

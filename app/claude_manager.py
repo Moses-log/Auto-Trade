@@ -163,11 +163,11 @@ async def run_monthly_rebalance() -> None:
     """
     import asyncio
     from app.trading.robinhood_client import rh_client
-    from app.notifications import notify_claude_manager, notify_claude_analysis
+    from app.notifications import notify_claude_manager
 
     if not settings.anthropic_api_key:
         log.error("ANTHROPIC_API_KEY not set — skipping monthly rebalance")
-        await notify_claude_analysis(
+        await notify_claude_manager(
             "⚠️ **CLAUDE PORTFOLIO REBALANCE SKIPPED**\n"
             "ANTHROPIC_API_KEY is not configured in environment."
         )
@@ -175,13 +175,13 @@ async def run_monthly_rebalance() -> None:
 
     if not rh_client.available:
         log.warning("RH session unavailable — skipping monthly rebalance")
-        await notify_claude_analysis(
+        await notify_claude_manager(
             "⚠️ **CLAUDE PORTFOLIO REBALANCE SKIPPED**\n"
             "Robinhood session is offline."
         )
         return
 
-    await notify_claude_analysis(
+    await notify_claude_manager(
         f"🤖 **CLAUDE PORTFOLIO MANAGER — MONTHLY REBALANCE**\n"
         f"Fetching portfolio and running analysis... {_timestamp()}"
     )
@@ -194,7 +194,7 @@ async def run_monthly_rebalance() -> None:
         buying_power = await rh_client.get_buying_power_async() or 0.0
     except Exception as exc:
         log.error("Failed to fetch RH portfolio data: %s", exc)
-        await notify_claude_analysis(f"❌ **REBALANCE FAILED** — could not fetch portfolio: {exc}")
+        await notify_claude_manager(f"❌ **REBALANCE FAILED** — could not fetch portfolio: {exc}")
         return
 
     holdings_value = sum(
@@ -203,7 +203,7 @@ async def run_monthly_rebalance() -> None:
     portfolio_value = holdings_value + buying_power
 
     if portfolio_value < 1:
-        await notify_claude_analysis("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
+        await notify_claude_manager("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
         return
 
     # ── 2. Enrich holdings with yfinance data ─────────────────────────────────
@@ -243,7 +243,7 @@ async def run_monthly_rebalance() -> None:
         response_text = await loop.run_in_executor(None, _call_claude_sync, prompt)
     except Exception as exc:
         log.error("Claude API call failed: %s", exc)
-        await notify_claude_analysis(f"❌ **REBALANCE FAILED** — Anthropic API error: {exc}")
+        await notify_claude_manager(f"❌ **REBALANCE FAILED** — Anthropic API error: {exc}")
         return
 
     # ── 4. Parse trade block ──────────────────────────────────────────────────
@@ -251,17 +251,17 @@ async def run_monthly_rebalance() -> None:
 
     # Full analysis → analysis channel
     analysis_body = re.sub(r"```json.*?```", "", response_text, flags=re.DOTALL).strip()
-    await notify_claude_analysis(f"📊 **CLAUDE MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}")
+    await notify_claude_manager(f"📊 **CLAUDE MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}")
 
     if trade_block is None:
-        await notify_claude_analysis(
+        await notify_claude_manager(
             "⚠️ Could not parse trade instructions from Claude's response. "
             "No trades executed — review the analysis above manually."
         )
         return
 
     if trade_block.get("no_changes"):
-        await notify_claude_analysis(
+        await notify_claude_manager(
             "✅ **NO CHANGES THIS MONTH**\n"
             "Claude determined the current portfolio requires no rebalancing."
         )
@@ -269,7 +269,7 @@ async def run_monthly_rebalance() -> None:
 
     trades = trade_block.get("trades", [])
     if not trades:
-        await notify_claude_analysis("✅ No trades to execute this month.")
+        await notify_claude_manager("✅ No trades to execute this month.")
         return
 
     action_count = len([t for t in trades if t["action"] != "HOLD"])
@@ -379,4 +379,4 @@ async def run_monthly_rebalance() -> None:
         await notify_claude_manager("\n".join(lines))
         buying_power = max(0.0, buying_power - invest_dollars)
 
-    await notify_claude_analysis(f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}")
+    await notify_claude_manager(f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}")
