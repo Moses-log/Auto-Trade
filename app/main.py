@@ -381,10 +381,35 @@ async def claude_signal(body: _ClaudeSignalRequest):
 
     else:  # SELL
         fill_price = rh_result.get("fill_price") or rh_result.get("price_est")
+        from app.claude_portfolio import get_position as _get_claude_pos
+        pre_pos = _get_claude_pos(ticker)
+        entry_price_for_pending = pre_pos["entry_price"] if pre_pos else 0.0
         sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill_price or 0.0, body.tweet_url)
-        if dollar_pnl is not None:
+
+        if queued and rh_result.get("order_id"):
+            from app.pending_orders import save_pending_order
+            from app.trading.alpaca_client import get_next_trading_day
+            from app.scheduler import scheduler
+            from app.claude_manager import notify_claude_pending_sell_fill
+            import pytz as _pytz
+            from datetime import time as _dtime
+            _et = _pytz.timezone("America/New_York")
+            next_day = get_next_trading_day()
+            run_dt = _et.localize(datetime.combine(next_day, _dtime(9, 31)))
+            scheduler.add_job(
+                notify_claude_pending_sell_fill, "date", run_date=run_dt,
+                args=[rh_result["order_id"], ticker, entry_price_for_pending, sold_qty or 0.0, "autopilot"],
+                id=f"pending_{rh_result['order_id']}", replace_existing=True,
+            )
+            save_pending_order(
+                rh_result["order_id"], ticker, "SELL", fill_price, entry_price_for_pending,
+                run_dt.isoformat(), broker="claude_sell",
+                qty=sold_qty or 0.0, source="autopilot",
+            )
+        elif dollar_pnl is not None:
             from app.rh_trade_record import record_rh_trade
             await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
+
         wins, losses = get_record()
         record_str = f"{wins}W - {losses}L"
 

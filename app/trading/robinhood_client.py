@@ -360,6 +360,29 @@ class RobinhoodClient:
         fill_price = float(order.get("average_price") or 0) or price
         return {"status": "ok", "qty": qty, "fill_price": fill_price, "order_id": order.get("id")}
 
+    def _sell_shares_sync(self, ticker: str, qty: float) -> dict:
+        """Sell a specific quantity of ticker. Used for TRIM (partial close)."""
+        price_est = self._get_latest_price(ticker)
+        order = self._place_market_sell(ticker, qty)
+        queued = not ac.is_market_open()
+        if queued:
+            return {"status": "ok", "qty": qty, "price_est": price_est, "queued": True, "order_id": order.get("id")}
+        fill_price = float(order.get("average_price") or 0) or price_est
+        return {"status": "ok", "qty": qty, "fill_price": fill_price, "order_id": order.get("id")}
+
+    async def sell_shares_async(self, ticker: str, qty: float) -> dict:
+        """Sell a specific share quantity (for TRIM). Never raises."""
+        if not self.available:
+            return {"status": "skipped", "reason": "session unavailable"}
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, self._sell_shares_sync, ticker, qty)
+        except Exception as exc:
+            if _is_auth_error(exc):
+                self.available = False
+                return {"status": "failed", "reason": "session expired"}
+            return {"status": "failed", "reason": str(exc)}
+
     async def buy_dollars_async(self, ticker: str, dollars: float) -> dict:
         """Async wrapper for _buy_dollars_sync. Never raises."""
         if not self.available:

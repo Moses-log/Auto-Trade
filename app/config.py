@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     # ── Claude Portfolio Manager (autonomous monthly rebalancer) ──────────────
     anthropic_api_key: Optional[str] = None
     claude_manager_webhook_url: Optional[str] = None
+    fred_api_key: Optional[str] = None
 
     # ── Portfolio Snapshot (RH pie chart + valuation) ─────────────────────────
     portfolio_snapshot_webhook_url: Optional[str] = None

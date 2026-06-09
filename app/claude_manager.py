@@ -14,7 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, date, time as dtime
 from typing import Optional
 
 import httpx
@@ -63,8 +63,17 @@ Portfolio Construction Rules:
 - Do not allow any single sector to exceed 40% of the portfolio.
 - Think like Bill Ackman and Leopold Aschenbrenner. Avoid mega-caps where possible. Maximize returns.
 - If only 5–7 stocks meet the required standards, do not force diversification. Hold only the highest-conviction opportunities.
+- Pay attention to earnings dates: avoid initiating or significantly increasing positions within 3 days of an earnings report unless you have very high conviction.
+- Use macro context (VIX, 10Y yield, CPI) to calibrate overall risk appetite. High VIX favors defensiveness; rising yields pressure growth multiples.
 
-HARD EXCLUSION — never buy, sell, or mention as a candidate:
+POSITION SIZING ACTIONS:
+- BUY: Open a new position or add to an existing one. The system uses delta-buy logic — it only invests the additional dollars needed to reach your target weight, not the full amount.
+- DOUBLE_DOWN: Explicitly increase conviction in an existing position beyond its current weight. Executes identically to BUY (same delta-buy logic). Use when you want to signal elevated conviction.
+- SELL: Close an entire position.
+- TRIM: Reduce a position to a lower target weight without closing it. The system will sell the shares needed to reach your target. CRITICAL CONSTRAINT: TRIM is only possible if the position holds 1 or more whole shares. If qty < 1 (fractional position), you MUST use SELL to close it entirely — Robinhood does not support partial sells on sub-1-share positions.
+- HOLD: Keep position at target weight; no trade executed.
+
+HARD EXCLUSION — never buy, sell, trim, or mention as a candidate:
 - SPY (managed separately by the Kimi DCA strategy — do not touch under any circumstances)
 
 REQUIRED OUTPUT FORMAT:
@@ -75,7 +84,9 @@ After your full analysis, you MUST end your response with a JSON block in exactl
   "no_changes": false,
   "trades": [
     {"action": "BUY", "ticker": "FICO", "target_weight_pct": 15},
+    {"action": "DOUBLE_DOWN", "ticker": "META", "target_weight_pct": 22},
     {"action": "SELL", "ticker": "NOW"},
+    {"action": "TRIM", "ticker": "NVDA", "target_weight_pct": 8},
     {"action": "HOLD", "ticker": "MSFT", "target_weight_pct": 20}
   ]
 }
@@ -83,9 +94,10 @@ After your full analysis, you MUST end your response with a JSON block in exactl
 
 Rules for the JSON block:
 - Set "no_changes": true if the portfolio requires no changes this month.
-- action must be exactly "BUY", "SELL", or "HOLD".
+- action must be exactly "BUY", "DOUBLE_DOWN", "SELL", "TRIM", or "HOLD".
 - ticker must be the exact US exchange ticker symbol.
-- target_weight_pct is required for BUY and HOLD; omit for SELL.
+- target_weight_pct is required for BUY, DOUBLE_DOWN, TRIM, and HOLD; omit for SELL.
+- For TRIM: target_weight_pct is the weight you want to REDUCE TO (must be less than current weight).
 - All target_weight_pct values for non-SELL positions should reflect true conviction — they do not need to sum to 100%. Uninvested cash is a valid position.
 - Do not include markdown, comments, or extra fields in the JSON block."""
 
@@ -93,7 +105,24 @@ Rules for the JSON block:
 def _fetch_yf_data(ticker: str) -> dict:
     """Fetch key financial metrics for a single ticker via yfinance."""
     try:
-        info = yf.Ticker(ticker).info
+        t = yf.Ticker(ticker)
+        info = t.info
+
+        # Upcoming earnings date
+        days_to_earnings: Optional[int] = None
+        try:
+            cal = t.calendar
+            dates = cal.get("Earnings Date", []) if isinstance(cal, dict) else []
+            today = date.today()
+            for d in dates:
+                d_date = d.date() if hasattr(d, "date") else d
+                diff = (d_date - today).days
+                if diff >= -1:
+                    days_to_earnings = max(0, diff)
+                    break
+        except Exception:
+            pass
+
         return {
             "ticker": ticker,
             "name": info.get("longName"),
@@ -111,6 +140,7 @@ def _fetch_yf_data(ticker: str) -> dict:
             "revenue_growth_yoy": info.get("revenueGrowth"),
             "earnings_growth_yoy": info.get("earningsGrowth"),
             "52w_change": info.get("52WeekChange"),
+            "days_to_earnings": days_to_earnings,
         }
     except Exception as exc:
         log.warning("yfinance error for %s: %s", ticker, exc)
@@ -167,6 +197,142 @@ def _parse_trade_block(text: str) -> Optional[dict]:
     except json.JSONDecodeError as exc:
         log.warning("Failed to parse Claude trade JSON: %s", exc)
         return None
+
+
+def _fetch_spy_price() -> Optional[float]:
+    try:
+        return round(float(yf.Ticker("SPY").fast_info["lastPrice"]), 2)
+    except Exception:
+        return None
+
+
+def _load_recent_history() -> tuple[list, str]:
+    """Returns (raw_records, formatted_string) of the last 3 rebalance log entries."""
+    try:
+        with open(_LOG_PATH) as f:
+            records = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return [], "No prior rebalance history on record."
+
+    if not records:
+        return [], "No prior rebalance history on record."
+
+    recent = records[-3:]
+    lines = ["Prior Rebalance History (last 3 months):"]
+    for entry in recent:
+        ts = entry.get("timestamp", "unknown")[:10]
+        status = entry.get("status", "?")
+        pv = entry.get("portfolio_value")
+        pv_str = f"${pv:,.0f}" if pv else "unknown"
+        executed = entry.get("trades_executed", [])
+        buys = sum(1 for t in executed if t.get("action") in ("BUY", "DOUBLE_DOWN"))
+        sells = sum(1 for t in executed if t.get("action") in ("SELL", "TRIM"))
+        trade_str = f"{buys} buys, {sells} sells/trims" if executed else "no trades"
+        spy = entry.get("spy_price_at_rebalance")
+        spy_str = f", SPY=${spy:.2f}" if spy else ""
+        lines.append(f"  {ts}: {status}, portfolio={pv_str}{spy_str}, trades={trade_str}")
+
+    return records, "\n".join(lines)
+
+
+def _format_benchmark(log_entry: dict, all_records: list) -> str:
+    """Build a month-over-month and inception-to-date benchmark comparison string."""
+    curr_pv = log_entry.get("portfolio_value")
+    curr_spy = log_entry.get("spy_price_at_rebalance")
+    if not all_records or not curr_pv or not curr_spy:
+        return ""
+
+    lines = []
+
+    # Month-over-month vs previous rebalance
+    prev = all_records[-1]
+    prev_pv = prev.get("portfolio_value")
+    prev_spy = prev.get("spy_price_at_rebalance")
+    if prev_pv and prev_spy:
+        port_chg = (curr_pv - prev_pv) / prev_pv * 100
+        spy_chg = (curr_spy - prev_spy) / prev_spy * 100
+        alpha = port_chg - spy_chg
+        emoji = "🟢" if alpha >= 0 else "🔴"
+        lines.append(
+            f"{emoji} **This month:** Portfolio {port_chg:+.2f}%  |  SPY {spy_chg:+.2f}%  |  Alpha {alpha:+.2f}%"
+        )
+
+    # Inception-to-date vs first logged rebalance
+    first = all_records[0]
+    first_pv = first.get("portfolio_value")
+    first_spy = first.get("spy_price_at_rebalance")
+    if first_pv and first_spy and len(all_records) > 1:
+        port_itd = (curr_pv - first_pv) / first_pv * 100
+        spy_itd = (curr_spy - first_spy) / first_spy * 100
+        alpha_itd = port_itd - spy_itd
+        emoji_itd = "🟢" if alpha_itd >= 0 else "🔴"
+        first_date = first.get("timestamp", "")[:10]
+        lines.append(
+            f"{emoji_itd} **Since {first_date}:** Portfolio {port_itd:+.2f}%  |  SPY {spy_itd:+.2f}%  |  Alpha {alpha_itd:+.2f}%"
+        )
+
+    return "\n".join(lines)
+
+
+async def notify_claude_pending_sell_fill(
+    order_id: str,
+    ticker: str,
+    entry_price: float,
+    qty: float,
+    source: str,
+) -> None:
+    """
+    Called at market open to resolve a queued Claude sell order.
+    Polls for actual fill, records the real P&L in the tax file, and sends Discord.
+    source: "manager" or "autopilot"
+    """
+    import asyncio
+    import robin_stocks.robinhood as r
+    from app.rh_trade_record import record_rh_trade
+    from app.notifications import notify_claude_manager, notify_claude_portfolio
+    from app.pending_orders import remove_pending_order
+
+    notify_fn = notify_claude_manager if source == "manager" else notify_claude_portfolio
+    loop = asyncio.get_running_loop()
+    fill_price: Optional[float] = None
+
+    for attempt in range(12):
+        try:
+            info = await loop.run_in_executor(None, r.get_stock_order_info, order_id)
+            if info and info.get("state") == "filled" and info.get("average_price"):
+                fill_price = float(info["average_price"])
+                break
+        except Exception as exc:
+            log.warning("Polling Claude sell order %s attempt %d: %s", order_id, attempt, exc)
+        if attempt < 11:
+            import asyncio as _asyncio
+            await _asyncio.sleep(10)
+
+    remove_pending_order(order_id)
+
+    if fill_price is None:
+        log.warning("Claude queued sell %s (%s) still unfilled after 2 min at open", order_id, ticker)
+        await notify_fn(
+            f"⚠️ Queued Claude sell for **{ticker}** did not fill at open — check Robinhood"
+        )
+        return
+
+    dollar_pnl = (fill_price - entry_price) * qty
+    pct_pnl = (fill_price - entry_price) / entry_price * 100 if entry_price else 0.0
+    await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
+
+    if dollar_pnl >= 0:
+        pnl_str = f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
+    else:
+        pnl_str = f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
+
+    prefix = "🤖 " if source == "autopilot" else ""
+    await notify_fn(
+        f"✅ {prefix}**CLAUDE SELL FILLED — {ticker}**\n"
+        f"Qty: {qty:g} shares @ ${fill_price:,.2f}\n"
+        f"{pnl_str}\n"
+        f"{_timestamp()}"
+    )
 
 
 async def run_monthly_rebalance() -> None:
@@ -252,12 +418,23 @@ async def run_monthly_rebalance() -> None:
             )
             return
 
-        # ── 2. Enrich holdings with yfinance data (all tickers in parallel) ─────
-        yf_results = await asyncio.gather(
-            *[loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
-        )
+        # ── 2. Enrich holdings + fetch SPY, macro context, history in parallel ──
+        from app.macro_context import fetch_macro_context
+
+        yf_tasks = [loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
+        spy_task = loop.run_in_executor(None, _fetch_spy_price)
+
+        all_results = await asyncio.gather(*yf_tasks, spy_task, fetch_macro_context(), return_exceptions=True)
+        yf_results = all_results[:len(positions)]
+        spy_price = all_results[len(positions)] if not isinstance(all_results[len(positions)], Exception) else None
+        macro_text = all_results[len(positions) + 1] if not isinstance(all_results[len(positions) + 1], Exception) else "Macro context unavailable."
+
+        all_history_records, history_text = _load_recent_history()
+
         enriched = []
         for pos, yf_data in zip(positions, yf_results):
+            if isinstance(yf_data, Exception):
+                yf_data = {"ticker": pos["symbol"]}
             weight_pct = round(
                 pos["qty"] * pos.get("current_price", 0) / portfolio_value * 100, 1
             )
@@ -274,6 +451,7 @@ async def run_monthly_rebalance() -> None:
         log_entry["portfolio_value"] = portfolio_value
         log_entry["buying_power"] = buying_power
         log_entry["positions_before"] = enriched
+        log_entry["spy_price_at_rebalance"] = spy_price
 
         # ── 3. Build prompt and call Claude ───────────────────────────────────
         prompt = (
@@ -281,6 +459,8 @@ async def run_monthly_rebalance() -> None:
             f"Total Portfolio Value: ${portfolio_value:,.2f}\n"
             f"Available Cash/Buying Power: ${buying_power:,.2f} "
             f"({buying_power / portfolio_value * 100:.1f}% of portfolio)\n\n"
+            f"{macro_text}\n\n"
+            f"{history_text}\n\n"
             f"Current Holdings:\n{json.dumps(enriched, indent=2)}\n\n"
             f"Please:\n"
             f"1. Score each current holding using the full framework.\n"
@@ -335,18 +515,36 @@ async def run_monthly_rebalance() -> None:
         action_count = len([t for t in trades if t["action"] != "HOLD"])
         await notify_claude_manager(f"⚡ **EXECUTING {action_count} TRADE(S)** — {_timestamp()}")
 
-        from app.claude_portfolio import open_position, close_position, get_record
+        from app.claude_portfolio import open_position, close_position, trim_position, get_record
+        from app.trading.alpaca_client import get_next_trading_day
 
-        # Pre-calculate expected sell proceeds so buys can be funded even when
-        # sells are queued after-hours (Robinhood won't reflect proceeds until fill).
-        sell_tickers = {t["ticker"].upper() for t in trades if t["action"] == "SELL"}
+        _ET_TZ = pytz.timezone("America/New_York")
+
+        def _schedule_pending_claude_sell(order_id: str, ticker: str, entry_px: float, qty_sold: float) -> None:
+            from app.pending_orders import save_pending_order
+            from app.scheduler import scheduler
+            next_day = get_next_trading_day()
+            run_dt = _ET_TZ.localize(datetime.combine(next_day, dtime(9, 31)))
+            scheduler.add_job(
+                notify_claude_pending_sell_fill, "date", run_date=run_dt,
+                args=[order_id, ticker, entry_px, qty_sold, "manager"],
+                id=f"pending_{order_id}", replace_existing=True,
+            )
+            save_pending_order(
+                order_id, ticker, "SELL", None, entry_px,
+                run_dt.isoformat(), broker="claude_sell", qty=qty_sold, source="manager",
+            )
+
+        # Pre-calculate expected sell proceeds (SELL + TRIM) so buys can be funded
+        # even when sells are queued after-hours.
+        sell_tickers = {t["ticker"].upper() for t in trades if t["action"] in ("SELL", "TRIM")}
         expected_sell_proceeds = sum(
             pos["qty"] * pos.get("current_price", 0)
             for pos in positions
             if pos["symbol"] in sell_tickers
         )
 
-        # ── 5. Execute sells first ────────────────────────────────────────────
+        # ── 5. Execute full sells first ───────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "SELL"):
             ticker = trade["ticker"].upper()
             result = await rh_client.close_ticker_async(ticker)
@@ -365,14 +563,17 @@ async def run_monthly_rebalance() -> None:
             qty    = result["qty"]
             fill   = result.get("fill_price") or result.get("price_est")
             queued = result.get("queued", False)
+            entry_px = next((p.get("avg_entry_price", 0.0) for p in positions if p["symbol"] == ticker), 0.0)
 
             sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
-            if dollar_pnl is not None:
+
+            if queued and result.get("order_id"):
+                _schedule_pending_claude_sell(result["order_id"], ticker, entry_px, qty)
+            elif dollar_pnl is not None:
                 from app.rh_trade_record import record_rh_trade
                 await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
-            wins, losses = get_record()
-            record_str = f"{wins}W - {losses}L"
 
+            wins, losses = get_record()
             log_entry["trades_executed"].append({
                 "action": "SELL", "ticker": ticker, "qty": qty,
                 "fill_price": fill, "queued": queued,
@@ -380,44 +581,105 @@ async def run_monthly_rebalance() -> None:
             })
 
             if queued:
-                lines = [
-                    f"⏳ **CLAUDE SELL — {ticker}** (queued for open)",
-                    f"Qty: {qty:g} shares ≈ ${result.get('price_est', 0):,.2f}",
-                    _timestamp(),
-                ]
+                lines = [f"⏳ **CLAUDE SELL — {ticker}** (queued for open)",
+                         f"Qty: {qty:g} shares ≈ ${result.get('price_est', 0):,.2f}", _timestamp()]
             else:
-                pnl_line = ""
-                if dollar_pnl is not None and pct_pnl is not None:
-                    if dollar_pnl >= 0:
-                        pnl_line = f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
-                    else:
-                        pnl_line = f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
+                pnl_line = (f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN" if dollar_pnl >= 0
+                            else f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS") if dollar_pnl is not None else ""
                 lines = [f"🔴 **CLAUDE SELL — {ticker}**", f"Qty: {qty:g} shares @ ${fill:,.2f}"]
                 if pnl_line:
                     lines.append(pnl_line)
-                lines += [f"Claude Record: {record_str}", _timestamp()]
+                lines += [f"Claude Record: {wins}W - {losses}L", _timestamp()]
+            await notify_claude_manager("\n".join(lines))
 
+        # ── 5b. Execute TRIMs ─────────────────────────────────────────────────
+        for trade in (t for t in trades if t["action"] == "TRIM"):
+            ticker = trade["ticker"].upper()
+            target_wt = trade.get("target_weight_pct", 5)
+            target_value = portfolio_value * target_wt / 100
+
+            pos = next((p for p in positions if p["symbol"] == ticker), None)
+            if pos is None:
+                await notify_claude_manager(f"⚠️ TRIM {ticker}: no open position found")
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "no position"})
+                continue
+
+            current_qty   = pos["qty"]
+            current_price = pos.get("current_price", 0)
+            current_value = current_qty * current_price
+
+            if current_qty < 1.0:
+                await notify_claude_manager(
+                    f"⚠️ **TRIM {ticker} SKIPPED** — {current_qty:.4f} shares (< 1 whole share)\n"
+                    f"Robinhood cannot partially sell fractional positions. Use SELL to close entirely."
+                )
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": f"fractional ({current_qty:.4f} shares)"})
+                continue
+
+            if target_value >= current_value * 0.95:
+                await notify_claude_manager(f"⚠️ TRIM {ticker}: already at or below {target_wt}% target")
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "already at target"})
+                continue
+
+            sell_qty = round((current_value - target_value) / current_price, 6) if current_price > 0 else 0.0
+            if sell_qty <= 0:
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "sell qty <= 0"})
+                continue
+
+            result = await rh_client.sell_shares_async(ticker, sell_qty)
+
+            if result.get("status") != "ok":
+                reason = result.get("reason", "unknown")
+                await notify_claude_manager(f"❌ **CLAUDE TRIM — {ticker}** FAILED: {reason}")
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": reason})
+                continue
+
+            qty_sold = result.get("qty", sell_qty)
+            fill     = result.get("fill_price") or result.get("price_est")
+            queued   = result.get("queued", False)
+            entry_px = pos.get("avg_entry_price", 0.0)
+
+            trimmed_qty, dollar_pnl, pct_pnl = trim_position(ticker, qty_sold, fill or 0.0)
+
+            if queued and result.get("order_id"):
+                _schedule_pending_claude_sell(result["order_id"], ticker, entry_px, qty_sold)
+            elif dollar_pnl is not None:
+                from app.rh_trade_record import record_rh_trade
+                await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
+
+            wins, losses = get_record()
+            log_entry["trades_executed"].append({
+                "action": "TRIM", "ticker": ticker, "qty": qty_sold,
+                "fill_price": fill, "queued": queued,
+                "dollar_pnl": dollar_pnl, "target_weight_pct": target_wt,
+            })
+
+            if queued:
+                lines = [f"⏳ **CLAUDE TRIM — {ticker}** (queued for open)",
+                         f"Selling {qty_sold:g} shares ≈ ${result.get('price_est', 0):,.2f} → target {target_wt}%",
+                         _timestamp()]
+            else:
+                pnl_line = (f"P&L: +${dollar_pnl:,.2f} 🟢" if dollar_pnl >= 0 else f"P&L: -${abs(dollar_pnl):,.2f} 🔴") if dollar_pnl is not None else ""
+                lines = [f"✂️ **CLAUDE TRIM — {ticker}**",
+                         f"Sold {qty_sold:g} shares @ ${fill:,.2f} → reduced to {target_wt}% target"]
+                if pnl_line:
+                    lines.append(pnl_line)
+                lines.append(_timestamp())
             await notify_claude_manager("\n".join(lines))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
-        # Don't re-fetch from Robinhood — queued sells don't free up buying power
-        # until they fill, so the API would return the pre-sell cash balance.
         available_budget = buying_power + expected_sell_proceeds
 
         # Build a lookup of current position values for delta-buy calculation
-        current_values = {
-            pos["symbol"]: pos["qty"] * pos.get("current_price", 0)
-            for pos in positions
-        }
+        current_values = {pos["symbol"]: pos["qty"] * pos.get("current_price", 0) for pos in positions}
 
-        # ── 6. Execute buys ───────────────────────────────────────────────────
-        for trade in (t for t in trades if t["action"] == "BUY"):
+        # ── 6. Execute buys + double-downs ────────────────────────────────────
+        for trade in (t for t in trades if t["action"] in ("BUY", "DOUBLE_DOWN")):
             ticker         = trade["ticker"].upper()
+            action_label   = trade["action"]
             target_wt      = trade.get("target_weight_pct", 10)
             target_dollars = portfolio_value * target_wt / 100
 
-            # Only buy the delta needed to reach target weight — avoids doubling
-            # into a position that's already partially at the target.
             current_val    = current_values.get(ticker, 0.0)
             delta_dollars  = max(0.0, target_dollars - current_val)
             invest_dollars = min(delta_dollars, available_budget * 0.95)
@@ -428,19 +690,17 @@ async def run_monthly_rebalance() -> None:
                 else:
                     reason = f"needed ${delta_dollars:,.0f} more, only ${available_budget:,.0f} available"
                 await notify_claude_manager(
-                    f"⚠️ **CLAUDE BUY — {ticker}** skipped\n"
-                    f"{reason}\n"
-                    f"{_timestamp()}"
+                    f"⚠️ **CLAUDE {action_label} — {ticker}** skipped\n{reason}\n{_timestamp()}"
                 )
-                log_entry["trades_skipped"].append({"action": "BUY", "ticker": ticker, "reason": reason})
+                log_entry["trades_skipped"].append({"action": action_label, "ticker": ticker, "reason": reason})
                 continue
 
             result = await rh_client.buy_dollars_async(ticker, invest_dollars)
 
             if result.get("status") != "ok":
                 reason = result.get("reason", "unknown")
-                await notify_claude_manager(f"❌ **CLAUDE BUY — {ticker}** FAILED: {reason}")
-                log_entry["trades_skipped"].append({"action": "BUY", "ticker": ticker, "reason": reason})
+                await notify_claude_manager(f"❌ **CLAUDE {action_label} — {ticker}** FAILED: {reason}")
+                log_entry["trades_skipped"].append({"action": action_label, "ticker": ticker, "reason": reason})
                 continue
 
             qty    = result.get("qty", 0)
@@ -450,31 +710,32 @@ async def run_monthly_rebalance() -> None:
 
             open_position(ticker, qty, fill or est or 0.0)
             log_entry["trades_executed"].append({
-                "action": "BUY", "ticker": ticker, "qty": qty,
+                "action": action_label, "ticker": ticker, "qty": qty,
                 "fill_price": fill or est, "queued": queued,
                 "dollars_invested": invest_dollars, "target_weight_pct": target_wt,
             })
 
+            buy_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
             if queued:
-                lines = [
-                    f"⏳ **CLAUDE BUY — {ticker}** (queued for open)",
-                    f"Qty: {qty:g} shares ≈ ${est:,.2f}",
-                    f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}",
-                    _timestamp(),
-                ]
+                lines = [f"⏳ **CLAUDE {action_label} — {ticker}** (queued for open)",
+                         f"Qty: {qty:g} shares ≈ ${est:,.2f}",
+                         f"Target: {target_wt}% weight — Investing: ${invest_dollars:,.2f}", _timestamp()]
             else:
-                lines = [
-                    f"🟢 **CLAUDE BUY — {ticker}**",
-                    f"Qty: {qty:g} shares @ ${fill:,.2f}",
-                    f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}",
-                    _timestamp(),
-                ]
+                lines = [f"{buy_emoji} **CLAUDE {action_label} — {ticker}**",
+                         f"Qty: {qty:g} shares @ ${fill:,.2f}",
+                         f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}", _timestamp()]
 
             await notify_claude_manager("\n".join(lines))
             available_budget = max(0.0, available_budget - invest_dollars)
 
         log_entry["status"] = "completed"
-        await notify_claude_manager(f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}")
+
+        # ── 7. Benchmark comparison ───────────────────────────────────────────
+        benchmark_str = _format_benchmark(log_entry, all_history_records)
+        completion_msg = f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}"
+        if benchmark_str:
+            completion_msg += f"\n\n{benchmark_str}"
+        await notify_claude_manager(completion_msg)
 
     finally:
         _append_rebalance_log(log_entry)

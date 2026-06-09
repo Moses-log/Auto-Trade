@@ -162,7 +162,18 @@ def reschedule_pending_orders() -> None:
 
         effective_run = run_dt if run_dt > now else now
 
-        if broker == "rh":
+        if broker == "claude_sell":
+            from app.claude_manager import notify_claude_pending_sell_fill
+            scheduler.add_job(
+                notify_claude_pending_sell_fill,
+                "date",
+                run_date=effective_run,
+                args=[order_id, entry["ticker"], entry.get("avg_entry_price", 0.0),
+                      entry.get("qty", 0.0), entry.get("source", "manager")],
+                id=f"pending_{order_id}",
+                replace_existing=True,
+            )
+        elif broker == "rh":
             scheduler.add_job(
                 notify_rh_pending_fill,
                 "date",

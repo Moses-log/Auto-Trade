@@ -106,6 +106,46 @@ def close_position(
     return qty, dollar_pnl, pct_pnl
 
 
+def trim_position(
+    ticker: str,
+    qty_sold: float,
+    exit_price: float,
+) -> tuple[Optional[float], Optional[float], Optional[float]]:
+    """Partially reduce a position. Returns (qty_sold, dollar_pnl, pct_pnl). All None if no position."""
+    ticker = ticker.upper()
+    with _lock:
+        data = _load()
+        pos = next((p for p in data["positions"] if p["ticker"] == ticker), None)
+        if pos is None:
+            return None, None, None
+
+        qty_sold = min(qty_sold, pos["qty"])
+        entry_price = pos["entry_price"]
+        dollar_pnl = (exit_price - entry_price) * qty_sold
+        pct_pnl = (exit_price - entry_price) / entry_price * 100 if entry_price else 0.0
+
+        pos["qty"] -= qty_sold
+        data["closed"].append({
+            "ticker": ticker,
+            "qty": qty_sold,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "dollar_pnl": dollar_pnl,
+            "pct_pnl": pct_pnl,
+            "entry_date": pos.get("entry_date", ""),
+            "exit_date": date.today().isoformat(),
+            "partial": True,
+        })
+        if dollar_pnl >= 0:
+            data["wins"] = data.get("wins", 0) + 1
+        else:
+            data["losses"] = data.get("losses", 0) + 1
+        _save(data)
+
+    log.info("Claude portfolio: trimmed %s by %.4f shares @ %.2f, P&L=%.2f", ticker, qty_sold, exit_price, dollar_pnl)
+    return qty_sold, dollar_pnl, pct_pnl
+
+
 def get_record() -> tuple[int, int]:
     """Returns (wins, losses)."""
     data = _load()
