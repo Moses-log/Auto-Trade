@@ -279,6 +279,15 @@ async def run_monthly_rebalance() -> None:
 
     from app.claude_portfolio import open_position, close_position, get_record
 
+    # Pre-calculate expected sell proceeds so buys can be funded even when
+    # sells are queued after-hours (Robinhood won't reflect proceeds until fill).
+    sell_tickers = {t["ticker"].upper() for t in trades if t["action"] == "SELL"}
+    expected_sell_proceeds = sum(
+        pos["qty"] * pos.get("current_price", 0)
+        for pos in positions
+        if pos["symbol"] in sell_tickers
+    )
+
     # ── 5. Execute sells first ────────────────────────────────────────────────
     for trade in (t for t in trades if t["action"] == "SELL"):
         ticker = trade["ticker"].upper()
@@ -325,23 +334,22 @@ async def run_monthly_rebalance() -> None:
 
         await notify_claude_manager("\n".join(lines))
 
-    # Refresh buying power after sells settle
-    try:
-        buying_power = await rh_client.get_buying_power_async() or buying_power
-    except Exception:
-        pass
+    # Use pre-calculated sell proceeds + current cash as the buy budget.
+    # Don't re-fetch from Robinhood — queued sells don't free up buying power
+    # until they fill, so the API would return the pre-sell cash balance.
+    available_budget = buying_power + expected_sell_proceeds
 
     # ── 6. Execute buys ───────────────────────────────────────────────────────
     for trade in (t for t in trades if t["action"] == "BUY"):
         ticker        = trade["ticker"].upper()
         target_wt     = trade.get("target_weight_pct", 10)
         target_dollars = portfolio_value * target_wt / 100
-        invest_dollars = min(target_dollars, buying_power * 0.95)
+        invest_dollars = min(target_dollars, available_budget * 0.95)
 
         if invest_dollars < 1:
             await notify_claude_manager(
                 f"⚠️ **CLAUDE BUY — {ticker}** skipped\n"
-                f"Needed ${target_dollars:,.0f}, only ${buying_power:,.0f} available\n"
+                f"Needed ${target_dollars:,.0f}, only ${available_budget:,.0f} available\n"
                 f"{_timestamp()}"
             )
             continue
@@ -377,6 +385,6 @@ async def run_monthly_rebalance() -> None:
             ]
 
         await notify_claude_manager("\n".join(lines))
-        buying_power = max(0.0, buying_power - invest_dollars)
+        available_budget = max(0.0, available_budget - invest_dollars)
 
     await notify_claude_manager(f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}")
