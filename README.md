@@ -158,6 +158,44 @@ On the **1st of each month at 9:35 AM ET**, the system:
 
 Can also be triggered on-demand via `/rebalance` Discord slash command or `POST /run-rebalance`.
 
+#### Claude Manager Investment Strategy
+
+The strategy is defined entirely in the system prompt at `app/claude_manager.py:37` (`_SYSTEM_PROMPT`). Here is what it instructs Claude to do:
+
+**Objective:** Maximize long-term risk-adjusted returns and outperform the S&P 500 over rolling 3, 5, and 10-year periods.
+
+**Portfolio Constraints:**
+- 5–10 stocks maximum. No ETFs, options, leverage, or short positions.
+- Only U.S. publicly traded stocks with a market cap above $5 billion.
+- Position sizes between 5% and 25% per stock.
+- Cash is a valid position — never force deployment into mediocre opportunities.
+- SPY is permanently excluded — it is managed by the Kimi DCA strategy and Claude must never touch it.
+
+**Scoring Framework — every stock is scored 0–100:**
+
+| Dimension | Weight | What it measures |
+|---|---|---|
+| Quality | 30% | ROIC, ROE, gross/operating margin trends, debt-to-equity, interest coverage, FCF consistency |
+| Growth | 25% | Revenue growth, EPS growth, FCF growth, TAM expansion, market share gains |
+| Momentum | 20% | Relative strength vs S&P 500, 6-month and 12-month price performance, 200-day MA position, institutional accumulation |
+| Valuation | 15% | Forward P/E, PEG, EV/EBITDA, FCF yield, DCF estimates |
+| Competitive Advantage | 10% | Brand strength, network effects, switching costs, proprietary technology, industry leadership |
+
+**Philosophy:**
+- Think like Bill Ackman and Leopold Aschenbrenner — concentrate in the highest-conviction positions, avoid mega-caps where possible, maximize returns.
+- Prefer founder-led or highly aligned management. Prefer durable competitive advantages.
+- Avoid deteriorating fundamentals, excessive debt, speculative meme stocks, and negative FCF unless growth is exceptional.
+- Diversify across industries when possible; no single sector above 40% of portfolio.
+- If only 5–7 stocks meet the required standard, do not force diversification.
+
+**Macro and Timing Rules (injected live into the prompt):**
+- **Earnings avoidance**: Do not initiate or significantly increase a position within 3 days of earnings unless conviction is very high. Days-to-earnings is provided for every holding.
+- **Macro calibration**: VIX, 10-year Treasury yield, and CPI YoY are provided. High VIX → favor defensiveness. Rising yields → pressure on growth multiples. Elevated CPI → watch margin compression.
+
+**Self-awareness (last 3 months of history injected into the prompt):**
+- Claude sees its own prior analyses, what trades it proposed, and how the portfolio performed vs SPY each month.
+- Prevents momentum-chasing its own prior decisions and allows it to course-correct.
+
 ---
 
 ### 4 — Portfolio Snapshot (Fridays + on-demand)
