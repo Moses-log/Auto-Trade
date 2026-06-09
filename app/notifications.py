@@ -186,6 +186,27 @@ async def notify_claude_manager(message: str) -> None:
             log.warning("Claude manager notification failed: %s", exc)
 
 
+async def notify_claude_manager_with_chart(message: str, chart_bytes: bytes) -> None:
+    """Send a financials chart PNG to CLAUDE_MANAGER_WEBHOOK_URL."""
+    url = (
+        settings.claude_manager_webhook_url
+        or settings.rh_discord_webhook_url
+        or settings.discord_webhook_url
+    )
+    if not url:
+        return
+    try:
+        payload = {"content": message[:2000]} if message else {}
+        await _client.post(
+            url,
+            data={"payload_json": _json.dumps(payload)},
+            files={"file": ("financials.png", chart_bytes, "image/png")},
+            timeout=15,
+        )
+    except Exception as exc:
+        log.warning("Claude manager chart notification failed: %s", exc)
+
+
 
 def _chunk(text: str, size: int) -> list[str]:
     """Split text into chunks that fit within Discord's message size limit."""

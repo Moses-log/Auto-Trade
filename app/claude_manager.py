@@ -354,7 +354,20 @@ async def run_monthly_rebalance() -> None:
     """
     import asyncio
     from app.trading.robinhood_client import rh_client
-    from app.notifications import notify_claude_manager
+    from app.notifications import notify_claude_manager, notify_claude_manager_with_chart
+
+    async def _post_financials_chart(tkr: str) -> None:
+        """Fetch quarterly financials and post chart to Discord (fire-and-forget)."""
+        try:
+            from app.financials_chart import fetch_quarterly_financials, generate_financials_chart
+            loop = asyncio.get_running_loop()
+            fin_data = await loop.run_in_executor(None, fetch_quarterly_financials, tkr)
+            if fin_data is None:
+                return
+            chart_bytes = await loop.run_in_executor(None, generate_financials_chart, fin_data)
+            await notify_claude_manager_with_chart("", chart_bytes)
+        except Exception as exc:
+            log.warning("Financials chart failed for %s: %s", tkr, exc)
 
     if not settings.anthropic_api_key:
         log.error("ANTHROPIC_API_KEY not set — skipping monthly rebalance")
@@ -740,6 +753,7 @@ async def run_monthly_rebalance() -> None:
                          f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}", _timestamp()]
 
             await notify_claude_manager("\n".join(lines))
+            asyncio.create_task(_post_financials_chart(ticker))
             available_budget = max(0.0, available_budget - invest_dollars)
 
         log_entry["status"] = "completed"
