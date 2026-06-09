@@ -367,6 +367,9 @@ async def run_monthly_rebalance() -> None:
             queued = result.get("queued", False)
 
             sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
+            if dollar_pnl is not None:
+                from app.rh_trade_record import record_rh_trade
+                await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
             wins, losses = get_record()
             record_str = f"{wins}W - {losses}L"
 

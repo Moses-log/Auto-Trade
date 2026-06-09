@@ -382,6 +382,9 @@ async def claude_signal(body: _ClaudeSignalRequest):
     else:  # SELL
         fill_price = rh_result.get("fill_price") or rh_result.get("price_est")
         sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill_price or 0.0, body.tweet_url)
+        if dollar_pnl is not None:
+            from app.rh_trade_record import record_rh_trade
+            await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
         wins, losses = get_record()
         record_str = f"{wins}W - {losses}L"
 
