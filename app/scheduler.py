@@ -52,8 +52,13 @@ async def _weekday_jobs() -> None:
     )
 
 
+async def _portfolio_snapshot() -> None:
+    from app.portfolio_report import send_portfolio_snapshot
+    await send_portfolio_snapshot()
+
+
 async def _friday_jobs() -> None:
-    """Run Friday reports in parallel: Alpaca + RH daily/weekly, investor breakdown, period checks."""
+    """Run Friday reports in parallel: Alpaca + RH daily/weekly, investor breakdown, period checks, portfolio snapshot."""
     await asyncio.gather(
         send_daily_report(),
         send_weekly_report(),
@@ -62,6 +67,7 @@ async def _friday_jobs() -> None:
         send_rh_report("daily"),
         send_rh_report("weekly"),
         _check_rh_period_reports(),
+        _portfolio_snapshot(),
         return_exceptions=True,
     )
 

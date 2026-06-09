@@ -24,6 +24,7 @@ import yfinance as yf
 from app.config import settings
 
 _CT = pytz.timezone("America/Chicago")
+_LOG_PATH = "/data/claude_rebalance_log.json"
 
 
 def _timestamp() -> str:
@@ -139,6 +140,22 @@ def _call_claude_sync(user_message: str) -> str:
     return response.json()["content"][0]["text"]
 
 
+def _append_rebalance_log(entry: dict) -> None:
+    try:
+        try:
+            with open(_LOG_PATH) as f:
+                records = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            records = []
+        records.append(entry)
+        if len(records) > 36:          # cap at 3 years of monthly logs
+            records = records[-36:]
+        with open(_LOG_PATH, "w") as f:
+            json.dump(records, f, indent=2)
+    except Exception as exc:
+        log.warning("Failed to write rebalance log: %s", exc)
+
+
 def _parse_trade_block(text: str) -> Optional[dict]:
     """Extract and parse the JSON trade block from Claude's response."""
     match = re.search(r"```json\s*(\{.*?\})\s*```", text, re.DOTALL)
@@ -163,6 +180,7 @@ async def run_monthly_rebalance() -> None:
       4. Parse the structured trade list from Claude's response
       5. Execute sells first, then buys
       6. Post full analysis + individual trade confirmations to Discord
+      7. Save full audit log entry to /data/claude_rebalance_log.json
     """
     import asyncio
     from app.trading.robinhood_client import rh_client
@@ -191,205 +209,242 @@ async def run_monthly_rebalance() -> None:
 
     loop = asyncio.get_running_loop()
 
-    # ── 1. Fetch current positions and buying power ───────────────────────────
-    try:
-        positions = await rh_client.get_all_positions_async()
-        buying_power = await rh_client.get_buying_power_async() or 0.0
-    except Exception as exc:
-        log.error("Failed to fetch RH portfolio data: %s", exc)
-        await notify_claude_manager(f"❌ **REBALANCE FAILED** — could not fetch portfolio: {exc}")
-        return
-
-    holdings_value = sum(
-        p["qty"] * p.get("current_price", 0) for p in positions
-    )
-    portfolio_value = holdings_value + buying_power
-
-    if portfolio_value < 1:
-        await notify_claude_manager("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
-        return
-
-    # ── 2. Enrich holdings with yfinance data ─────────────────────────────────
-    enriched = []
-    for pos in positions:
-        ticker = pos["symbol"]
-        yf_data = await loop.run_in_executor(None, _fetch_yf_data, ticker)
-        weight_pct = round(
-            pos["qty"] * pos.get("current_price", 0) / portfolio_value * 100, 1
-        )
-        enriched.append({
-            **yf_data,
-            "qty": pos["qty"],
-            "avg_entry_price": pos["avg_entry_price"],
-            "current_price": pos.get("current_price"),
-            "unrealized_pnl": round(pos.get("unrealized_pl", 0), 2),
-            "unrealized_pnl_pct": round(pos.get("unrealized_plpc", 0), 2),
-            "current_weight_pct": weight_pct,
-        })
-
-    # ── 3. Build prompt and call Claude ───────────────────────────────────────
-    prompt = (
-        f"Today is the monthly portfolio rebalance date.\n\n"
-        f"Total Portfolio Value: ${portfolio_value:,.2f}\n"
-        f"Available Cash/Buying Power: ${buying_power:,.2f} "
-        f"({buying_power / portfolio_value * 100:.1f}% of portfolio)\n\n"
-        f"Current Holdings:\n{json.dumps(enriched, indent=2)}\n\n"
-        f"Please:\n"
-        f"1. Score each current holding using the full framework.\n"
-        f"2. Identify any superior opportunities not currently held.\n"
-        f"3. Determine the optimal portfolio for the next month.\n"
-        f"4. Provide your full analysis with scores, then end with the required JSON trade block."
-    )
+    log_entry: dict = {
+        "timestamp": datetime.now(_CT).isoformat(),
+        "status": "started",
+        "portfolio_value": None,
+        "buying_power": None,
+        "positions_before": [],
+        "claude_response": None,
+        "trade_block": None,
+        "trades_executed": [],
+        "trades_skipped": [],
+    }
 
     try:
-        log.info("Calling Claude Opus for monthly portfolio rebalance...")
-        response_text = await loop.run_in_executor(None, _call_claude_sync, prompt)
-    except Exception as exc:
-        log.error("Claude API call failed: %s", exc)
-        await notify_claude_manager(f"❌ **REBALANCE FAILED** — Anthropic API error: {exc}")
-        return
+        # ── 1. Fetch current positions and buying power ───────────────────────
+        try:
+            positions = await rh_client.get_all_positions_async()
+            buying_power = await rh_client.get_buying_power_async() or 0.0
+        except Exception as exc:
+            log.error("Failed to fetch RH portfolio data: %s", exc)
+            log_entry["status"] = "failed_fetch"
+            await notify_claude_manager(f"❌ **REBALANCE FAILED** — could not fetch portfolio: {exc}")
+            return
 
-    # ── 4. Parse trade block ──────────────────────────────────────────────────
-    trade_block = _parse_trade_block(response_text)
+        holdings_value = sum(p["qty"] * p.get("current_price", 0) for p in positions)
+        portfolio_value = holdings_value + buying_power
 
-    # Full analysis → analysis channel
-    analysis_body = re.sub(r"```json.*?```", "", response_text, flags=re.DOTALL).strip()
-    await notify_claude_manager(f"📊 **CLAUDE MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}")
+        if portfolio_value < 1:
+            log_entry["status"] = "skipped_zero_value"
+            await notify_claude_manager("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
+            return
 
-    if trade_block is None:
-        await notify_claude_manager(
-            "⚠️ Could not parse trade instructions from Claude's response. "
-            "No trades executed — review the analysis above manually."
+        # ── 2. Enrich holdings with yfinance data ─────────────────────────────
+        enriched = []
+        for pos in positions:
+            ticker = pos["symbol"]
+            yf_data = await loop.run_in_executor(None, _fetch_yf_data, ticker)
+            weight_pct = round(
+                pos["qty"] * pos.get("current_price", 0) / portfolio_value * 100, 1
+            )
+            enriched.append({
+                **yf_data,
+                "qty": pos["qty"],
+                "avg_entry_price": pos["avg_entry_price"],
+                "current_price": pos.get("current_price"),
+                "unrealized_pnl": round(pos.get("unrealized_pl", 0), 2),
+                "unrealized_pnl_pct": round(pos.get("unrealized_plpc", 0), 2),
+                "current_weight_pct": weight_pct,
+            })
+
+        log_entry["portfolio_value"] = portfolio_value
+        log_entry["buying_power"] = buying_power
+        log_entry["positions_before"] = enriched
+
+        # ── 3. Build prompt and call Claude ───────────────────────────────────
+        prompt = (
+            f"Today is the monthly portfolio rebalance date.\n\n"
+            f"Total Portfolio Value: ${portfolio_value:,.2f}\n"
+            f"Available Cash/Buying Power: ${buying_power:,.2f} "
+            f"({buying_power / portfolio_value * 100:.1f}% of portfolio)\n\n"
+            f"Current Holdings:\n{json.dumps(enriched, indent=2)}\n\n"
+            f"Please:\n"
+            f"1. Score each current holding using the full framework.\n"
+            f"2. Identify any superior opportunities not currently held.\n"
+            f"3. Determine the optimal portfolio for the next month.\n"
+            f"4. Provide your full analysis with scores, then end with the required JSON trade block."
         )
-        return
 
-    if trade_block.get("no_changes"):
-        await notify_claude_manager(
-            "✅ **NO CHANGES THIS MONTH**\n"
-            "Claude determined the current portfolio requires no rebalancing."
+        try:
+            log.info("Calling Claude Opus for monthly portfolio rebalance...")
+            response_text = await loop.run_in_executor(None, _call_claude_sync, prompt)
+        except Exception as exc:
+            log.error("Claude API call failed: %s", exc)
+            log_entry["status"] = "failed_claude_api"
+            await notify_claude_manager(f"❌ **REBALANCE FAILED** — Anthropic API error: {exc}")
+            return
+
+        log_entry["claude_response"] = response_text
+
+        # ── 4. Parse trade block ──────────────────────────────────────────────
+        trade_block = _parse_trade_block(response_text)
+        log_entry["trade_block"] = trade_block
+
+        # Full analysis → Discord
+        analysis_body = re.sub(r"```json.*?```", "", response_text, flags=re.DOTALL).strip()
+        await notify_claude_manager(f"📊 **CLAUDE MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}")
+
+        if trade_block is None:
+            log_entry["status"] = "failed_parse"
+            await notify_claude_manager(
+                "⚠️ Could not parse trade instructions from Claude's response. "
+                "No trades executed — review the analysis above manually."
+            )
+            return
+
+        if trade_block.get("no_changes"):
+            log_entry["status"] = "no_changes"
+            await notify_claude_manager(
+                "✅ **NO CHANGES THIS MONTH**\n"
+                "Claude determined the current portfolio requires no rebalancing."
+            )
+            return
+
+        _EXCLUDED = {"SPY"}  # managed by Kimi — Claude must never touch these
+
+        trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
+        if not trades:
+            log_entry["status"] = "no_trades"
+            await notify_claude_manager("✅ No trades to execute this month.")
+            return
+
+        action_count = len([t for t in trades if t["action"] != "HOLD"])
+        await notify_claude_manager(f"⚡ **EXECUTING {action_count} TRADE(S)** — {_timestamp()}")
+
+        from app.claude_portfolio import open_position, close_position, get_record
+
+        # Pre-calculate expected sell proceeds so buys can be funded even when
+        # sells are queued after-hours (Robinhood won't reflect proceeds until fill).
+        sell_tickers = {t["ticker"].upper() for t in trades if t["action"] == "SELL"}
+        expected_sell_proceeds = sum(
+            pos["qty"] * pos.get("current_price", 0)
+            for pos in positions
+            if pos["symbol"] in sell_tickers
         )
-        return
 
-    _EXCLUDED = {"SPY"}  # managed by Kimi — Claude must never touch these
+        # ── 5. Execute sells first ────────────────────────────────────────────
+        for trade in (t for t in trades if t["action"] == "SELL"):
+            ticker = trade["ticker"].upper()
+            result = await rh_client.close_ticker_async(ticker)
 
-    trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
-    if not trades:
-        await notify_claude_manager("✅ No trades to execute this month.")
-        return
+            if result.get("note"):
+                await notify_claude_manager(f"ℹ️ CLAUDE SELL {ticker}: {result['note']}")
+                log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": result["note"]})
+                continue
 
-    action_count = len([t for t in trades if t["action"] != "HOLD"])
-    await notify_claude_manager(
-        f"⚡ **EXECUTING {action_count} TRADE(S)** — {_timestamp()}"
-    )
+            if result.get("status") != "ok" or not result.get("qty"):
+                reason = result.get("reason", "unknown")
+                await notify_claude_manager(f"❌ **CLAUDE SELL — {ticker}** FAILED: {reason}")
+                log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": reason})
+                continue
 
-    from app.claude_portfolio import open_position, close_position, get_record
+            qty    = result["qty"]
+            fill   = result.get("fill_price")
+            queued = result.get("queued", False)
 
-    # Pre-calculate expected sell proceeds so buys can be funded even when
-    # sells are queued after-hours (Robinhood won't reflect proceeds until fill).
-    sell_tickers = {t["ticker"].upper() for t in trades if t["action"] == "SELL"}
-    expected_sell_proceeds = sum(
-        pos["qty"] * pos.get("current_price", 0)
-        for pos in positions
-        if pos["symbol"] in sell_tickers
-    )
+            sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
+            wins, losses = get_record()
+            record_str = f"{wins}W - {losses}L"
 
-    # ── 5. Execute sells first ────────────────────────────────────────────────
-    for trade in (t for t in trades if t["action"] == "SELL"):
-        ticker = trade["ticker"].upper()
-        result = await rh_client.close_ticker_async(ticker)
+            log_entry["trades_executed"].append({
+                "action": "SELL", "ticker": ticker, "qty": qty,
+                "fill_price": fill, "queued": queued,
+                "dollar_pnl": dollar_pnl, "pct_pnl": pct_pnl,
+            })
 
-        if result.get("note"):
-            await notify_claude_manager(f"ℹ️ CLAUDE SELL {ticker}: {result['note']}")
-            continue
+            if queued:
+                lines = [
+                    f"⏳ **CLAUDE SELL — {ticker}** (queued for open)",
+                    f"Qty: {qty:g} shares ≈ ${result.get('price_est', 0):,.2f}",
+                    _timestamp(),
+                ]
+            else:
+                pnl_line = ""
+                if dollar_pnl is not None and pct_pnl is not None:
+                    if dollar_pnl >= 0:
+                        pnl_line = f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
+                    else:
+                        pnl_line = f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
+                lines = [f"🔴 **CLAUDE SELL — {ticker}**", f"Qty: {qty:g} shares @ ${fill:,.2f}"]
+                if pnl_line:
+                    lines.append(pnl_line)
+                lines += [f"Claude Record: {record_str}", _timestamp()]
 
-        if result.get("status") != "ok" or not result.get("qty"):
-            await notify_claude_manager(
-                f"❌ **CLAUDE SELL — {ticker}** FAILED: {result.get('reason', 'unknown')}"
-            )
-            continue
+            await notify_claude_manager("\n".join(lines))
 
-        qty      = result["qty"]
-        fill     = result.get("fill_price")
-        queued   = result.get("queued", False)
+        # Use pre-calculated sell proceeds + current cash as the buy budget.
+        # Don't re-fetch from Robinhood — queued sells don't free up buying power
+        # until they fill, so the API would return the pre-sell cash balance.
+        available_budget = buying_power + expected_sell_proceeds
 
-        sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
-        wins, losses = get_record()
-        record_str = f"{wins}W - {losses}L"
+        # ── 6. Execute buys ───────────────────────────────────────────────────
+        for trade in (t for t in trades if t["action"] == "BUY"):
+            ticker         = trade["ticker"].upper()
+            target_wt      = trade.get("target_weight_pct", 10)
+            target_dollars = portfolio_value * target_wt / 100
+            invest_dollars = min(target_dollars, available_budget * 0.95)
 
-        if queued:
-            lines = [
-                f"⏳ **CLAUDE SELL — {ticker}** (queued for open)",
-                f"Qty: {qty:g} shares ≈ ${result.get('price_est', 0):,.2f}",
-                _timestamp(),
-            ]
-        else:
-            pnl_line = ""
-            if dollar_pnl is not None and pct_pnl is not None:
-                if dollar_pnl >= 0:
-                    pnl_line = f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
-                else:
-                    pnl_line = f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
-            lines = [
-                f"🔴 **CLAUDE SELL — {ticker}**",
-                f"Qty: {qty:g} shares @ ${fill:,.2f}",
-            ]
-            if pnl_line:
-                lines.append(pnl_line)
-            lines += [f"Claude Record: {record_str}", _timestamp()]
+            if invest_dollars < 1:
+                reason = f"needed ${target_dollars:,.0f}, only ${available_budget:,.0f} available"
+                await notify_claude_manager(
+                    f"⚠️ **CLAUDE BUY — {ticker}** skipped\n"
+                    f"Needed ${target_dollars:,.0f}, only ${available_budget:,.0f} available\n"
+                    f"{_timestamp()}"
+                )
+                log_entry["trades_skipped"].append({"action": "BUY", "ticker": ticker, "reason": reason})
+                continue
 
-        await notify_claude_manager("\n".join(lines))
+            result = await rh_client.buy_dollars_async(ticker, invest_dollars)
 
-    # Use pre-calculated sell proceeds + current cash as the buy budget.
-    # Don't re-fetch from Robinhood — queued sells don't free up buying power
-    # until they fill, so the API would return the pre-sell cash balance.
-    available_budget = buying_power + expected_sell_proceeds
+            if result.get("status") != "ok":
+                reason = result.get("reason", "unknown")
+                await notify_claude_manager(f"❌ **CLAUDE BUY — {ticker}** FAILED: {reason}")
+                log_entry["trades_skipped"].append({"action": "BUY", "ticker": ticker, "reason": reason})
+                continue
 
-    # ── 6. Execute buys ───────────────────────────────────────────────────────
-    for trade in (t for t in trades if t["action"] == "BUY"):
-        ticker        = trade["ticker"].upper()
-        target_wt     = trade.get("target_weight_pct", 10)
-        target_dollars = portfolio_value * target_wt / 100
-        invest_dollars = min(target_dollars, available_budget * 0.95)
+            qty    = result.get("qty", 0)
+            fill   = result.get("fill_price")
+            queued = result.get("queued", False)
+            est    = result.get("price_est", 0)
 
-        if invest_dollars < 1:
-            await notify_claude_manager(
-                f"⚠️ **CLAUDE BUY — {ticker}** skipped\n"
-                f"Needed ${target_dollars:,.0f}, only ${available_budget:,.0f} available\n"
-                f"{_timestamp()}"
-            )
-            continue
+            open_position(ticker, qty, fill or est or 0.0)
+            log_entry["trades_executed"].append({
+                "action": "BUY", "ticker": ticker, "qty": qty,
+                "fill_price": fill or est, "queued": queued,
+                "dollars_invested": invest_dollars, "target_weight_pct": target_wt,
+            })
 
-        result = await rh_client.buy_dollars_async(ticker, invest_dollars)
+            if queued:
+                lines = [
+                    f"⏳ **CLAUDE BUY — {ticker}** (queued for open)",
+                    f"Qty: {qty:g} shares ≈ ${est:,.2f}",
+                    f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}",
+                    _timestamp(),
+                ]
+            else:
+                lines = [
+                    f"🟢 **CLAUDE BUY — {ticker}**",
+                    f"Qty: {qty:g} shares @ ${fill:,.2f}",
+                    f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}",
+                    _timestamp(),
+                ]
 
-        if result.get("status") != "ok":
-            await notify_claude_manager(
-                f"❌ **CLAUDE BUY — {ticker}** FAILED: {result.get('reason', 'unknown')}"
-            )
-            continue
+            await notify_claude_manager("\n".join(lines))
+            available_budget = max(0.0, available_budget - invest_dollars)
 
-        qty    = result.get("qty", 0)
-        fill   = result.get("fill_price")
-        queued = result.get("queued", False)
-        est    = result.get("price_est", 0)
+        log_entry["status"] = "completed"
+        await notify_claude_manager(f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}")
 
-        open_position(ticker, qty, fill or est or 0.0)
-
-        if queued:
-            lines = [
-                f"⏳ **CLAUDE BUY — {ticker}** (queued for open)",
-                f"Qty: {qty:g} shares ≈ ${est:,.2f}",
-                f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}",
-                _timestamp(),
-            ]
-        else:
-            lines = [
-                f"🟢 **CLAUDE BUY — {ticker}**",
-                f"Qty: {qty:g} shares @ ${fill:,.2f}",
-                f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}",
-                _timestamp(),
-            ]
-
-        await notify_claude_manager("\n".join(lines))
-        available_budget = max(0.0, available_budget - invest_dollars)
-
-    await notify_claude_manager(f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}")
+    finally:
+        _append_rebalance_log(log_entry)

@@ -311,6 +311,12 @@ async def handle_rebalance(token: str) -> None:
     await run_monthly_rebalance()
 
 
+async def handle_portfolio(token: str) -> None:
+    await _edit_original(token, "📊 Generating portfolio snapshot — check the snapshot channel...")
+    from app.portfolio_report import send_portfolio_snapshot
+    await send_portfolio_snapshot()
+
+
 async def handle_tax_alpaca(year: int, token: str) -> None:
     from app.tax import send_alpaca_tax_report
     await _edit_original(token, f"⏳ Fetching Alpaca {year} trade history…")
@@ -355,6 +361,8 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
                 await handle_close(ticker=ticker, broker=options.get("broker", "both"), token=token)
         elif command == "rebalance":
             await handle_rebalance(token=token)
+        elif command == "portfolio":
+            await handle_portfolio(token=token)
         elif command == "tax":
             sub = options.get("_subcommand", "alpaca")
             year = int(options.get("year") or datetime.now().year)

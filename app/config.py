@@ -76,6 +76,9 @@ class Settings(BaseSettings):
     anthropic_api_key: Optional[str] = None
     claude_manager_webhook_url: Optional[str] = None
 
+    # ── Portfolio Snapshot (RH pie chart + valuation) ─────────────────────────
+    portfolio_snapshot_webhook_url: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 

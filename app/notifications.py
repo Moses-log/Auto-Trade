@@ -209,6 +209,26 @@ async def notify_claude_portfolio(message: str) -> None:
         log.warning("Claude portfolio notification failed: %s", exc)
 
 
+async def notify_portfolio_snapshot(message: str, chart_bytes: bytes) -> None:
+    """Send the RH portfolio pie chart to PORTFOLIO_SNAPSHOT_WEBHOOK_URL."""
+    url = settings.portfolio_snapshot_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url
+    if not url:
+        log.warning("No webhook configured for portfolio snapshot; skipping")
+        return
+    try:
+        if chart_bytes:
+            await _client.post(
+                url,
+                data={"payload_json": _json.dumps({"content": message[:2000]})},
+                files={"file": ("portfolio.png", chart_bytes, "image/png")},
+                timeout=15,
+            )
+        else:
+            await _client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("Portfolio snapshot notification failed: %s", exc)
+
+
 async def notify_rh_tax(message: str) -> None:
     """Send a Robinhood tax summary to RH_TAX_WEBHOOK_URL, falls back to RH channel."""
     url = settings.rh_tax_webhook_url or settings.rh_discord_webhook_url or settings.discord_webhook_url

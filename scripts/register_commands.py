@@ -168,6 +168,11 @@ COMMANDS: list = [
         "options": [],
     },
     {
+        "name": "portfolio",
+        "description": "Post a Robinhood portfolio pie chart with valuation ratings",
+        "options": [],
+    },
+    {
         "name": "close",
         "description": "Close a position by ticker symbol",
         "options": [
