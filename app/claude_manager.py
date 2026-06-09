@@ -240,6 +240,18 @@ async def run_monthly_rebalance() -> None:
             await notify_claude_manager("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
             return
 
+        # Guard: if positions came back empty but buying power is suspiciously low
+        # (suggesting a silent fetch failure rather than a genuine all-cash portfolio),
+        # abort rather than letting Claude redeploy cash into a portfolio it can't see.
+        if not positions and buying_power < portfolio_value * 0.99:
+            log_entry["status"] = "failed_fetch"
+            await notify_claude_manager(
+                "⚠️ **REBALANCE ABORTED** — positions returned empty but buying power is low.\n"
+                "This likely means the Robinhood API failed silently. Rebalance skipped to avoid "
+                "over-buying into a portfolio whose current holdings are invisible."
+            )
+            return
+
         # ── 2. Enrich holdings with yfinance data (all tickers in parallel) ─────
         yf_results = await asyncio.gather(
             *[loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
@@ -389,18 +401,32 @@ async def run_monthly_rebalance() -> None:
         # until they fill, so the API would return the pre-sell cash balance.
         available_budget = buying_power + expected_sell_proceeds
 
+        # Build a lookup of current position values for delta-buy calculation
+        current_values = {
+            pos["symbol"]: pos["qty"] * pos.get("current_price", 0)
+            for pos in positions
+        }
+
         # ── 6. Execute buys ───────────────────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "BUY"):
             ticker         = trade["ticker"].upper()
             target_wt      = trade.get("target_weight_pct", 10)
             target_dollars = portfolio_value * target_wt / 100
-            invest_dollars = min(target_dollars, available_budget * 0.95)
+
+            # Only buy the delta needed to reach target weight — avoids doubling
+            # into a position that's already partially at the target.
+            current_val    = current_values.get(ticker, 0.0)
+            delta_dollars  = max(0.0, target_dollars - current_val)
+            invest_dollars = min(delta_dollars, available_budget * 0.95)
 
             if invest_dollars < 1:
-                reason = f"needed ${target_dollars:,.0f}, only ${available_budget:,.0f} available"
+                if current_val >= target_dollars * 0.95:
+                    reason = f"already at target ({current_val/portfolio_value*100:.1f}% vs {target_wt}% target)"
+                else:
+                    reason = f"needed ${delta_dollars:,.0f} more, only ${available_budget:,.0f} available"
                 await notify_claude_manager(
                     f"⚠️ **CLAUDE BUY — {ticker}** skipped\n"
-                    f"Needed ${target_dollars:,.0f}, only ${available_budget:,.0f} available\n"
+                    f"{reason}\n"
                     f"{_timestamp()}"
                 )
                 log_entry["trades_skipped"].append({"action": "BUY", "ticker": ticker, "reason": reason})
