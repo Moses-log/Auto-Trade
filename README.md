@@ -31,17 +31,17 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 ║  │  • base_entry        │  │  Manual picks from  │  │  Calls Anthropic API │   ║
 ║  │  • add_leverage      │  │  @theaiportfolios   │  │  (claude-opus-4-8)   │   ║
 ║  │  • remove_leverage   │  │  Twitter signals    │  │                      │   ║
-║  │  • stop_loss         │  │                     │  │  Ackman-style stock  │   ║
-║  │                      │  │  5% buying power    │  │  scoring framework   │   ║
-║  │  Alpaca (primary)    │  │  per trade on RH    │  │  (Quality/Growth/    │   ║
-║  │  RH (mirror)         │  │                     │  │  Momentum/Valuation/ │   ║
-║  │                      │  │  Tracked in         │  │  Competitive Moat)   │   ║
-║  │  SPY ONLY — never    │  │  claude_portfolio   │  │                      │   ║
-║  │  touched by Claude   │  │  .json              │  │  Never touches SPY   │   ║
+║  │  • stop_loss         │  │                     │  │  Prompt includes:    │   ║
+║  │                      │  │  5% buying power    │  │  • Fundamentals      │   ║
+║  │  Alpaca (primary)    │  │  per trade on RH    │  │  • Macro (VIX/10Y/   │   ║
+║  │  RH (mirror)         │  │                     │  │    CPI)              │   ║
+║  │                      │  │  Tracked in         │  │  • Earnings dates    │   ║
+║  │  SPY ONLY — never    │  │  claude_portfolio   │  │  • Rebalance history │   ║
+║  │  touched by Claude   │  │  .json              │  │                      │   ║
 ║  └──────────┬───────────┘  └─────────┬───────────┘  └──────────┬───────────┘   ║
 ║             │                        │    yfinance ─────────────┤               ║
-║             │                        │    (fundamentals for     │               ║
-║             │                        │    all RH positions)     │               ║
+║             │                        │    FRED API  ────────────┤               ║
+║             │                        │    (macro + earnings)    │               ║
 ║             └────────────────────────┴──────────────────────────┘               ║
 ║                                      │                                          ║
 ║                         ┌────────────▼────────────┐                            ║
@@ -70,6 +70,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   1st of month 9:35 AM ET ──► Claude autonomous portfolio rebalance
   Every 72 hours ──────► RH session keep-alive (silent token refresh)
   Jan/Apr/Jul/Oct 1 ───► Quarterly Alpaca + RH tax summaries
+  9:31 AM ET next open ► Queued Claude sell fill confirmation (when after-hours)
 
 ════════════════════════════════════════════════════════════════
   DISCORD CHANNELS
@@ -77,8 +78,8 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 
   DISCORD_TRADES_WEBHOOK_URL        ← Alpaca trade fills (Kimi)
   RH_DISCORD_WEBHOOK_URL            ← Robinhood trade fills (Kimi mirror)
-  CLAUDE_PORTFOLIO_WEBHOOK_URL      ← Claude Autopilot manual signal trades
-  CLAUDE_MANAGER_WEBHOOK_URL        ← Claude autonomous analysis + rebalance trades
+  CLAUDE_PORTFOLIO_WEBHOOK_URL      ← Claude Autopilot manual signal trades + fill confirmations
+  CLAUDE_MANAGER_WEBHOOK_URL        ← Claude autonomous analysis, rebalance trades, benchmark
   PORTFOLIO_SNAPSHOT_WEBHOOK_URL    ← Friday RH pie chart + valuation rating
   RH_PNL_WEBHOOK_URL                ← Robinhood P&L reports (daily/weekly/monthly)
   RH_SESSION_WEBHOOK_URL            ← RH session alerts (expiry, keep-alive)
@@ -94,9 +95,9 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   robinhood.pickle          ← RH session token (auto-refreshed every 72 h)
   investors.json            ← Investor deposit history
   trade_record.json         ← Alpaca win/loss record
-  rh_trade_record.json      ← Robinhood win/loss record
+  rh_trade_record.json      ← RH win/loss record (Kimi + all Claude sells)
   leverage_entry.json       ← ADD_LEVERAGE fill prices (accurate DCA P&L)
-  pending_orders.json       ← Queued Alpaca orders (survive restarts)
+  pending_orders.json       ← Queued orders (Alpaca + Claude sells) — survive restarts
   idempotency.json          ← Seen alert IDs (duplicate suppression, 5 min TTL)
   claude_portfolio.json     ← Claude Autopilot + Manager positions + W-L record
   claude_rebalance_log.json ← Monthly rebalance audit log (36 entries max)
@@ -130,7 +131,7 @@ curl -X POST https://your-render-url/claude-signal \
   -d '{"secret":"...","ticker":"FICO","action":"BUY","tweet_url":"https://x.com/..."}'
 ```
 
-Positions tracked in `/data/claude_portfolio.json` with entry price, qty, W-L record, and tweet URL. Discord notifications match the Kimi signal format.
+Positions tracked in `/data/claude_portfolio.json` with entry price, qty, W-L record, and tweet URL. When a sell is placed after market hours, the bot queues a fill confirmation job at 9:31 AM ET the next trading day to resolve the actual fill price and P&L.
 
 ---
 
@@ -139,13 +140,21 @@ Positions tracked in `/data/claude_portfolio.json` with entry price, qty, W-L re
 On the **1st of each month at 9:35 AM ET**, the system:
 
 1. Fetches all RH positions + buying power
-2. Enriches each holding with yfinance fundamentals (Forward P/E, ROE, margins, growth, etc.) — **all tickers in parallel**
-3. Calls **claude-opus-4-8** via the Anthropic API with a full Ackman-style scoring framework
-4. Claude scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage
-5. Claude proposes an optimal portfolio (5–10 stocks, up to 25% per position, flexible cash)
-6. Sells execute first; buy budget = cash + expected sell proceeds (handles after-hours queued-sell lag)
-7. Buys are delta-based — only the additional dollars needed to reach the target weight are invested (prevents over-buying into existing positions)
-8. Full analysis + each trade posted to Discord; full audit log saved to `/data/claude_rebalance_log.json`
+2. Enriches each holding with yfinance fundamentals (Forward P/E, ROE, margins, growth, earnings date) — **all tickers in parallel**
+3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
+4. Loads **last 3 rebalance log entries** to give Claude its own performance history
+5. Calls **claude-opus-4-8** via the Anthropic API with a full Ackman-style scoring framework
+6. Claude scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage — using macro conditions and upcoming earnings dates to inform timing
+7. Claude proposes an optimal portfolio using five trade actions:
+   - **BUY** — open or add to a position (delta-buy: only invests the additional dollars needed to reach target weight)
+   - **DOUBLE_DOWN** — explicitly add to an existing position with elevated conviction (same delta-buy execution, distinct Discord signal)
+   - **SELL** — close an entire position
+   - **TRIM** — reduce a position to a lower target weight without closing it (blocked if qty < 1 share — Robinhood cannot partially sell fractional positions)
+   - **HOLD** — no trade, maintain target weight
+8. Sells execute first; buy budget = cash + expected sell proceeds (handles after-hours queued-sell lag)
+9. After-hours sells are saved as pending orders and resolved at market open with actual fill price and P&L
+10. Full analysis + each trade posted to Discord; full audit log saved to `/data/claude_rebalance_log.json`
+11. **Benchmark comparison** posted at completion (and on no-change months): portfolio % vs SPY % month-over-month and since inception
 
 Can also be triggered on-demand via `/rebalance` Discord slash command or `POST /run-rebalance`.
 
@@ -184,15 +193,16 @@ app/
 ├── rh_pnl.py             # Robinhood P&L engine (daily/weekly/monthly/yearly)
 ├── chart.py              # Alpaca portfolio vs SPY equity curve chart (cyberpunk style)
 ├── portfolio_report.py   # RH pie chart + valuation rating (Friday snapshot)
+├── macro_context.py      # Macro indicators for Claude prompt (VIX, 10Y yield, CPI via FRED)
 │
 ├── claude_manager.py     # Autonomous monthly portfolio manager (Anthropic API)
-├── claude_portfolio.py   # Claude position tracker — open/close/W-L for both Claude systems
+├── claude_portfolio.py   # Claude position tracker — open/close/trim/W-L for both Claude systems
 │
 ├── investors.py          # Investor data model, equity math, Discord report formatting
 ├── trade_record.py       # Alpaca win/loss counter
-├── rh_trade_record.py    # Robinhood win/loss counter
+├── rh_trade_record.py    # Robinhood win/loss counter (Kimi + Claude sells)
 ├── leverage_state.py     # Stores ADD_LEVERAGE fill price per ticker for P&L accuracy
-├── pending_orders.py     # Persist queued Alpaca orders to disk, survive restarts
+├── pending_orders.py     # Persist queued orders to disk (Alpaca + Claude sells)
 ├── tax.py                # Quarterly Alpaca + RH tax summary reports
 ├── interactions.py       # Discord Ed25519 signature verification + option parsing
 ├── discord_commands.py   # All slash command handlers
@@ -201,7 +211,7 @@ app/
 └── trading/
     ├── alpaca_client.py    # Alpaca SDK wrapper: orders, positions, portfolio, market clock
     ├── order_logic.py      # TradingView action → Alpaca + Robinhood execution (Kimi)
-    └── robinhood_client.py # Robinhood auth, session, fractional orders, dollar-amount buys
+    └── robinhood_client.py # Robinhood auth, session, fractional orders, dollar-amount buys, partial sells
 
 scripts/
 └── register_commands.py    # One-time: register all Discord slash commands via API
@@ -244,14 +254,15 @@ scripts/
 | Variable | Default | Description |
 |---|---|---|
 | `CLAUDE_LEVERAGE_FACTOR` | `0.05` | Fraction of RH buying power per `/claude-signal` trade (5%) |
-| `CLAUDE_PORTFOLIO_WEBHOOK_URL` | — | Discord channel for Claude Autopilot trade signals |
+| `CLAUDE_PORTFOLIO_WEBHOOK_URL` | — | Discord channel for Claude Autopilot trade signals and fill confirmations |
 
 ### Claude Portfolio Manager (Autonomous)
 
 | Variable | Description |
 |---|---|
 | `ANTHROPIC_API_KEY` | Anthropic API key — required for autonomous monthly rebalance |
-| `CLAUDE_MANAGER_WEBHOOK_URL` | Discord channel for Claude analysis + rebalance trade notifications |
+| `CLAUDE_MANAGER_WEBHOOK_URL` | Discord channel for Claude analysis, rebalance trades, and benchmark comparisons |
+| `FRED_API_KEY` | Free FRED API key (fred.stlouisfed.org → My Account → API Keys) — enables live CPI data in the rebalance prompt. Optional; VIX and 10Y yield work without it. |
 
 ### Portfolio Snapshot
 
@@ -348,7 +359,7 @@ Manually execute a Claude Autopilot trade from a Twitter signal. Uses `CLAUDE_LE
 }
 ```
 
-`action` must be `BUY` or `SELL`. Records position in `/data/claude_portfolio.json` and notifies `CLAUDE_PORTFOLIO_WEBHOOK_URL`.
+`action` must be `BUY` or `SELL`. Records position in `/data/claude_portfolio.json` and notifies `CLAUDE_PORTFOLIO_WEBHOOK_URL`. After-hours sells are queued and resolved at market open.
 
 ---
 
@@ -406,7 +417,7 @@ All commands are ephemeral (only visible to you) and restricted to `DISCORD_YOUR
 | `/rebalance` | — | Triggers the Claude autonomous portfolio rebalance immediately |
 | `/portfolio` | — | Posts the RH portfolio pie chart + valuation ratings on-demand |
 | `/tax alpaca` | `year` (opt.) | Posts Alpaca realized gains/losses for the given tax year |
-| `/tax robinhood` | `year` (opt.) | Posts RH realized gains/losses for the given tax year |
+| `/tax robinhood` | `year` (opt.) | Posts RH realized gains/losses for the given tax year (Kimi + Claude) |
 
 **One-time setup:** After any command changes, re-run:
 ```powershell
@@ -427,14 +438,15 @@ $env:DISCORD_APP_ID="..."; $env:DISCORD_BOT_TOKEN="..."; python scripts/register
 | `remove_leverage` | SELL only the DCA portion | Sell full position |
 | `stop_loss` | Close all positions | Sell full position |
 
-**Plain-English alert mapping:**
+## Trade Actions (Claude Manager)
 
-| TradingView string | Maps to |
-|---|---|
-| `"base entry"` | `base_entry` |
-| `"add leverage"` | `add_leverage` |
-| `"remove leverage"` | `remove_leverage` |
-| `"stop loss"` | `stop_loss` |
+| Action | JSON field | Behaviour |
+|---|---|---|
+| `BUY` | `target_weight_pct` | Delta-buy — only invests the additional dollars needed to reach the target weight |
+| `DOUBLE_DOWN` | `target_weight_pct` | Same as BUY, but signals elevated conviction — distinct Discord emoji (🔥) |
+| `SELL` | — | Closes the entire position |
+| `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. **Blocked if position qty < 1 share** (Robinhood cannot partially sell fractional positions). |
+| `HOLD` | `target_weight_pct` | No trade executed |
 
 ---
 
@@ -464,19 +476,61 @@ Position: 0.1216 shares
 Qty: 0.43 shares @ $1,840.00
 🕐 2:15 PM CDT — June 1, 2026
 📌 https://x.com/theaiportfolios/status/...
+
+— next morning if after-hours —
+
+✅ 🤖 CLAUDE SELL FILLED — FICO
+Qty: 0.43 shares @ $1,891.50
+P&L: +$22.15 (+2.80%) 🟢 WIN
+Claude Record: 5W - 1L
+🕐 9:31 AM CDT — June 2, 2026
 ```
 
 ### Claude Manager (`CLAUDE_MANAGER_WEBHOOK_URL`)
-Long analysis text (chunked if >2000 chars), followed by individual trade signals:
+The rebalance posts several messages in sequence:
+
 ```
-⏳ CLAUDE SELL — GEV (queued for open)
-Qty: 1 shares ≈ $420.50
-🕐 6:12 PM CDT — June 1, 2026
+🤖 CLAUDE PORTFOLIO MANAGER — MONTHLY REBALANCE
+Fetching portfolio and running analysis... 🕐 9:35 AM CT — June 1, 2026
+
+📊 CLAUDE MONTHLY PORTFOLIO ANALYSIS
+[Full written analysis — chunked across multiple Discord messages if >2000 chars]
+
+⚡ EXECUTING 4 TRADE(S) — 🕐 9:36 AM CT
+
+🔥 CLAUDE DOUBLE_DOWN — META
+Qty: 0.834 shares @ $601.00
+Target: 22% weight — Invested: $501.23
+🕐 9:36 AM CT
+
+✂️ CLAUDE TRIM — NVDA
+Sold 2.000 shares @ $127.50 → reduced to 8% target
+P&L: +$84.20 🟢
+Claude Record: 7W - 2L
+🕐 9:36 AM CT
+
+🔴 CLAUDE SELL — NOW
+Qty: 5.5 shares @ $210.00
+P&L: +$312.00 (+18.42%) 🟢 WIN
+Claude Record: 8W - 2L
+🕐 9:36 AM CT
 
 🟢 CLAUDE BUY — FICO
-Qty: 0.82 shares @ $1,840.00
-Target: 15% weight — Invested: $1,507.00
-🕐 9:37 AM CDT — June 1, 2026
+Qty: 1.234 shares @ $1,842.00
+Target: 15% weight — Invested: $2,271.73
+🕐 9:36 AM CT
+
+✅ CLAUDE PORTFOLIO REBALANCE COMPLETE — 🕐 9:37 AM CT — June 1, 2026
+
+🟢 This month:   Portfolio +3.21%  |  SPY +1.84%  |  Alpha +1.37%
+🟢 Since 2026-01-01:  Portfolio +18.50%  |  SPY +12.30%  |  Alpha +6.20%
+
+— or when no trades needed —
+
+✅ NO CHANGES THIS MONTH
+Claude determined the current portfolio requires no rebalancing.
+
+🟢 This month:   Portfolio +1.10%  |  SPY +0.82%  |  Alpha +0.28%
 ```
 
 ### Portfolio Snapshot (`PORTFOLIO_SNAPSHOT_WEBHOOK_URL`)
@@ -491,7 +545,7 @@ Potential Upside:   🟢 Good (+18.5% to analyst targets)
 
 Per position:
   FICO   P/E: 38.2x   Analyst upside: +12.4%
-  GEV    P/E: N/A      Analyst upside: +22.1%
+  META   P/E: 22.1x   Analyst upside: +8.3%
   Cash   P/E: N/A      Analyst upside: N/A
 
 🕐 4:00 PM CDT
@@ -508,12 +562,12 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `robinhood.pickle` | Auth endpoints, keep-alive | RH session token |
 | `investors.json` | `/deposit`, `/withdraw` | Investor deposit history |
 | `trade_record.json` | Every Alpaca sell | Alpaca win/loss record |
-| `rh_trade_record.json` | Every Kimi RH sell | Robinhood win/loss record |
+| `rh_trade_record.json` | Every Kimi RH sell + every Claude sell | Robinhood win/loss + tax record |
 | `leverage_entry.json` | Every `add_leverage` | DCA fill price for accurate P&L |
-| `pending_orders.json` | After-hours Alpaca orders | Queued order fill notifications |
+| `pending_orders.json` | After-hours Alpaca + Claude queued sells | Queued order fill notifications — survive restarts |
 | `idempotency.json` | Every webhook hit | Duplicate alert suppression (5-min TTL) |
 | `claude_portfolio.json` | `/claude-signal`, Claude Manager | Claude positions + W-L record |
-| `claude_rebalance_log.json` | Monthly rebalance | Full audit log — analysis, positions before, trades executed/skipped (capped at 36 entries) |
+| `claude_rebalance_log.json` | Monthly rebalance | Full audit log — macro context, analysis, positions before, trades executed/skipped, SPY price (capped at 36 entries) |
 | `rh_positions_cache.json` | Every successful RH fetch | Last-known positions for pie chart fallback when API is down |
 
 ---
@@ -541,7 +595,7 @@ On **January 1, April 1, July 1, and October 1** at 8:00 AM ET:
 - **January 1** → reports the completed prior year
 - **April / July / October 1** → reports the current year to date
 
-Posted to `ALPACA_TAX_WEBHOOK_URL` and `RH_TAX_WEBHOOK_URL` (both fall back to `DISCORD_WEBHOOK_URL`).
+The RH tax report captures **all RH sells** — Kimi strategy trades and all Claude trades (both Autopilot and Manager). Posted to `ALPACA_TAX_WEBHOOK_URL` and `RH_TAX_WEBHOOK_URL`.
 
 ---
 
@@ -572,10 +626,10 @@ Multiple deposits at different SPY prices are each tracked independently.
 
 ## Win/Loss Record
 
-Two separate records updated on every sell:
+Three separate records updated on every sell:
 - **Alpaca** — `TRADE_RECORD_PATH` (`/data/trade_record.json`)
-- **Robinhood** — `/data/rh_trade_record.json`
-- **Claude** — `/data/claude_portfolio.json` (shared between Autopilot and Manager)
+- **Robinhood (tax)** — `/data/rh_trade_record.json` — captures Kimi sells, Claude Autopilot sells, and Claude Manager sells (including TRIM). Used by `/tax robinhood`.
+- **Claude** — `/data/claude_portfolio.json` — tracks Claude Autopilot + Manager W-L record independently, shown in Claude trade Discord messages.
 
 For `remove_leverage`, P&L is calculated against the stored ADD_LEVERAGE fill price rather than the blended position average — giving an accurate view of the DCA trade independent of the base position.
 
@@ -589,11 +643,16 @@ TradingView can fire the same alert multiple times. The system deduplicates via 
 
 ## Pending Order Handling
 
-When an Alpaca order is placed after market hours:
+When an order is placed after market hours:
+
+**Alpaca (Kimi):**
 1. Posts `⏳ queued for next market open` notification immediately
 2. Saves the order to `pending_orders.json` — survives restarts
 3. Schedules a job at 9:31 AM ET next trading day to poll for the fill
 4. On fill, posts a full `(FILLED AT OPEN)` notification with actual fill price and P&L
+
+**Robinhood (Claude sells):**
+Same flow, but the pending entry has `broker="claude_sell"` and resolves via `notify_claude_pending_sell_fill`, which posts to `CLAUDE_PORTFOLIO_WEBHOOK_URL` (Autopilot) or `CLAUDE_MANAGER_WEBHOOK_URL` (Manager) with actual fill price, P&L, and win/loss record.
 
 ---
 
