@@ -124,7 +124,9 @@ def generate_financials_chart(data: dict) -> bytes:
 
     n = len(quarters)
     x = np.arange(n, dtype=float)
-    bar_w = 0.22
+    bar_w  = 0.26   # wider bars
+    gap    = 0.03   # small gap between bars in each group
+    step   = bar_w + gap  # center-to-center distance between adjacent bars
 
     # Scale bars to M or B based on revenue magnitude
     divisor, suffix = _scale(revenues)
@@ -140,14 +142,14 @@ def generate_financials_chart(data: dict) -> bytes:
     fig.patch.set_facecolor(_BG)
     ax1.set_facecolor(_BG)
 
-    # ── Grouped bars ──────────────────────────────────────────────────────────
-    ax1.bar(x - bar_w, rev_s, bar_w, color=_COLOR_REVENUE, alpha=0.88, zorder=3, label="Revenue")
-    ax1.bar(x,         gp_s,  bar_w, color=_COLOR_GP,      alpha=0.88, zorder=3, label="Gross Profit")
+    # ── Grouped bars (Revenue | Gross Profit | Net Income) ────────────────────
+    ax1.bar(x - step, rev_s, bar_w, color=_COLOR_REVENUE, alpha=0.88, zorder=3, label="Revenue")
+    ax1.bar(x,        gp_s,  bar_w, color=_COLOR_GP,      alpha=0.88, zorder=3, label="Gross Profit")
 
     # Net Income bars coloured per-quarter (positive = cyan, negative = pink)
     for i in range(n):
         color = _COLOR_NI_POS if (net_incs[i] is not None and net_incs[i] >= 0) else _COLOR_NI_NEG
-        ax1.bar(x[i] + bar_w, ni_s[i], bar_w, color=color, alpha=0.88, zorder=3)
+        ax1.bar(x[i] + step, ni_s[i], bar_w, color=color, alpha=0.88, zorder=3)
 
     # Dummy bar for legend entry
     ax1.bar([], [], bar_w, color=_COLOR_NI_POS, alpha=0.88, label="Net Income")
@@ -164,15 +166,19 @@ def generate_financials_chart(data: dict) -> bytes:
                  color=_COLOR_MARGIN, linewidth=2.5, marker="o",
                  markersize=7, zorder=5, solid_capstyle="round")
         for xi, yi in zip(valid_x, valid_y):
-            va = "bottom" if yi >= 0 else "top"
-            offset = 10 if yi >= 0 else -12
             ax2.annotate(
                 f"{yi:.1f}%",
                 xy=(xi, yi),
-                xytext=(0, offset),
+                xytext=(0, 14),
                 textcoords="offset points",
                 ha="center", fontsize=8.5,
                 color=_COLOR_MARGIN, fontweight="bold",
+                bbox=dict(
+                    boxstyle="round,pad=0.25",
+                    facecolor=_BG,
+                    edgecolor="none",
+                    alpha=0.85,
+                ),
             )
 
     # ── Axis styling ──────────────────────────────────────────────────────────
@@ -195,7 +201,7 @@ def generate_financials_chart(data: dict) -> bytes:
 
     ax1.grid(axis="y", color=_GRID_COLOR, linewidth=0.9, zorder=0)
     ax1.axhline(0, color=_ZERO_LINE, linewidth=1.2, zorder=2)
-    ax1.set_xlim(-0.6, n - 0.4)
+    ax1.set_xlim(-0.7, n - 0.3)
 
     ax1.set_ylabel(f"USD ({suffix})", color="#888899", fontsize=10)
     ax2.set_ylabel("Net Margin", color=_COLOR_MARGIN, fontsize=10)
