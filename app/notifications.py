@@ -169,7 +169,7 @@ async def notify_alpaca_tax(message: str) -> None:
 
 
 async def notify_claude_manager(message: str) -> None:
-    """Send a Claude portfolio manager update to CLAUDE_MANAGER_WEBHOOK_URL.
+    """Send a Claude trade signal to CLAUDE_MANAGER_WEBHOOK_URL (trades channel).
     Falls back to RH channel, then main channel.
     """
     url = (
@@ -184,6 +184,24 @@ async def notify_claude_manager(message: str) -> None:
             await _client.post(url, json={"content": chunk}, timeout=5)
         except Exception as exc:
             log.warning("Claude manager notification failed: %s", exc)
+
+
+async def notify_claude_analysis(message: str) -> None:
+    """Send a Claude monthly analysis/report to CLAUDE_ANALYSIS_WEBHOOK_URL.
+    Falls back to CLAUDE_MANAGER_WEBHOOK_URL, then main channel.
+    """
+    url = (
+        settings.claude_analysis_webhook_url
+        or settings.claude_manager_webhook_url
+        or settings.discord_webhook_url
+    )
+    if not url:
+        return
+    for chunk in _chunk(message, 1990):
+        try:
+            await _client.post(url, json={"content": chunk}, timeout=5)
+        except Exception as exc:
+            log.warning("Claude analysis notification failed: %s", exc)
 
 
 def _chunk(text: str, size: int) -> list[str]:
