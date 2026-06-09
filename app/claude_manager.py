@@ -305,8 +305,7 @@ async def notify_claude_pending_sell_fill(
         except Exception as exc:
             log.warning("Polling Claude sell order %s attempt %d: %s", order_id, attempt, exc)
         if attempt < 11:
-            import asyncio as _asyncio
-            await _asyncio.sleep(10)
+            await asyncio.sleep(10)
 
     remove_pending_order(order_id)
 
@@ -380,6 +379,7 @@ async def run_monthly_rebalance() -> None:
         "status": "started",
         "portfolio_value": None,
         "buying_power": None,
+        "spy_price_at_rebalance": None,
         "positions_before": [],
         "claude_response": None,
         "trade_block": None,
@@ -535,14 +535,22 @@ async def run_monthly_rebalance() -> None:
                 run_dt.isoformat(), broker="claude_sell", qty=qty_sold, source="manager",
             )
 
-        # Pre-calculate expected sell proceeds (SELL + TRIM) so buys can be funded
-        # even when sells are queued after-hours.
-        sell_tickers = {t["ticker"].upper() for t in trades if t["action"] in ("SELL", "TRIM")}
-        expected_sell_proceeds = sum(
-            pos["qty"] * pos.get("current_price", 0)
-            for pos in positions
-            if pos["symbol"] in sell_tickers
-        )
+        # Pre-calculate expected sell proceeds so buys can be funded even when
+        # sells are queued after-hours. SELL = full position; TRIM = only the
+        # portion being sold (full position value − target value).
+        expected_sell_proceeds = 0.0
+        for _t in trades:
+            _action = _t["action"]
+            _tk = _t["ticker"].upper()
+            _pos = next((p for p in positions if p["symbol"] == _tk), None)
+            if _pos is None:
+                continue
+            _pos_val = _pos["qty"] * _pos.get("current_price", 0)
+            if _action == "SELL":
+                expected_sell_proceeds += _pos_val
+            elif _action == "TRIM":
+                _target_val = portfolio_value * _t.get("target_weight_pct", 5) / 100
+                expected_sell_proceeds += max(0.0, _pos_val - _target_val)
 
         # ── 5. Execute full sells first ───────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "SELL"):
