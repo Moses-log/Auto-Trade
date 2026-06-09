@@ -125,6 +125,8 @@ def trim_position(
         pct_pnl = (exit_price - entry_price) / entry_price * 100 if entry_price else 0.0
 
         pos["qty"] -= qty_sold
+        if pos["qty"] < 0.0001:
+            data["positions"] = [p for p in data["positions"] if p["ticker"] != ticker]
         data["closed"].append({
             "ticker": ticker,
             "qty": qty_sold,
