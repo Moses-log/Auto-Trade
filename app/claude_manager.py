@@ -63,6 +63,9 @@ Portfolio Construction Rules:
 - Think like Bill Ackman and Leopold Aschenbrenner. Avoid mega-caps where possible. Maximize returns.
 - If only 5–7 stocks meet the required standards, do not force diversification. Hold only the highest-conviction opportunities.
 
+HARD EXCLUSION — never buy, sell, or mention as a candidate:
+- SPY (managed separately by the Kimi DCA strategy — do not touch under any circumstances)
+
 REQUIRED OUTPUT FORMAT:
 After your full analysis, you MUST end your response with a JSON block in exactly this format:
 
@@ -267,7 +270,9 @@ async def run_monthly_rebalance() -> None:
         )
         return
 
-    trades = trade_block.get("trades", [])
+    _EXCLUDED = {"SPY"}  # managed by Kimi — Claude must never touch these
+
+    trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
     if not trades:
         await notify_claude_manager("✅ No trades to execute this month.")
         return
