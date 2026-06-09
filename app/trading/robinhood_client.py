@@ -317,8 +317,12 @@ class RobinhoodClient:
         qty = float(pos.get("quantity", 0))
         if qty <= 0:
             return {"status": "ok", "note": "no position to close", "qty": 0.0}
+        price_est = self._get_latest_price(ticker)
         order = self._place_market_sell(ticker, qty)
-        fill_price = float(order.get("average_price") or 0) or None
+        queued = not ac.is_market_open()
+        if queued:
+            return {"status": "ok", "qty": qty, "price_est": price_est, "queued": True, "order_id": order.get("id")}
+        fill_price = float(order.get("average_price") or 0) or price_est
         return {"status": "ok", "qty": qty, "fill_price": fill_price, "order_id": order.get("id")}
 
     async def close_ticker_async(self, ticker: str) -> dict:

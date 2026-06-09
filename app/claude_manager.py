@@ -240,11 +240,12 @@ async def run_monthly_rebalance() -> None:
             await notify_claude_manager("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
             return
 
-        # ── 2. Enrich holdings with yfinance data ─────────────────────────────
+        # ── 2. Enrich holdings with yfinance data (all tickers in parallel) ─────
+        yf_results = await asyncio.gather(
+            *[loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
+        )
         enriched = []
-        for pos in positions:
-            ticker = pos["symbol"]
-            yf_data = await loop.run_in_executor(None, _fetch_yf_data, ticker)
+        for pos, yf_data in zip(positions, yf_results):
             weight_pct = round(
                 pos["qty"] * pos.get("current_price", 0) / portfolio_value * 100, 1
             )
@@ -350,7 +351,7 @@ async def run_monthly_rebalance() -> None:
                 continue
 
             qty    = result["qty"]
-            fill   = result.get("fill_price")
+            fill   = result.get("fill_price") or result.get("price_est")
             queued = result.get("queued", False)
 
             sold_qty, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
