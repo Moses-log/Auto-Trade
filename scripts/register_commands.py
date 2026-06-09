@@ -163,6 +163,11 @@ COMMANDS: list = [
         ],
     },
     {
+        "name": "rebalance",
+        "description": "Trigger the Claude portfolio monthly rebalance now",
+        "options": [],
+    },
+    {
         "name": "close",
         "description": "Close a position by ticker symbol",
         "options": [

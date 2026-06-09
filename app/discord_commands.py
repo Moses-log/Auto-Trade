@@ -305,6 +305,12 @@ def _d(amount: float) -> str:
     return f"+${amount:,.2f}" if amount >= 0 else f"-${abs(amount):,.2f}"
 
 
+async def handle_rebalance(token: str) -> None:
+    await _edit_original(token, "🤖 **CLAUDE PORTFOLIO REBALANCE STARTED**\nRunning analysis — watch this channel for updates...")
+    from app.claude_manager import run_monthly_rebalance
+    await run_monthly_rebalance()
+
+
 async def handle_tax_alpaca(year: int, token: str) -> None:
     from app.tax import send_alpaca_tax_report
     await _edit_original(token, f"⏳ Fetching Alpaca {year} trade history…")
@@ -347,6 +353,8 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
                 await _edit_original(token, "❌ Ticker is required")
             else:
                 await handle_close(ticker=ticker, broker=options.get("broker", "both"), token=token)
+        elif command == "rebalance":
+            await handle_rebalance(token=token)
         elif command == "tax":
             sub = options.get("_subcommand", "alpaca")
             year = int(options.get("year") or datetime.now().year)
