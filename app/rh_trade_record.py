@@ -10,7 +10,7 @@ from typing import List
 
 log = logging.getLogger(__name__)
 
-_RECORD_FILE = Path(os.getenv("RH_TRADE_RECORD_PATH", "rh_trade_record.json"))
+_RECORD_FILE = Path(os.getenv("RH_TRADE_RECORD_PATH", "/data/rh_trade_record.json"))
 _lock = asyncio.Lock()
 
 

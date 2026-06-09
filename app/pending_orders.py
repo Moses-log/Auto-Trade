@@ -9,7 +9,7 @@ from typing import Optional
 
 log = logging.getLogger(__name__)
 
-_FILE = Path(os.getenv("PENDING_ORDERS_PATH", "pending_orders.json"))
+_FILE = Path(os.getenv("PENDING_ORDERS_PATH", "/data/pending_orders.json"))
 _lock = threading.Lock()
 
 

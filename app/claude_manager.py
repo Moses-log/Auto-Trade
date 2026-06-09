@@ -17,6 +17,8 @@ import re
 from datetime import datetime, date, time as dtime
 from typing import Optional
 
+import os
+
 import httpx
 import pytz
 import yfinance as yf
@@ -24,7 +26,7 @@ import yfinance as yf
 from app.config import settings
 
 _CT = pytz.timezone("America/Chicago")
-_LOG_PATH = "/data/claude_rebalance_log.json"
+_LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
 
 
 def _timestamp() -> str:

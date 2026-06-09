@@ -338,6 +338,7 @@ scripts/
 | `RH_TRADE_RECORD_PATH` | `/data/rh_trade_record.json` |
 | `LEVERAGE_STATE_PATH` | `/data/leverage_entry.json` |
 | `CLAUDE_PORTFOLIO_PATH` | `/data/claude_portfolio.json` |
+| `CLAUDE_REBALANCE_LOG_PATH` | `/data/claude_rebalance_log.json` |
 
 ### Other
 
