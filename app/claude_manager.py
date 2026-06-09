@@ -40,7 +40,7 @@ Portfolio Constraints:
 - Hold a minimum of 5 stocks.
 - No ETFs, mutual funds, options, futures, leverage, or short positions.
 - Only publicly traded U.S. stocks with a market capitalization above $5 billion.
-- Cash allocation should remain below 10% unless market conditions are extremely unfavorable.
+- Cash allocation is flexible — hold as much cash as conviction warrants. Never force deployment into mediocre opportunities just to be fully invested.
 - Position sizes may range from 5% to 25%.
 - Rebalance monthly, but only when a superior opportunity exists.
 
@@ -85,7 +85,7 @@ Rules for the JSON block:
 - action must be exactly "BUY", "SELL", or "HOLD".
 - ticker must be the exact US exchange ticker symbol.
 - target_weight_pct is required for BUY and HOLD; omit for SELL.
-- All target_weight_pct values for non-SELL positions must sum to 90–100%.
+- All target_weight_pct values for non-SELL positions should reflect true conviction — they do not need to sum to 100%. Uninvested cash is a valid position.
 - Do not include markdown, comments, or extra fields in the JSON block."""
 
 
