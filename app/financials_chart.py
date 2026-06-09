@@ -154,7 +154,7 @@ def generate_financials_chart(data: dict) -> bytes:
 
     # ── Net margin line on secondary axis ─────────────────────────────────────
     ax2 = ax1.twinx()
-    ax2.set_facecolor(_BG)
+    ax2.patch.set_visible(False)  # transparent — bars on ax1 show through
 
     valid_x = [x[i] for i, m in enumerate(margins) if m is not None]
     valid_y = [m for m in margins if m is not None]
