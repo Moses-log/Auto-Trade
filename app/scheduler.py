@@ -90,6 +90,11 @@ async def _quarterly_tax_report() -> None:
             log.error("Quarterly tax report failed for %s: %s", name, result)
 
 
+async def _claude_monthly_rebalance() -> None:
+    from app.claude_manager import run_monthly_rebalance
+    await run_monthly_rebalance()
+
+
 def setup_jobs() -> None:
     """Register cron jobs — two parallel bundles replacing five staggered jobs."""
     scheduler.add_job(
@@ -116,7 +121,17 @@ def setup_jobs() -> None:
         id="quarterly_tax_report",
         replace_existing=True,
     )
-    log.info("Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), robinhood_keep_alive (every 72 h), quarterly_tax_report (Jan/Apr/Jul/Oct 1)")
+    scheduler.add_job(
+        _claude_monthly_rebalance,
+        CronTrigger(day=1, hour=9, minute=35, timezone=ET),
+        id="claude_monthly_rebalance",
+        replace_existing=True,
+    )
+    log.info(
+        "Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), "
+        "robinhood_keep_alive (every 72 h), quarterly_tax_report (Jan/Apr/Jul/Oct 1), "
+        "claude_monthly_rebalance (1st of each month 9:35 AM ET)"
+    )
 
 
 def reschedule_pending_orders() -> None:

@@ -168,6 +168,29 @@ async def notify_alpaca_tax(message: str) -> None:
         log.warning("Alpaca tax notification failed: %s", exc)
 
 
+async def notify_claude_manager(message: str) -> None:
+    """Send a Claude portfolio manager update to CLAUDE_MANAGER_WEBHOOK_URL.
+    Falls back to RH channel, then main channel.
+    """
+    url = (
+        settings.claude_manager_webhook_url
+        or settings.rh_discord_webhook_url
+        or settings.discord_webhook_url
+    )
+    if not url:
+        return
+    for chunk in _chunk(message, 1990):
+        try:
+            await _client.post(url, json={"content": chunk}, timeout=5)
+        except Exception as exc:
+            log.warning("Claude manager notification failed: %s", exc)
+
+
+def _chunk(text: str, size: int) -> list[str]:
+    """Split text into chunks that fit within Discord's message size limit."""
+    return [text[i:i + size] for i in range(0, len(text), size)]
+
+
 async def notify_claude_portfolio(message: str) -> None:
     """Send a Claude portfolio trade notification to CLAUDE_PORTFOLIO_WEBHOOK_URL.
     Falls back to RH channel, then main channel.

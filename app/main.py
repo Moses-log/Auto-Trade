@@ -626,6 +626,21 @@ async def deposit(request: Request) -> dict:
     }
 
 
+@app.post("/run-rebalance", tags=["trading"])
+async def run_rebalance(request: Request, background_tasks: BackgroundTasks) -> dict:
+    """Manually trigger the Claude portfolio monthly rebalance. Body: {"secret": "..."}"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Request body must be valid JSON."})
+
+    verify_webhook_secret(body.get("secret", ""))
+
+    from app.claude_manager import run_monthly_rebalance
+    background_tasks.add_task(run_monthly_rebalance)
+    return {"status": "ok", "message": "Rebalance started in background — watch Discord for updates."}
+
+
 @app.post("/run-report")
 async def run_report(request: Request) -> dict:
     """Manually trigger a P&L report. Body: {"secret": "...", "report": "daily"|"weekly"|"monthly"|"ytd"|"1year"|"alltime"|"both"}"""

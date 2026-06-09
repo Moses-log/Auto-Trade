@@ -72,6 +72,10 @@ class Settings(BaseSettings):
     claude_leverage_factor: float = 0.05
     claude_portfolio_webhook_url: Optional[str] = None
 
+    # ── Claude Portfolio Manager (autonomous monthly rebalancer) ──────────────
+    anthropic_api_key: Optional[str] = None
+    claude_manager_webhook_url: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 

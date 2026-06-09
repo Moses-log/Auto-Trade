@@ -343,6 +343,32 @@ class RobinhoodClient:
             return None
         return self._place_market_sell(ticker, qty)
 
+    def _buy_dollars_sync(self, ticker: str, dollars: float) -> dict:
+        """Buy a specific dollar amount of ticker. Used by the Claude portfolio manager."""
+        price = self._get_latest_price(ticker)
+        qty = round(dollars / price, 6)
+        if qty <= 0:
+            raise ValueError(f"Buy qty is 0 for {ticker} at ${price:.2f} with ${dollars:.2f}")
+        order = self._place_market_buy(ticker, qty)
+        queued = not ac.is_market_open()
+        if queued:
+            return {"status": "ok", "qty": qty, "price_est": price, "queued": True}
+        fill_price = float(order.get("average_price") or 0) or price
+        return {"status": "ok", "qty": qty, "fill_price": fill_price, "order_id": order.get("id")}
+
+    async def buy_dollars_async(self, ticker: str, dollars: float) -> dict:
+        """Async wrapper for _buy_dollars_sync. Never raises."""
+        if not self.available:
+            return {"status": "skipped", "reason": "session unavailable"}
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, self._buy_dollars_sync, ticker, dollars)
+        except Exception as exc:
+            if _is_auth_error(exc):
+                self.available = False
+                return {"status": "failed", "reason": "session expired"}
+            return {"status": "failed", "reason": str(exc)}
+
     async def execute_for_claude(self, action: str, ticker: str) -> dict:
         """Execute a Claude portfolio trade using CLAUDE_LEVERAGE_FACTOR sizing. Never raises."""
         if not settings.rh_enabled:
