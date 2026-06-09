@@ -320,6 +320,9 @@ async def notify_claude_pending_sell_fill(
     pct_pnl = (fill_price - entry_price) / entry_price * 100 if entry_price else 0.0
     await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
 
+    from app.claude_portfolio import get_record
+    wins, losses = get_record()
+
     if dollar_pnl >= 0:
         pnl_str = f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
     else:
@@ -330,6 +333,7 @@ async def notify_claude_pending_sell_fill(
         f"✅ {prefix}**CLAUDE SELL FILLED — {ticker}**\n"
         f"Qty: {qty:g} shares @ ${fill_price:,.2f}\n"
         f"{pnl_str}\n"
+        f"Claude Record: {wins}W - {losses}L\n"
         f"{_timestamp()}"
     )
 
@@ -498,10 +502,11 @@ async def run_monthly_rebalance() -> None:
 
         if trade_block.get("no_changes"):
             log_entry["status"] = "no_changes"
-            await notify_claude_manager(
-                "✅ **NO CHANGES THIS MONTH**\n"
-                "Claude determined the current portfolio requires no rebalancing."
-            )
+            no_changes_msg = "✅ **NO CHANGES THIS MONTH**\nClaude determined the current portfolio requires no rebalancing."
+            benchmark_str = _format_benchmark(log_entry, all_history_records)
+            if benchmark_str:
+                no_changes_msg += f"\n\n{benchmark_str}"
+            await notify_claude_manager(no_changes_msg)
             return
 
         _EXCLUDED = {"SPY"}  # managed by Kimi — Claude must never touch these
@@ -672,7 +677,7 @@ async def run_monthly_rebalance() -> None:
                          f"Sold {qty_sold:g} shares @ ${fill:,.2f} → reduced to {target_wt}% target"]
                 if pnl_line:
                     lines.append(pnl_line)
-                lines.append(_timestamp())
+                lines += [f"Claude Record: {wins}W - {losses}L", _timestamp()]
             await notify_claude_manager("\n".join(lines))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
