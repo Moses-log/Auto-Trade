@@ -27,6 +27,9 @@ log = logging.getLogger(__name__)
 
 ET = pytz.timezone("America/New_York")
 
+# Date the fund started trading — used for the "Since Inception" report.
+FUND_INCEPTION_DATE = _date(2026, 4, 27)
+
 _yf_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2, thread_name_prefix="yfinance")
 _YF_TIMEOUT = 15.0
 
@@ -488,6 +491,89 @@ async def send_alltime_report() -> None:
     except Exception as exc:
         log.error("All-time P&L report failed: %s", exc)
         await notify(f"⚠️ All-time P&L report failed: {exc}")
+
+
+async def _send_since_date_report(start_date: _date, label: str, period_key: str) -> None:
+    """Shared implementation for the "Since Inception" and "Custom Date" reports.
+
+    Fetches portfolio history from start_date through today and posts P&L + chart.
+    """
+    now = datetime.now(ET)
+    try:
+        start_dt = ET.localize(datetime.combine(start_date, datetime.min.time()))
+        history = get_portfolio_history(timeframe="1D", start=start_dt)
+
+        start_idx = _first_nonzero_idx(history.equity)
+        if not history.equity or start_idx >= len(history.equity):
+            raise ValueError(f"No equity data available for {label} report")
+
+        # Build equity/timestamps and extend to today so P&L and chart share identical data
+        equity = list(history.equity[start_idx:])
+        timestamps = list(history.timestamp[start_idx:])
+        last_date = datetime.fromtimestamp(timestamps[-1], tz=ET).date()
+        if last_date < now.date():
+            try:
+                account = get_account()
+                equity.append(float(account.equity))
+                timestamps.append(int(now.timestamp()))
+            except Exception as exc:
+                log.warning("Could not fetch current equity for %s report: %s", label, exc)
+
+        open_eq = equity[0] if equity and equity[0] else 1.0
+        close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
+        if close_eq is None:
+            raise ValueError(f"No valid close equity for {label} report")
+        dollar = close_eq - open_eq
+        pct = (dollar / open_eq * 100) if open_eq else 0.0
+        result = PnLResult(period=period_key, close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
+
+        actual_start = datetime.fromtimestamp(timestamps[0], tz=ET)
+        start_str = actual_start.strftime(f"%b {actual_start.day}, %Y")
+        end_str = now.strftime(f"%b {now.day}, %Y")
+        date_str = f"Since {start_str}"
+        chart_title = f"{label} Performance: {start_str} – {end_str}"
+
+        # SPY from same date range and same Close.iloc[0] baseline as chart
+        spy_df = fetch_spy_history(actual_start.date(), now.date() + timedelta(days=1))
+
+        spy_pct: Optional[float] = None
+        if spy_df is not None and not spy_df.empty and "Close" in spy_df.columns:
+            spy_open = float(spy_df["Close"].iloc[0])
+            spy_close = float(spy_df["Close"].iloc[-1])
+            if spy_open:
+                spy_pct = (spy_close - spy_open) / spy_open * 100
+
+        msg = _format_message(result, f"{label} P&L", date_str, spy_pct=spy_pct)
+
+        chart_bytes = None
+        try:
+            if spy_df is not None:
+                loop = asyncio.get_running_loop()
+                chart_bytes = await loop.run_in_executor(
+                    None, generate_equity_chart,
+                    equity, timestamps, spy_df, chart_title
+                )
+        except Exception as exc:
+            log.warning("%s chart generation failed: %s", label, exc)
+
+        if chart_bytes:
+            await notify_with_chart(msg, chart_bytes)
+        else:
+            await notify(msg)
+        log.info("%s P&L report sent: dollar=%.2f pct=%.2f", label, result.dollar_pnl, result.pct_pnl)
+    except Exception as exc:
+        log.error("%s P&L report failed: %s", label, exc)
+        await notify(f"⚠️ {label} P&L report failed: {exc}")
+
+
+async def send_inception_report() -> None:
+    """Fetch portfolio history since fund inception and post P&L + chart to Discord."""
+    await _send_since_date_report(FUND_INCEPTION_DATE, "Since Inception", "inception")
+
+
+async def send_custom_report(start_date: _date) -> None:
+    """Fetch portfolio history since a user-specified date and post P&L + chart to Discord."""
+    await _send_since_date_report(start_date, "Custom", "custom")
 
 
 async def check_period_reports() -> None:

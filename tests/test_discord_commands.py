@@ -170,6 +170,93 @@ async def test_handle_report_alltime():
 
 
 @pytest.mark.asyncio
+async def test_handle_report_inception():
+    with patch("app.discord_commands.send_inception_report", new_callable=AsyncMock) as mock_inception, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("alpaca", "inception", "test-token")
+    mock_inception.assert_called_once()
+    msg = mock_edit.call_args[0][1]
+    assert "✅" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_report_custom_success():
+    with patch("app.discord_commands.send_custom_report", new_callable=AsyncMock) as mock_custom, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("alpaca", "custom", "test-token", custom_date="2026-01-15")
+
+    mock_custom.assert_called_once()
+    called_date = mock_custom.call_args[0][0]
+    assert called_date == date(2026, 1, 15)
+    msg = mock_edit.call_args[0][1]
+    assert "2026-01-15" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_report_custom_missing_date():
+    with patch("app.discord_commands.send_custom_report", new_callable=AsyncMock) as mock_custom, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("alpaca", "custom", "test-token")
+
+    mock_custom.assert_not_called()
+    msg = mock_edit.call_args[0][1]
+    assert "date" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_report_custom_invalid_date_format():
+    with patch("app.discord_commands.send_custom_report", new_callable=AsyncMock) as mock_custom, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("alpaca", "custom", "test-token", custom_date="01/15/2026")
+
+    mock_custom.assert_not_called()
+    msg = mock_edit.call_args[0][1]
+    assert "Invalid date" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_report_custom_future_date():
+    with patch("app.discord_commands.send_custom_report", new_callable=AsyncMock) as mock_custom, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_report
+        await handle_report("alpaca", "custom", "test-token", custom_date="2099-01-01")
+
+    mock_custom.assert_not_called()
+    msg = mock_edit.call_args[0][1]
+    assert "future" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_report_custom_subcommand_routes_to_handle_report():
+    with patch("app.discord_commands.handle_report", new_callable=AsyncMock) as mock_handle:
+        from app.discord_commands import dispatch_command
+        await dispatch_command(
+            "report",
+            {"_subcommand": "custom", "date": "2026-01-15"},
+            "test-token",
+        )
+    mock_handle.assert_called_once_with(
+        broker="alpaca", report_type="custom", token="test-token", custom_date="2026-01-15",
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatch_report_alpaca_subcommand_routes_to_handle_report():
+    with patch("app.discord_commands.handle_report", new_callable=AsyncMock) as mock_handle:
+        from app.discord_commands import dispatch_command
+        await dispatch_command(
+            "report",
+            {"_subcommand": "alpaca", "type": "inception"},
+            "test-token",
+        )
+    mock_handle.assert_called_once_with(broker="alpaca", report_type="inception", token="test-token")
+
+
+@pytest.mark.asyncio
 async def test_handle_report_robinhood():
     with patch("app.discord_commands.send_rh_report", new_callable=AsyncMock) as mock_rh, \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:

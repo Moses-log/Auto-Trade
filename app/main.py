@@ -38,12 +38,15 @@ from app.models import AlertPayload, DepositRequest, TradingAction
 from app.notifications import notify, close_http_client, notify_rh_session
 from app.rh_trade_notifier import notify_rh_trade
 from app.pnl import (
+    ET,
     send_daily_report,
     send_weekly_report,
     send_monthly_report,
     send_yearly_report,
     send_ytd_report,
     send_alltime_report,
+    send_inception_report,
+    send_custom_report,
     send_investor_report,
     _yf_executor,
 )
@@ -671,7 +674,10 @@ async def run_rebalance(request: Request, background_tasks: BackgroundTasks) -> 
 
 @app.post("/run-report")
 async def run_report(request: Request) -> dict:
-    """Manually trigger a P&L report. Body: {"secret": "...", "report": "daily"|"weekly"|"monthly"|"ytd"|"1year"|"alltime"|"both"}"""
+    """Manually trigger a P&L report. Body: {"secret": "...", "report": "daily"|"weekly"|"monthly"|"ytd"|"1year"|"alltime"|"inception"|"custom"|"both"}
+
+    "custom" additionally requires {"date": "YYYY-MM-DD"} for the start date.
+    """
     try:
         body = await request.json()
     except Exception:
@@ -679,13 +685,27 @@ async def run_report(request: Request) -> dict:
 
     verify_webhook_secret(body.get("secret", ""))
 
-    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both", "investors"}
+    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "inception", "custom", "both", "investors"}
     report = body.get("report", "daily")
     if report not in _VALID:
         return JSONResponse(
             status_code=422,
             content={"error": f"report must be one of: {', '.join(sorted(_VALID))}"},
         )
+
+    if report == "custom":
+        date_str = body.get("date", "")
+        try:
+            custom_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return JSONResponse(
+                status_code=422,
+                content={"error": "report 'custom' requires a 'date' field in YYYY-MM-DD format"},
+            )
+        if custom_date > datetime.now(ET).date():
+            return JSONResponse(status_code=422, content={"error": "date cannot be in the future"})
+        await send_custom_report(custom_date)
+        return {"status": "ok", "report": report, "date": date_str}
 
     if report in ("daily", "both"):
         await send_daily_report()
@@ -699,6 +719,8 @@ async def run_report(request: Request) -> dict:
         await send_yearly_report()
     if report == "alltime":
         await send_alltime_report()
+    if report == "inception":
+        await send_inception_report()
     if report == "investors":
         await send_investor_report()
 

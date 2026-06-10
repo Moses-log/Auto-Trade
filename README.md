@@ -227,7 +227,7 @@ app/
 ├── trade_notifier.py     # Alpaca trade notification + queued order scheduling
 ├── rh_trade_notifier.py  # Robinhood (Kimi) trade notification
 │
-├── pnl.py                # Alpaca P&L engine (daily/weekly/monthly/yearly/YTD/all-time)
+├── pnl.py                # Alpaca P&L engine (daily/weekly/monthly/yearly/YTD/all-time/since-inception/custom)
 ├── rh_pnl.py             # Robinhood P&L engine (daily/weekly/monthly/yearly)
 ├── chart.py              # Alpaca portfolio vs SPY equity curve chart (cyberpunk style)
 ├── portfolio_report.py   # RH pie chart + valuation rating (Friday snapshot)
@@ -424,7 +424,7 @@ Manually trigger a P&L report.
 ```json
 { "secret": "...", "report": "daily" }
 ```
-`report` accepts: `daily`, `weekly`, `monthly`, `ytd`, `1year`, `alltime`, `both`, `investors`.
+`report` accepts: `daily`, `weekly`, `monthly`, `ytd`, `1year`, `alltime`, `inception`, `both`, `investors`, or `custom` (requires `"date": "YYYY-MM-DD"` in the body).
 
 ### `POST /robinhood-auth`
 Re-authenticate Robinhood via SMS 2FA code.
@@ -448,7 +448,8 @@ All commands are ephemeral (only visible to you) and restricted to `DISCORD_YOUR
 |---|---|---|
 | `/deposit` | `investor`, `amount`, `spy_price` (opt.) | Records a cash deposit at current or specified SPY price |
 | `/withdraw` | `investor`, `amount` | Records a cash withdrawal |
-| `/report alpaca` | `type` | Fires an Alpaca P&L report (daily/weekly/monthly/ytd/1year/alltime/both/investors) |
+| `/report alpaca` | `type` | Fires an Alpaca P&L report (daily/weekly/monthly/ytd/1year/alltime/inception/both/investors) |
+| `/report custom` | `date` | Fires an Alpaca P&L report since the given date (YYYY-MM-DD) |
 | `/report robinhood` | `type` | Fires a Robinhood P&L report (daily/weekly/monthly/ytd/1year/alltime) |
 | `/status` | — | Shows live Alpaca + Robinhood account status and all open positions |
 | `/positions` | `broker` (opt.) | Lists all open positions with real-time P&L |
@@ -622,6 +623,8 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | Monthly | Last trading day of month | Above + equity chart |
 | Yearly | Last trading day of year | Above + equity chart |
 | YTD / All-time / 1-Year | On demand | Above + equity chart |
+| Since Inception | On demand | P&L since `FUND_INCEPTION_DATE` (Apr 27, 2026) + equity chart |
+| Custom Date | On demand (`/report custom date:YYYY-MM-DD`) | P&L since the given date + equity chart |
 
 ### Robinhood (`rh_pnl.py`)
 Separate daily, weekly, monthly, and yearly reports posted to `RH_PNL_WEBHOOK_URL`. Tracks RH-specific P&L.

@@ -17,6 +17,8 @@ from app.pnl import (
     send_yearly_report,
     send_ytd_report,
     send_alltime_report,
+    send_inception_report,
+    send_custom_report,
     send_investor_report,
 )
 from app.rh_pnl import send_rh_report
@@ -103,9 +105,9 @@ async def handle_withdraw(investor_name: str, amount: float, token: str) -> None
     await _edit_original(token, f"✅ {match_name} — ${amount:,.2f} withdrawal recorded\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")
 
 
-async def handle_report(broker: str, report_type: str, token: str) -> None:
+async def handle_report(broker: str, report_type: str, token: str, custom_date: Optional[str] = None) -> None:
     _RH_VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime"}
-    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "both", "investors"}
+    _VALID = {"daily", "weekly", "monthly", "ytd", "1year", "alltime", "inception", "custom", "both", "investors"}
 
     if broker == "robinhood":
         if report_type not in _RH_VALID:
@@ -119,6 +121,23 @@ async def handle_report(broker: str, report_type: str, token: str) -> None:
     if report_type not in _VALID:
         await _edit_original(token, f"❌ Unknown report type: {report_type!r}")
         return
+
+    if report_type == "custom":
+        if not custom_date:
+            await _edit_original(token, "❌ Custom report requires a `date` option (YYYY-MM-DD)")
+            return
+        try:
+            parsed_date = datetime.strptime(custom_date, "%Y-%m-%d").date()
+        except ValueError:
+            await _edit_original(token, f"❌ Invalid date {custom_date!r} — use YYYY-MM-DD")
+            return
+        if parsed_date > date.today():
+            await _edit_original(token, "❌ Date cannot be in the future")
+            return
+        await send_custom_report(parsed_date)
+        await _edit_original(token, f"✅ Custom report sent (since {parsed_date.isoformat()})")
+        return
+
     if report_type in ("daily", "both"):
         await send_daily_report()
     if report_type in ("weekly", "both"):
@@ -131,6 +150,8 @@ async def handle_report(broker: str, report_type: str, token: str) -> None:
         await send_yearly_report()
     if report_type == "alltime":
         await send_alltime_report()
+    if report_type == "inception":
+        await send_inception_report()
     if report_type == "investors":
         await send_investor_report()
     await _edit_original(token, f"✅ {report_type.capitalize()} report sent")
@@ -348,7 +369,15 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
             )
         elif command == "report":
             broker = options.get("_subcommand", "alpaca")
-            await handle_report(broker=broker, report_type=options.get("type", "daily"), token=token)
+            if broker == "custom":
+                await handle_report(
+                    broker="alpaca",
+                    report_type="custom",
+                    token=token,
+                    custom_date=options.get("date"),
+                )
+            else:
+                await handle_report(broker=broker, report_type=options.get("type", "daily"), token=token)
         elif command == "status":
             await handle_status(token=token)
         elif command == "positions":

@@ -115,18 +115,21 @@ def get_account():
 
 
 @_retry
-def get_portfolio_history(period: str, timeframe: str):
+def get_portfolio_history(period: Optional[str] = None, timeframe: Optional[str] = None, start: Optional[datetime] = None):
     """Fetch portfolio equity history from Alpaca.
 
     Args:
-        period:    Lookback window — "1D" for daily, "1W" for weekly.
+        period:    Lookback window — "1D" for daily, "1W" for weekly. Omit when using start.
         timeframe: Data granularity — "1Min" for intraday, "1D" for daily bars.
+        start:     Explicit start datetime (RFC3339/tz-aware). Use instead of period
+                   to fetch history from a fixed date (e.g. fund inception or a
+                   user-supplied custom date) through today.
 
     Returns:
         PortfolioHistory object with .equity list (float) and .timestamp list (int).
     """
     return get_client().get_portfolio_history(
-        GetPortfolioHistoryRequest(period=period, timeframe=timeframe)
+        GetPortfolioHistoryRequest(period=period, timeframe=timeframe, start=start)
     )
 
 

@@ -79,10 +79,24 @@ COMMANDS: list = [
                             {"name": "Year to Date", "value": "ytd"},
                             {"name": "1 Year", "value": "1year"},
                             {"name": "All Time", "value": "alltime"},
+                            {"name": "Since Inception", "value": "inception"},
                             {"name": "Daily & Weekly", "value": "both"},
                             {"name": "Investor Breakdown", "value": "investors"},
                         ],
-                    }
+                    },
+                ],
+            },
+            {
+                "type": 1,
+                "name": "custom",
+                "description": "Alpaca P&L report since a custom start date",
+                "options": [
+                    {
+                        "name": "date",
+                        "description": "Start date (YYYY-MM-DD)",
+                        "type": 3,
+                        "required": True,
+                    },
                 ],
             },
             {

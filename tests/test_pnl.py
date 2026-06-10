@@ -516,6 +516,139 @@ async def test_send_alltime_report_sends_chart_when_available(mock_chart_notify,
     mock_notify.assert_not_called()
 
 
+# ── Since Inception / Custom Date report tests ────────────────────────────────
+
+def test_fund_inception_date_constant():
+    from datetime import date as _date
+    from app.pnl import FUND_INCEPTION_DATE
+    assert FUND_INCEPTION_DATE == _date(2026, 4, 27)
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_inception_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
+    import time
+    fake_history = MagicMock()
+    fake_history.equity = [10000.0, 11500.0]
+    fake_history.timestamp = [
+        int(time.time()) - 86400 * 5,
+        int(time.time()),
+    ]
+    mock_get_history.return_value = fake_history
+
+    from app.pnl import send_inception_report, FUND_INCEPTION_DATE
+    await send_inception_report()
+
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "Since Inception P&L" in msg
+    assert "Since" in msg
+
+    call_kwargs = mock_get_history.call_args.kwargs
+    assert call_kwargs.get("period") is None
+    assert call_kwargs.get("timeframe") == "1D"
+    assert call_kwargs["start"].date() == FUND_INCEPTION_DATE
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=MagicMock())
+@patch("app.pnl.generate_equity_chart", return_value=b"\x89PNG_fake")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_inception_report_sends_chart_when_available(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
+    import time
+    fake_history = MagicMock()
+    fake_history.equity = [10000.0, 11500.0]
+    fake_history.timestamp = [
+        int(time.time()) - 86400 * 5,
+        int(time.time()),
+    ]
+    mock_get_history.return_value = fake_history
+
+    from app.pnl import send_inception_report
+    await send_inception_report()
+
+    mock_chart_notify.assert_called_once()
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
+@patch("app.pnl.get_account")
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_inception_report_extends_to_today(mock_chart_notify, mock_notify, mock_get_history, mock_get_account, mock_chart, mock_spy_hist, mock_spy):
+    import time
+    fake_history = MagicMock()
+    fake_history.equity = [10000.0]
+    fake_history.timestamp = [int(time.time()) - 86400 * 2]
+    mock_get_history.return_value = fake_history
+
+    fake_account = MagicMock()
+    fake_account.equity = "10750.00"
+    mock_get_account.return_value = fake_account
+
+    from app.pnl import send_inception_report
+    await send_inception_report()
+
+    mock_get_account.assert_called_once()
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "750.00" in msg
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.compute_spy_pct", return_value=None)
+@patch("app.pnl.fetch_spy_history", return_value=None)
+@patch("app.pnl.generate_equity_chart", return_value=None)
+@patch("app.pnl.get_portfolio_history")
+@patch("app.pnl.notify", new_callable=AsyncMock)
+@patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
+async def test_send_custom_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
+    import time
+    from datetime import date as _date
+    fake_history = MagicMock()
+    fake_history.equity = [5000.0, 5400.0]
+    fake_history.timestamp = [
+        int(time.time()) - 86400 * 3,
+        int(time.time()),
+    ]
+    mock_get_history.return_value = fake_history
+
+    from app.pnl import send_custom_report
+    await send_custom_report(_date(2026, 1, 15))
+
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "Custom P&L" in msg
+
+    call_kwargs = mock_get_history.call_args.kwargs
+    assert call_kwargs["start"].date() == _date(2026, 1, 15)
+
+
+@pytest.mark.asyncio
+@patch("app.pnl.get_portfolio_history", side_effect=RuntimeError("boom"))
+@patch("app.pnl.notify", new_callable=AsyncMock)
+async def test_send_custom_report_failure(mock_notify, mock_get_history):
+    from datetime import date as _date
+    from app.pnl import send_custom_report
+    await send_custom_report(_date(2026, 1, 15))
+
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "Custom P&L report failed" in msg
+
+
 @pytest.mark.asyncio
 @patch("app.pnl.get_next_trading_day")
 @patch("app.pnl.send_monthly_report", new_callable=AsyncMock)
