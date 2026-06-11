@@ -651,6 +651,8 @@ equity = deposit.amount × (current_SPY / deposit.entry_spy)
 
 Multiple deposits at different SPY prices are each tracked independently.
 
+The investor breakdown report (`/report alpaca type:Investor Breakdown`, daily Mon–Thu, posted to `DISCORD_INVESTORS_WEBHOOK_URL`) includes a cyberpunk-style donut chart showing each investor's equity and share of the total portfolio.
+
 ```json
 {
   "investors": [

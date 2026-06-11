@@ -54,3 +54,46 @@ def test_generate_equity_chart_single_data_point():
     result = generate_equity_chart(equity, timestamps, None, "Single Point")
     assert isinstance(result, bytes)
     assert result[:4] == _PNG_MAGIC
+
+
+def _fake_breakdown():
+    from app.investors import InvestorBreakdown, InvestorResult
+    return InvestorBreakdown(
+        investors=[
+            InvestorResult(
+                name="Moses", total_deposited=300.0, current_equity=360.0,
+                dollar_pnl=60.0, pct_pnl=20.0, portfolio_share=60.0,
+            ),
+            InvestorResult(
+                name="Alex", total_deposited=200.0, current_equity=240.0,
+                dollar_pnl=40.0, pct_pnl=20.0, portfolio_share=40.0,
+            ),
+        ],
+        spy_price=600.0,
+        total_portfolio=600.0,
+        total_deposited=500.0,
+        overall_dollar_pnl=100.0,
+        overall_pct_pnl=20.0,
+    )
+
+
+def test_generate_investor_pie_chart_returns_png_bytes():
+    from app.chart import generate_investor_pie_chart
+    result = generate_investor_pie_chart(_fake_breakdown(), "June 10, 2026")
+    assert isinstance(result, bytes)
+    assert result[:4] == _PNG_MAGIC
+
+
+def test_generate_investor_pie_chart_empty_when_no_portfolio_value():
+    from app.chart import generate_investor_pie_chart
+    from app.investors import InvestorBreakdown
+    breakdown = InvestorBreakdown(
+        investors=[],
+        spy_price=600.0,
+        total_portfolio=0.0,
+        total_deposited=0.0,
+        overall_dollar_pnl=0.0,
+        overall_pct_pnl=0.0,
+    )
+    result = generate_investor_pie_chart(breakdown, "June 10, 2026")
+    assert result == b""

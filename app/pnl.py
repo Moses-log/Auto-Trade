@@ -16,9 +16,9 @@ from typing import Optional
 
 import pytz
 
-from app.chart import generate_equity_chart
+from app.chart import generate_equity_chart, generate_investor_pie_chart
 from app.investors import compute_breakdown, format_discord_message, load_investors
-from app.notifications import notify, notify_investors, notify_with_chart
+from app.notifications import notify, notify_investors, notify_investors_with_chart, notify_with_chart
 import yfinance as yf
 
 from app.trading.alpaca_client import get_account, get_latest_price, get_portfolio_history, get_next_trading_day
@@ -610,7 +610,16 @@ async def send_investor_report() -> None:
     try:
         breakdown = compute_breakdown(investors, spy_price)
         message = format_discord_message(breakdown, date_str)
-        await notify_investors(message)
+        chart_bytes = None
+        try:
+            loop = asyncio.get_running_loop()
+            chart_bytes = await loop.run_in_executor(None, generate_investor_pie_chart, breakdown, date_str)
+        except Exception as exc:
+            log.warning("Investor pie chart generation failed: %s", exc)
+        if chart_bytes:
+            await notify_investors_with_chart(message, chart_bytes)
+        else:
+            await notify_investors(message)
         log.info("Investor report sent for %s", date_str)
     except Exception as exc:
         log.error("Investor report failed: %s", exc)

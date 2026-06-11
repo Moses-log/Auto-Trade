@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — required for server use
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import pytz
+
+if TYPE_CHECKING:
+    from app.investors import InvestorBreakdown
 
 ET = pytz.timezone("America/New_York")
 
@@ -22,6 +26,12 @@ _ZERO_COLOR   = "#2a2a2a"    # dark gray baseline
 _GRID_COLOR   = "#181818"    # very dark gray grid
 _TEXT_COLOR   = "#d0d0f0"    # bright lavender — readable on dark bg
 _TITLE_COLOR  = "#ffe600"    # neon yellow
+
+_NEON_COLORS = [
+    "#ffe600", "#39ff14", "#ff2d78", "#00f7ff", "#ff6600",
+    "#bf00ff", "#00ff9f", "#ff9900", "#ff00ff", "#00ffff",
+    "#ff0050", "#ffff00",
+]
 
 
 def _glow(ax, x, y, color, lw: float = 2.0, label: str | None = None, linestyle: str = "-") -> None:
@@ -143,6 +153,77 @@ def generate_equity_chart(
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, facecolor=_BG)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.read()
+
+
+def generate_investor_pie_chart(breakdown: "InvestorBreakdown", date_str: str) -> bytes:
+    """Generate a cyberpunk-style donut chart of investor portfolio shares.
+
+    Each wedge shows an investor's name, current equity, and percentage of
+    the total portfolio. Returns PNG bytes, or empty bytes if there's no
+    portfolio value to chart.
+    """
+    investors = [r for r in breakdown.investors if r.current_equity > 0]
+    if not investors or breakdown.total_portfolio <= 0:
+        return b""
+
+    labels = []
+    sizes = []
+    colors = []
+    for i, r in enumerate(investors):
+        labels.append(f"{r.name}\n${r.current_equity:,.2f}  ({r.portfolio_share:.1f}%)")
+        sizes.append(r.current_equity)
+        colors.append(_NEON_COLORS[i % len(_NEON_COLORS)])
+
+    fig, ax = plt.subplots(figsize=(11, 8))
+    fig.patch.set_facecolor(_BG)
+    ax.set_facecolor(_BG)
+
+    wedges, _texts = ax.pie(
+        sizes,
+        labels=None,
+        colors=colors,
+        startangle=90,
+        wedgeprops={"width": 0.55, "edgecolor": _BG, "linewidth": 2},
+        pctdistance=0.82,
+    )
+
+    for wedge in wedges:
+        wedge.set_alpha(0.92)
+
+    # Center text
+    ax.text(0, 0.08, "TOTAL", ha="center", va="center",
+            color=_TEXT_COLOR, fontsize=11, fontweight="bold")
+    ax.text(0, -0.12, f"${breakdown.total_portfolio:,.2f}", ha="center", va="center",
+            color=_TITLE_COLOR, fontsize=16, fontweight="bold")
+
+    # Legend
+    legend_labels = [f"{lbl.split(chr(10))[0]}  —  {lbl.split(chr(10))[1]}" for lbl in labels]
+    legend = ax.legend(
+        wedges, legend_labels,
+        loc="center left",
+        bbox_to_anchor=(1.02, 0.5),
+        facecolor="#0a0a22",
+        edgecolor=_ZERO_COLOR,
+        labelcolor=_TEXT_COLOR,
+        fontsize=10,
+        framealpha=0.90,
+        title="Investors",
+        title_fontsize=11,
+    )
+    legend.get_title().set_color(_TITLE_COLOR)
+
+    ax.set_title(
+        f"Investor Equity Breakdown — {date_str}",
+        fontsize=15, fontweight="bold",
+        color=_TITLE_COLOR, pad=18,
+    )
+
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=150, facecolor=_BG, bbox_inches="tight")
     plt.close(fig)
     buf.seek(0)
     return buf.read()

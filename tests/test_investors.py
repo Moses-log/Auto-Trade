@@ -230,6 +230,65 @@ async def test_notify_investors_skips_when_no_webhooks_set():
     mock_client.post.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_notify_investors_with_chart_posts_file_to_investors_webhook():
+    from unittest.mock import AsyncMock, patch
+    mock_client = AsyncMock()
+    with patch("app.notifications.settings") as mock_settings, \
+         patch("app.notifications._client", mock_client):
+        mock_settings.discord_investors_webhook_url = "https://discord.com/investors"
+        mock_settings.discord_webhook_url = "https://discord.com/main"
+        from app.notifications import notify_investors_with_chart
+        await notify_investors_with_chart("test message", b"\x89PNG_fake")
+    mock_client.post.assert_called_once()
+    args, kwargs = mock_client.post.call_args
+    assert args[0] == "https://discord.com/investors"
+    assert kwargs["files"]["file"][1] == b"\x89PNG_fake"
+
+
+@pytest.mark.asyncio
+async def test_notify_investors_with_chart_falls_back_to_main_webhook():
+    from unittest.mock import AsyncMock, patch
+    mock_client = AsyncMock()
+    with patch("app.notifications.settings") as mock_settings, \
+         patch("app.notifications._client", mock_client):
+        mock_settings.discord_investors_webhook_url = None
+        mock_settings.discord_webhook_url = "https://discord.com/main"
+        from app.notifications import notify_investors_with_chart
+        await notify_investors_with_chart("test message", b"\x89PNG_fake")
+    mock_client.post.assert_called_once()
+    assert mock_client.post.call_args[0][0] == "https://discord.com/main"
+
+
+@pytest.mark.asyncio
+async def test_notify_investors_with_chart_sends_text_only_when_no_chart_bytes():
+    from unittest.mock import AsyncMock, patch
+    mock_client = AsyncMock()
+    with patch("app.notifications.settings") as mock_settings, \
+         patch("app.notifications._client", mock_client):
+        mock_settings.discord_investors_webhook_url = "https://discord.com/investors"
+        mock_settings.discord_webhook_url = "https://discord.com/main"
+        from app.notifications import notify_investors_with_chart
+        await notify_investors_with_chart("test message", b"")
+    mock_client.post.assert_called_once()
+    _, kwargs = mock_client.post.call_args
+    assert "files" not in kwargs
+    assert kwargs["json"] == {"content": "test message"}
+
+
+@pytest.mark.asyncio
+async def test_notify_investors_with_chart_skips_when_no_webhooks_set():
+    from unittest.mock import AsyncMock, patch
+    mock_client = AsyncMock()
+    with patch("app.notifications.settings") as mock_settings, \
+         patch("app.notifications._client", mock_client):
+        mock_settings.discord_investors_webhook_url = None
+        mock_settings.discord_webhook_url = None
+        from app.notifications import notify_investors_with_chart
+        await notify_investors_with_chart("test message", b"\x89PNG_fake")
+    mock_client.post.assert_not_called()
+
+
 def test_deposit_request_valid_without_spy_price():
     from app.models import DepositRequest
     req = DepositRequest(secret="s", investor="Moses", amount=500.0)
@@ -284,7 +343,7 @@ async def test_send_investor_report_skips_when_spy_price_unavailable():
 
 
 @pytest.mark.asyncio
-async def test_send_investor_report_sends_message_with_investor_name():
+async def test_send_investor_report_sends_chart_with_investor_name():
     from unittest.mock import AsyncMock, patch
     from app.investors import Deposit, Investor
     mock_investors = [
@@ -292,9 +351,34 @@ async def test_send_investor_report_sends_message_with_investor_name():
     ]
     with patch("app.pnl.load_investors", return_value=mock_investors):
         with patch("app.pnl.get_latest_price", return_value=600.0):
-            with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
-                from app.pnl import send_investor_report
-                await send_investor_report()
+            with patch("app.pnl.generate_investor_pie_chart", return_value=b"\x89PNG_fake"):
+                with patch("app.pnl.notify_investors_with_chart", new_callable=AsyncMock) as mock_notify_chart:
+                    with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+                        from app.pnl import send_investor_report
+                        await send_investor_report()
+    mock_notify_chart.assert_called_once()
+    mock_notify.assert_not_called()
+    message, chart_bytes = mock_notify_chart.call_args[0]
+    assert "Moses" in message
+    assert "360.00" in message  # 300 * 600/500
+    assert chart_bytes == b"\x89PNG_fake"
+
+
+@pytest.mark.asyncio
+async def test_send_investor_report_falls_back_to_text_when_no_chart():
+    from unittest.mock import AsyncMock, patch
+    from app.investors import Deposit, Investor
+    mock_investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    with patch("app.pnl.load_investors", return_value=mock_investors):
+        with patch("app.pnl.get_latest_price", return_value=600.0):
+            with patch("app.pnl.generate_investor_pie_chart", return_value=b""):
+                with patch("app.pnl.notify_investors_with_chart", new_callable=AsyncMock) as mock_notify_chart:
+                    with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+                        from app.pnl import send_investor_report
+                        await send_investor_report()
+    mock_notify_chart.assert_not_called()
     mock_notify.assert_called_once()
     message = mock_notify.call_args[0][0]
     assert "Moses" in message

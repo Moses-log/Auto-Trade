@@ -62,6 +62,28 @@ async def notify_investors(message: str) -> None:
         log.warning("Investor Discord notification failed: %s", exc)
 
 
+async def notify_investors_with_chart(message: str, chart_bytes: bytes) -> None:
+    """Send the investor breakdown message with a PNG pie chart attachment.
+    Uses DISCORD_INVESTORS_WEBHOOK_URL, falls back to the main channel.
+    """
+    url = settings.discord_investors_webhook_url or settings.discord_webhook_url
+    if not url:
+        log.warning("No Discord webhook configured for investor notifications; skipping")
+        return
+    try:
+        if chart_bytes:
+            await _client.post(
+                url,
+                data={"payload_json": _json.dumps({"content": message[:2000]})},
+                files={"file": ("investors.png", chart_bytes, "image/png")},
+                timeout=15,
+            )
+        else:
+            await _client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("Investor chart Discord notification failed: %s", exc)
+
+
 async def notify_trades(message: str) -> None:
     url = settings.discord_trades_webhook_url
     if not url:
