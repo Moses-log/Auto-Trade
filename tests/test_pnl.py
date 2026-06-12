@@ -533,6 +533,8 @@ def test_fund_inception_date_constant():
 @patch("app.pnl.notify_with_chart", new_callable=AsyncMock)
 async def test_send_inception_report_success(mock_chart_notify, mock_notify, mock_get_history, mock_chart, mock_spy_hist, mock_spy):
     import time
+    from datetime import datetime
+    import pytz
     fake_history = MagicMock()
     fake_history.equity = [10000.0, 11500.0]
     fake_history.timestamp = [
@@ -550,7 +552,9 @@ async def test_send_inception_report_success(mock_chart_notify, mock_notify, moc
     assert "Since" in msg
 
     call_kwargs = mock_get_history.call_args.kwargs
-    assert call_kwargs.get("period") is None
+    ET = pytz.timezone("America/New_York")
+    expected_days = (datetime.now(ET).date() - FUND_INCEPTION_DATE).days + 1
+    assert call_kwargs.get("period") == f"{expected_days}D"
     assert call_kwargs.get("timeframe") == "1D"
     assert call_kwargs["start"].date() == FUND_INCEPTION_DATE
 

@@ -162,20 +162,22 @@ def generate_investor_pie_chart(breakdown: "InvestorBreakdown", date_str: str) -
     """Generate a cyberpunk-style donut chart of investor portfolio shares.
 
     Each wedge shows an investor's name, current equity, and percentage of
-    the total portfolio. Returns PNG bytes, or empty bytes if there's no
-    portfolio value to chart.
+    the charted total. Investors with zero or negative equity are excluded
+    from the chart; percentages and the center total are computed from the
+    charted investors only, so the pie is always internally consistent.
+    Returns PNG bytes, or empty bytes if there's no portfolio value to chart.
     """
     investors = [r for r in breakdown.investors if r.current_equity > 0]
     if not investors or breakdown.total_portfolio <= 0:
         return b""
 
-    labels = []
-    sizes = []
-    colors = []
-    for i, r in enumerate(investors):
-        labels.append(f"{r.name}\n${r.current_equity:,.2f}  ({r.portfolio_share:.1f}%)")
-        sizes.append(r.current_equity)
-        colors.append(_NEON_COLORS[i % len(_NEON_COLORS)])
+    sizes = [r.current_equity for r in investors]
+    chart_total = sum(sizes)
+    colors = [_NEON_COLORS[i % len(_NEON_COLORS)] for i in range(len(investors))]
+    legend_labels = [
+        f"{r.name}  —  ${r.current_equity:,.2f}  ({r.current_equity / chart_total * 100:.1f}%)"
+        for r in investors
+    ]
 
     fig, ax = plt.subplots(figsize=(11, 8))
     fig.patch.set_facecolor(_BG)
@@ -196,11 +198,10 @@ def generate_investor_pie_chart(breakdown: "InvestorBreakdown", date_str: str) -
     # Center text
     ax.text(0, 0.08, "TOTAL", ha="center", va="center",
             color=_TEXT_COLOR, fontsize=11, fontweight="bold")
-    ax.text(0, -0.12, f"${breakdown.total_portfolio:,.2f}", ha="center", va="center",
+    ax.text(0, -0.12, f"${chart_total:,.2f}", ha="center", va="center",
             color=_TITLE_COLOR, fontsize=16, fontweight="bold")
 
     # Legend
-    legend_labels = [f"{lbl.split(chr(10))[0]}  —  {lbl.split(chr(10))[1]}" for lbl in labels]
     legend = ax.legend(
         wedges, legend_labels,
         loc="center left",

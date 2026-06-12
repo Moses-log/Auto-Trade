@@ -97,3 +97,57 @@ def test_generate_investor_pie_chart_empty_when_no_portfolio_value():
     )
     result = generate_investor_pie_chart(breakdown, "June 10, 2026")
     assert result == b""
+
+
+def test_generate_investor_pie_chart_excludes_negative_equity_investor():
+    """An investor who withdrew more than their current equity is worth can end
+    up with negative current_equity. The chart should skip them rather than
+    crash, and the remaining wedges/percentages should stay self-consistent.
+    """
+    from app.chart import generate_investor_pie_chart
+    from app.investors import InvestorBreakdown, InvestorResult
+    breakdown = InvestorBreakdown(
+        investors=[
+            InvestorResult(
+                name="Moses", total_deposited=300.0, current_equity=600.0,
+                dollar_pnl=300.0, pct_pnl=100.0, portfolio_share=120.0,
+            ),
+            InvestorResult(
+                name="Alex", total_deposited=0.0, current_equity=-100.0,
+                dollar_pnl=-100.0, pct_pnl=0.0, portfolio_share=-20.0,
+            ),
+        ],
+        spy_price=600.0,
+        total_portfolio=500.0,
+        total_deposited=300.0,
+        overall_dollar_pnl=200.0,
+        overall_pct_pnl=66.7,
+    )
+    result = generate_investor_pie_chart(breakdown, "June 10, 2026")
+    assert isinstance(result, bytes)
+    assert result[:4] == _PNG_MAGIC
+
+
+def test_generate_investor_pie_chart_handles_more_than_palette_colors():
+    """13+ investors should still render without IndexError (colors wrap via modulo)."""
+    from app.chart import generate_investor_pie_chart
+    from app.investors import InvestorBreakdown, InvestorResult
+    n = 13
+    investors = [
+        InvestorResult(
+            name=f"Investor{i}", total_deposited=100.0, current_equity=100.0,
+            dollar_pnl=0.0, pct_pnl=0.0, portfolio_share=100.0 / n,
+        )
+        for i in range(n)
+    ]
+    breakdown = InvestorBreakdown(
+        investors=investors,
+        spy_price=600.0,
+        total_portfolio=100.0 * n,
+        total_deposited=100.0 * n,
+        overall_dollar_pnl=0.0,
+        overall_pct_pnl=0.0,
+    )
+    result = generate_investor_pie_chart(breakdown, "June 10, 2026")
+    assert isinstance(result, bytes)
+    assert result[:4] == _PNG_MAGIC

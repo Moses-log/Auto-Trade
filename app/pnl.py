@@ -501,7 +501,11 @@ async def _send_since_date_report(start_date: _date, label: str, period_key: str
     now = datetime.now(ET)
     try:
         start_dt = ET.localize(datetime.combine(start_date, datetime.min.time()))
-        history = get_portfolio_history(timeframe="1D", start=start_dt)
+        # Alpaca's `period` defaults to "1M" (~22 trading days) when omitted,
+        # which silently caps the result even when `start` reaches back further.
+        # Pass an explicit period covering the full span so no days are dropped.
+        days_span = (now.date() - start_date).days + 1
+        history = get_portfolio_history(timeframe="1D", start=start_dt, period=f"{days_span}D")
 
         start_idx = _first_nonzero_idx(history.equity)
         if not history.equity or start_idx >= len(history.equity):
