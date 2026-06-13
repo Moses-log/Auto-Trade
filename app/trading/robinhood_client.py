@@ -332,8 +332,10 @@ class RobinhoodClient:
         """Return (equity_values, unix_timestamps) for charting, or None on failure/empty.
 
         Equity values prefer adjusted_close_equity (excludes deposit/withdrawal
-        effects) falling back to close_equity. Timestamps come from each entry's
-        begins_at.
+        effects), falling back through close_equity, adjusted_open_equity, and
+        open_equity — some span/interval combos leave close fields null on
+        incomplete bars, so the open fields are the only value available.
+        Timestamps come from each entry's begins_at.
         """
         if not self.available:
             return None
@@ -350,7 +352,12 @@ class RobinhoodClient:
         equity: list[float] = []
         timestamps: list[int] = []
         for h in historicals:
-            eq = h.get("adjusted_close_equity") or h.get("close_equity")
+            eq = (
+                h.get("adjusted_close_equity")
+                or h.get("close_equity")
+                or h.get("adjusted_open_equity")
+                or h.get("open_equity")
+            )
             if eq is None:
                 continue
             equity.append(float(eq))

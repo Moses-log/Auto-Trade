@@ -363,6 +363,29 @@ async def test_get_equity_history_falls_back_to_unadjusted_close_equity():
 
 
 @pytest.mark.asyncio
+async def test_get_equity_history_falls_back_to_open_equity_when_close_is_null():
+    """Some span/interval combos (e.g. weekly/hourly) leave close fields null
+    on every bar — fall back to open equity rather than returning None."""
+    from app.trading.robinhood_client import RobinhoodClient
+    client = RobinhoodClient()
+    client.available = True
+
+    historicals = {
+        "equity_historicals": [
+            {"begins_at": "2026-06-08T09:30:00Z", "adjusted_open_equity": "10000.00", "adjusted_close_equity": None, "close_equity": None},
+            {"begins_at": "2026-06-12T15:30:00Z", "adjusted_open_equity": "10100.00", "adjusted_close_equity": None, "close_equity": None},
+        ]
+    }
+    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value=historicals):
+        result = await client.get_equity_history_async("week", "hour")
+
+    assert result is not None
+    equity, timestamps = result
+    assert equity == [10000.00, 10100.00]
+    assert len(timestamps) == 2
+
+
+@pytest.mark.asyncio
 async def test_get_equity_history_returns_none_on_empty_historicals():
     from app.trading.robinhood_client import RobinhoodClient
     client = RobinhoodClient()
