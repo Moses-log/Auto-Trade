@@ -320,8 +320,18 @@ class RobinhoodClient:
         robin_stocks has no native "ytd" span, so YTD is approximated by
         filtering a "year" span.
         """
-        data = r.get_historical_portfolio(interval=interval, span=span, bounds="regular") or {}
+        data = r.get_historical_portfolio(interval=interval, span=span, bounds="regular")
+        if not isinstance(data, dict):
+            log.warning(
+                "RH get_historical_portfolio(span=%s, interval=%s) returned %r", span, interval, data
+            )
+            return []
         historicals = data.get("equity_historicals") or []
+        if not historicals:
+            log.warning(
+                "RH get_historical_portfolio(span=%s, interval=%s) had no equity_historicals; keys=%s",
+                span, interval, sorted(data.keys()),
+            )
         if since is not None:
             historicals = [h for h in historicals if _parse_rh_timestamp(h.get("begins_at")) >= since]
         return historicals
@@ -345,7 +355,7 @@ class RobinhoodClient:
                 None, self._get_equity_historicals_sync, span, interval, since
             )
         except Exception as exc:
-            log.warning("RH get_equity_history_async failed: %s", exc)
+            log.warning("RH get_equity_history_async failed: %s", exc, exc_info=True)
             return None
         if not historicals:
             return None
@@ -363,6 +373,10 @@ class RobinhoodClient:
             equity.append(float(eq))
             timestamps.append(int(_parse_rh_timestamp(h.get("begins_at")).timestamp()))
         if not equity:
+            log.warning(
+                "RH get_equity_history_async: %d historicals but none had usable equity fields; sample=%r",
+                len(historicals), historicals[0],
+            )
             return None
         return equity, timestamps
 

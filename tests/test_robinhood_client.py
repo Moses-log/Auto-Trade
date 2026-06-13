@@ -398,6 +398,20 @@ async def test_get_equity_history_returns_none_on_empty_historicals():
 
 
 @pytest.mark.asyncio
+async def test_get_equity_history_returns_none_when_portfolio_call_returns_non_dict():
+    """robin_stocks returns the sentinel [None] (not a dict) on a failed/invalid
+    request — don't let that raise AttributeError out of .get("equity_historicals")."""
+    from app.trading.robinhood_client import RobinhoodClient
+    client = RobinhoodClient()
+    client.available = True
+
+    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value=[None]):
+        result = await client.get_equity_history_async("week", "hour")
+
+    assert result is None
+
+
+@pytest.mark.asyncio
 async def test_get_equity_history_returns_none_on_exception():
     from app.trading.robinhood_client import RobinhoodClient
     client = RobinhoodClient()
