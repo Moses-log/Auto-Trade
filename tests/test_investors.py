@@ -495,6 +495,49 @@ def test_get_total_deposited_handles_withdrawals():
     assert get_total_deposited(inv) == 1500.0
 
 
+def test_time_weighted_capital_full_year_holding():
+    """Capital deposited before the year and held throughout counts at full value."""
+    from app.investors import Investor, Deposit, compute_time_weighted_capital
+    inv = Investor(name="Moses", deposits=[
+        Deposit(amount=1000.0, entry_spy=600.0, date="2025-06-01"),
+    ])
+    assert compute_time_weighted_capital(inv, 2026) == pytest.approx(1000.0)
+
+
+def test_time_weighted_capital_mid_year_deposit_counts_partial_year():
+    """An investor who joined mid-year should get less than their full deposit as their
+    time-weighted share, since they weren't invested for the whole year."""
+    from app.investors import Investor, Deposit, compute_time_weighted_capital
+    inv = Investor(name="Alex", deposits=[
+        Deposit(amount=1000.0, entry_spy=600.0, date="2026-07-02"),  # joins exactly halfway
+    ])
+    result = compute_time_weighted_capital(inv, 2026)
+    assert 0 < result < 1000.0
+    assert result == pytest.approx(500.0, rel=0.02)
+
+
+def test_time_weighted_capital_full_withdrawal_mid_year_retains_prior_share():
+    """An investor who withdrew everything mid-year should still get credit for the
+    capital they had at stake before the withdrawal — not zero."""
+    from app.investors import Investor, Deposit, compute_time_weighted_capital
+    inv = Investor(name="Departed", deposits=[
+        Deposit(amount=1000.0, entry_spy=600.0, date="2025-01-01"),
+        Deposit(amount=-1000.0, entry_spy=650.0, date="2026-07-02"),  # withdraws halfway through 2026
+    ])
+    result = compute_time_weighted_capital(inv, 2026)
+    assert result == pytest.approx(500.0, rel=0.02)
+    # And by the following year, they hold nothing.
+    assert compute_time_weighted_capital(inv, 2027) == 0.0
+
+
+def test_time_weighted_capital_no_deposits_in_year_is_zero():
+    from app.investors import Investor, Deposit, compute_time_weighted_capital
+    inv = Investor(name="Future", deposits=[
+        Deposit(amount=1000.0, entry_spy=600.0, date="2027-01-15"),
+    ])
+    assert compute_time_weighted_capital(inv, 2026) == 0.0
+
+
 @pytest.mark.asyncio
 async def test_notify_with_chart_posts_multipart_to_webhook():
     from unittest.mock import AsyncMock, patch

@@ -1,7 +1,7 @@
 import os
 import pytest
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("ALPACA_API_KEY", "test")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test")
@@ -136,6 +136,104 @@ def test_fifo_unknown_basis_when_no_buy_lot():
     assert len(events) == 1
     assert events[0].get("unknown_basis") is True
     assert events[0]["gain"] is None
+
+
+# ── Alpaca tax report — investor breakdown ────────────────────────────────────
+
+@pytest.mark.asyncio
+@patch("app.notifications.notify_alpaca_tax", new_callable=AsyncMock)
+@patch("app.investors.load_investors")
+@patch("app.tax.compute_alpaca_tax_summary")
+async def test_alpaca_tax_investor_breakdown_uses_time_weighted_share(
+    mock_summary, mock_load_investors, mock_notify
+):
+    """An investor who joined mid-year should be allocated a smaller share of the
+    year's net gains than a full-year investor with the same deposit amount,
+    proportional to their time-weighted capital."""
+    from app.investors import Investor, Deposit, compute_time_weighted_capital
+    from app.tax import send_alpaca_tax_report, _d
+
+    mock_summary.return_value = {
+        "short_term_gains": 1000.0,
+        "short_term_losses": -200.0,
+        "short_term_net": 800.0,
+        "long_term_gains": 0.0,
+        "long_term_losses": 0.0,
+        "long_term_net": 0.0,
+        "unknown_basis_proceeds": 0.0,
+        "unknown_basis_count": 0,
+        "sell_event_count": 5,
+    }
+    early = Investor(name="EarlyBird", deposits=[
+        Deposit(amount=1000.0, entry_spy=600.0, date="2025-01-01"),
+    ])
+    mid = Investor(name="MidYear", deposits=[
+        Deposit(amount=1000.0, entry_spy=650.0, date="2026-07-02"),
+    ])
+    mock_load_investors.return_value = [early, mid]
+
+    await send_alpaca_tax_report(2026)
+
+    mock_notify.assert_called_once()
+    msg = mock_notify.call_args[0][0]
+    assert "EarlyBird" in msg and "MidYear" in msg
+
+    early_cap = compute_time_weighted_capital(early, 2026)
+    mid_cap = compute_time_weighted_capital(mid, 2026)
+    total_cap = early_cap + mid_cap
+    early_share = early_cap / total_cap
+    mid_share = mid_cap / total_cap
+
+    # MidYear joined partway through the year, so should get a smaller share
+    # than EarlyBird despite depositing the same amount.
+    assert mid_share < early_share
+    assert f"({early_share * 100:.1f}%)" in msg
+    assert f"({mid_share * 100:.1f}%)" in msg
+    assert _d(800.0 * early_share) in msg
+    assert _d(800.0 * mid_share) in msg
+
+
+@pytest.mark.asyncio
+@patch("app.notifications.notify_alpaca_tax", new_callable=AsyncMock)
+@patch("app.investors.load_investors")
+@patch("app.tax.compute_alpaca_tax_summary")
+async def test_alpaca_tax_investor_breakdown_credits_departed_investor(
+    mock_summary, mock_load_investors, mock_notify
+):
+    """An investor who withdrew everything mid-year still gets a non-zero share of the
+    year's gains/losses, reflecting the capital they had at stake before withdrawing."""
+    from app.investors import Investor, Deposit, compute_time_weighted_capital
+    from app.tax import send_alpaca_tax_report
+
+    mock_summary.return_value = {
+        "short_term_gains": 1000.0,
+        "short_term_losses": -200.0,
+        "short_term_net": 800.0,
+        "long_term_gains": 0.0,
+        "long_term_losses": 0.0,
+        "long_term_net": 0.0,
+        "unknown_basis_proceeds": 0.0,
+        "unknown_basis_count": 0,
+        "sell_event_count": 5,
+    }
+    still_in = Investor(name="StillIn", deposits=[
+        Deposit(amount=1000.0, entry_spy=600.0, date="2025-01-01"),
+    ])
+    departed = Investor(name="Departed", deposits=[
+        Deposit(amount=1000.0, entry_spy=600.0, date="2025-01-01"),
+        Deposit(amount=-1000.0, entry_spy=650.0, date="2026-07-02"),
+    ])
+    mock_load_investors.return_value = [still_in, departed]
+
+    await send_alpaca_tax_report(2026)
+
+    msg = mock_notify.call_args[0][0]
+    departed_cap = compute_time_weighted_capital(departed, 2026)
+    still_in_cap = compute_time_weighted_capital(still_in, 2026)
+    assert departed_cap > 0
+    share = departed_cap / (departed_cap + still_in_cap)
+    assert "Departed" in msg
+    assert f"({share * 100:.1f}%)" in msg
 
 
 # ── /healthz endpoint ─────────────────────────────────────────────────────────

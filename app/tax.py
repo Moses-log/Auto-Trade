@@ -186,7 +186,7 @@ async def compute_alpaca_tax_summary(year: int) -> dict:
 async def send_alpaca_tax_report(year: int) -> None:
     """Build and post the Alpaca tax summary (with investor breakdown) to the Alpaca tax channel."""
     from app.notifications import notify_alpaca_tax
-    from app.investors import load_investors, get_total_deposited
+    from app.investors import load_investors, compute_time_weighted_capital
 
     alpaca = await compute_alpaca_tax_summary(year)
     lines = [f"📋 **Alpaca Tax Summary — {year}**"]
@@ -219,13 +219,13 @@ async def send_alpaca_tax_report(year: int) -> None:
             )
 
         try:
-            eligible = [(inv, get_total_deposited(inv)) for inv in load_investors()]
-            eligible = [(inv, dep) for inv, dep in eligible if dep > 0]
-            total_capital = sum(dep for _, dep in eligible)
+            eligible = [(inv, compute_time_weighted_capital(inv, year)) for inv in load_investors()]
+            eligible = [(inv, cap) for inv, cap in eligible if cap > 0]
+            total_capital = sum(cap for _, cap in eligible)
             if eligible and total_capital > 0:
-                lines += ["", "**👥 Investor Breakdown** *(estimated by capital share)*"]
-                for inv, inv_dep in eligible:
-                    share = inv_dep / total_capital
+                lines += ["", "**👥 Investor Breakdown** *(estimated by time-weighted capital share)*"]
+                for inv, inv_cap in eligible:
+                    share = inv_cap / total_capital
                     inv_st_net = st_net * share
                     inv_lt_net = lt_net * share
                     lines.append(f"**{inv.name}** *({share * 100:.1f}%)*")

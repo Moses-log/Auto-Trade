@@ -55,6 +55,20 @@ def main() -> None:
         flag = "  <-- None/zero" if not eq else ""
         print(f"{d}  {eq!r}{flag}")
 
+    # --- Check send_alltime_report's period="all" for the same capping issue ---
+    print("\n\n=== send_alltime_report's period='all' (no start=) ===")
+    history3 = get_portfolio_history(timeframe="1D", period="all")
+    raw_equity3 = list(history3.equity)
+    raw_timestamps3 = list(history3.timestamp)
+    print(f"\nRaw arrays from Alpaca: {len(raw_equity3)} equity points, "
+          f"{len(raw_timestamps3)} timestamps")
+
+    print("\n--- Raw (date, equity) pairs (period='all') ---")
+    for ts, eq in zip(raw_timestamps3, raw_equity3):
+        d = datetime.fromtimestamp(ts, tz=ET).date()
+        flag = "  <-- None/zero" if not eq else ""
+        print(f"{d}  {eq!r}{flag}")
+
     # Reproduce _send_since_date_report's slicing/extension logic
     start_idx = _first_nonzero_idx(raw_equity)
     equity = raw_equity[start_idx:]

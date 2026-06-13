@@ -5,6 +5,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
+from datetime import date as _date
 from pathlib import Path
 
 log = logging.getLogger(__name__)
@@ -74,6 +75,43 @@ def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> No
 
 def get_total_deposited(investor: Investor) -> float:
     return sum(d.amount for d in investor.deposits)
+
+
+def compute_time_weighted_capital(investor: Investor, year: int) -> float:
+    """Average dollar capital `investor` had in the fund during `year`.
+
+    Deposits/withdrawals before `year` contribute to the starting balance;
+    those within `year` shift the balance from their date onward. Used to
+    allocate a year's realized gains/losses by how much capital each
+    investor actually had at stake over time, rather than their current
+    balance (which would misattribute gains/losses for anyone who joined
+    or withdrew mid-year).
+    """
+    year_start = _date(year, 1, 1)
+    year_end = _date(year + 1, 1, 1)  # exclusive
+    total_days = (year_end - year_start).days
+
+    balance = 0.0
+    events: dict[_date, float] = {}
+    for d in investor.deposits:
+        try:
+            d_date = _date.fromisoformat(d.date)
+        except (ValueError, TypeError):
+            continue
+        if d_date < year_start:
+            balance += d.amount
+        elif d_date < year_end:
+            events[d_date] = events.get(d_date, 0.0) + d.amount
+
+    weighted_sum = 0.0
+    current = year_start
+    for event_date in sorted(events):
+        weighted_sum += max(balance, 0.0) * (event_date - current).days
+        balance += events[event_date]
+        current = event_date
+
+    weighted_sum += max(balance, 0.0) * (year_end - current).days
+    return weighted_sum / total_days
 
 
 @dataclass
