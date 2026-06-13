@@ -15,6 +15,7 @@ import asyncio
 import logging
 import os
 import shutil
+from datetime import datetime, timezone
 from typing import Optional
 
 import robin_stocks.robinhood as r
@@ -310,6 +311,41 @@ class RobinhoodClient:
             log.warning("RH get_buying_power_async failed: %s", exc)
             return None
 
+    def _get_portfolio_pct_change_sync(
+        self, span: str, interval: str, since: Optional[datetime] = None
+    ) -> Optional[float]:
+        """Compute the RH portfolio's % return over `span` from historical equity.
+
+        Uses adjusted equity (excludes the effect of deposits/withdrawals) so the
+        result is comparable to a price return like SPY's. If `since` is given,
+        only equity_historicals at or after that timestamp are used — robin_stocks
+        has no native "ytd" span, so YTD is approximated by filtering a "year" span.
+        """
+        data = r.get_historical_portfolio(interval=interval, span=span, bounds="regular") or {}
+        historicals = data.get("equity_historicals") or []
+        if since is not None:
+            historicals = [h for h in historicals if _parse_rh_timestamp(h.get("begins_at")) >= since]
+        if not historicals:
+            return None
+        open_eq = float(historicals[0].get("adjusted_open_equity") or historicals[0].get("open_equity") or 0)
+        close_eq = float(historicals[-1].get("adjusted_close_equity") or historicals[-1].get("close_equity") or 0)
+        if not open_eq:
+            return None
+        return (close_eq - open_eq) / open_eq * 100
+
+    async def get_portfolio_pct_change_async(
+        self, span: str, interval: str, since: Optional[datetime] = None
+    ) -> Optional[float]:
+        """Async wrapper for _get_portfolio_pct_change_sync. Never raises."""
+        if not self.available:
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            return await loop.run_in_executor(None, self._get_portfolio_pct_change_sync, span, interval, since)
+        except Exception as exc:
+            log.warning("RH get_portfolio_pct_change_async failed: %s", exc)
+            return None
+
     def _close_ticker_sync(self, ticker: str) -> dict:
         pos = self._get_position(ticker)
         if pos is None:
@@ -455,6 +491,13 @@ class RobinhoodClient:
 def _is_auth_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(k in msg for k in ("token", "unauthorized", "401", "login", "unauthenticated"))
+
+
+def _parse_rh_timestamp(ts: Optional[str]) -> datetime:
+    """Parse a robin_stocks historicals "begins_at" timestamp (e.g. "2026-01-01T00:00:00Z")."""
+    if not ts:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
 # Module-level singleton — import this in order_logic.py and main.py

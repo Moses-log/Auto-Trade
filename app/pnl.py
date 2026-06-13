@@ -112,6 +112,23 @@ def fetch_spy_history(start_date: _date, end_date: _date):
         return None
 
 
+def format_spy_comparison_lines(pct_pnl: float, spy_pct: float) -> list[str]:
+    """Return Discord message lines comparing a portfolio's % return to SPY's.
+
+    Shared by Alpaca's _format_message and the Robinhood P&L report so both
+    brokers' SPY comparisons read identically.
+    """
+    spy_sign = "+" if spy_pct >= 0 else ""
+    relative_rounded = round(pct_pnl - spy_pct, 2)
+    if relative_rounded > 0:
+        comparison = f"OUTPERFORM by {relative_rounded:.2f}%"
+    elif relative_rounded < 0:
+        comparison = f"UNDERPERFORM by {abs(relative_rounded):.2f}%"
+    else:
+        comparison = "IN LINE"
+    return [f"S&P 500: {spy_sign}{spy_pct:.2f}%", comparison]
+
+
 def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optional[float] = None) -> str:
     """Format a Discord-ready P&L message string.
 
@@ -134,17 +151,7 @@ def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optio
     )
 
     if spy_pct is not None:
-        spy_sign = "+" if spy_pct >= 0 else ""
-        relative = result.pct_pnl - spy_pct
-        relative_rounded = round(relative, 2)
-        if relative_rounded > 0:
-            comparison = f"OUTPERFORM by {relative_rounded:.2f}%"
-        elif relative_rounded < 0:
-            comparison = f"UNDERPERFORM by {abs(relative_rounded):.2f}%"
-        else:
-            comparison = "IN LINE"
-        msg += f"\nS&P 500: {spy_sign}{spy_pct:.2f}%"
-        msg += f"\n{comparison}"
+        msg += "\n" + "\n".join(format_spy_comparison_lines(result.pct_pnl, spy_pct))
 
     return msg
 
