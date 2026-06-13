@@ -36,7 +36,7 @@ _SPY_PERIOD = {
 }
 
 
-def _rh_pct_since(period: str) -> Optional[datetime]:
+def _rh_history_since(period: str) -> Optional[datetime]:
     """Cutoff for filtering RH equity_historicals to year-to-date."""
     if period != "ytd":
         return None
@@ -148,21 +148,25 @@ async def send_rh_report(period: str) -> None:
         label = _period_label(period)
 
         span, interval = _RH_SPAN_INTERVAL.get(period, ("all", "day"))
-        rh_since = _rh_pct_since(period)
-        rh_pct = await rh_client.get_portfolio_pct_change_async(span, interval, since=rh_since)
+        rh_since = _rh_history_since(period)
         spy_pct = compute_spy_pct(_SPY_PERIOD.get(period, "1d"))
 
-        msg = _format_rh_report(label, period_trades, all_wins, all_losses, rh_pct=rh_pct, spy_pct=spy_pct)
-
+        # Fetch equity history once — rh_pct and the chart are both derived from
+        # it so they stay consistent and we don't hit robin_stocks twice.
+        rh_pct: Optional[float] = None
         chart = None
         equity_history = await rh_client.get_equity_history_async(span, interval, since=rh_since)
         if equity_history:
             equity, timestamps = equity_history
+            if equity and equity[0]:
+                rh_pct = (equity[-1] - equity[0]) / equity[0] * 100
             start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
             end_date = datetime.now(ET).date() + timedelta(days=1)
             spy_df = fetch_spy_history(start_date, end_date)
             if spy_df is not None:
                 chart = generate_rh_equity_chart(equity, timestamps, spy_df, f"RH Portfolio vs S&P 500 — {label}")
+
+        msg = _format_rh_report(label, period_trades, all_wins, all_losses, rh_pct=rh_pct, spy_pct=spy_pct)
 
         if not chart and len(period_trades) >= 2:
             chart = generate_rh_pnl_chart(period_trades, f"RH P&L — {label}")

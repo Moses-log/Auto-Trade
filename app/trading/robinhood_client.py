@@ -326,36 +326,6 @@ class RobinhoodClient:
             historicals = [h for h in historicals if _parse_rh_timestamp(h.get("begins_at")) >= since]
         return historicals
 
-    def _get_portfolio_pct_change_sync(
-        self, span: str, interval: str, since: Optional[datetime] = None
-    ) -> Optional[float]:
-        """Compute the RH portfolio's % return over `span` from historical equity.
-
-        Uses adjusted equity (excludes the effect of deposits/withdrawals) so the
-        result is comparable to a price return like SPY's.
-        """
-        historicals = self._get_equity_historicals_sync(span, interval, since)
-        if not historicals:
-            return None
-        open_eq = float(historicals[0].get("adjusted_open_equity") or historicals[0].get("open_equity") or 0)
-        close_eq = float(historicals[-1].get("adjusted_close_equity") or historicals[-1].get("close_equity") or 0)
-        if not open_eq:
-            return None
-        return (close_eq - open_eq) / open_eq * 100
-
-    async def get_portfolio_pct_change_async(
-        self, span: str, interval: str, since: Optional[datetime] = None
-    ) -> Optional[float]:
-        """Async wrapper for _get_portfolio_pct_change_sync. Never raises."""
-        if not self.available:
-            return None
-        loop = asyncio.get_running_loop()
-        try:
-            return await loop.run_in_executor(None, self._get_portfolio_pct_change_sync, span, interval, since)
-        except Exception as exc:
-            log.warning("RH get_portfolio_pct_change_async failed: %s", exc)
-            return None
-
     async def get_equity_history_async(
         self, span: str, interval: str, since: Optional[datetime] = None
     ) -> Optional[tuple[list[float], list[int]]]:

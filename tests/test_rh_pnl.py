@@ -69,22 +69,24 @@ def test_format_rh_report_omits_spy_comparison_when_rh_pct_unavailable():
 async def test_send_rh_report_daily_uses_day_span_and_1d_spy(
     mock_get_all_trades, mock_get_totals, mock_rh_client, mock_compute_spy_pct, mock_notify
 ):
+    import time
     from app.rh_pnl import send_rh_report
 
-    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=0.5)
-    mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
+    now = int(time.time())
+    mock_rh_client.get_equity_history_async = AsyncMock(return_value=([10000.0, 10050.0], [now - 3600, now]))
     mock_compute_spy_pct.return_value = 0.3
 
-    await send_rh_report("daily")
+    with patch("app.rh_pnl.fetch_spy_history", return_value=None):
+        await send_rh_report("daily")
 
-    mock_rh_client.get_portfolio_pct_change_async.assert_called_once()
-    call_args = mock_rh_client.get_portfolio_pct_change_async.call_args
+    mock_rh_client.get_equity_history_async.assert_called_once()
+    call_args = mock_rh_client.get_equity_history_async.call_args
     assert call_args[0][0] == "day"
     assert call_args[0][1] == "5minute"
     mock_compute_spy_pct.assert_called_once_with("1d")
 
     msg = mock_notify.call_args[0][0]
-    assert "Portfolio Return: +0.50%" in msg
+    assert "Portfolio Return: +0.50%" in msg  # (10050 - 10000) / 10000 * 100
     assert "S&P 500: +0.30%" in msg
 
 
@@ -99,13 +101,12 @@ async def test_send_rh_report_ytd_passes_since_filter(
 ):
     from app.rh_pnl import send_rh_report
 
-    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=5.0)
     mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
     mock_compute_spy_pct.return_value = 4.0
 
     await send_rh_report("ytd")
 
-    call_args = mock_rh_client.get_portfolio_pct_change_async.call_args
+    call_args = mock_rh_client.get_equity_history_async.call_args
     assert call_args[0][0] == "year"
     assert call_args[0][1] == "day"
     assert call_args[1]["since"] is not None
@@ -125,7 +126,6 @@ async def test_send_rh_report_handles_missing_spy_and_rh_pct(
     """If RH/SPY data are unavailable, the report still sends without those lines."""
     from app.rh_pnl import send_rh_report
 
-    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=None)
     mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
 
     await send_rh_report("weekly")
@@ -156,7 +156,6 @@ async def test_send_rh_report_uses_equity_chart_when_history_available(
     import pandas as pd
     from app.rh_pnl import send_rh_report
 
-    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=2.0)
     mock_rh_client.get_equity_history_async = AsyncMock(
         return_value=([10000.0, 10200.0], [1749700000, 1749720000])
     )
@@ -195,7 +194,6 @@ async def test_send_rh_report_falls_back_to_pnl_chart_when_equity_history_unavai
         {"ts": now.isoformat(), "dollar_pnl": 50.0, "is_win": True, "ticker": "SPY"},
         {"ts": now.isoformat(), "dollar_pnl": -10.0, "is_win": False, "ticker": "SPY"},
     ]
-    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=2.0)
     mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
     mock_generate_rh_pnl_chart.return_value = b"\x89PNGfallback"
 
@@ -224,7 +222,6 @@ async def test_send_rh_report_skips_equity_chart_when_spy_history_unavailable(
     chart entirely. With <2 trades, no chart should be sent at all."""
     from app.rh_pnl import send_rh_report
 
-    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=2.0)
     mock_rh_client.get_equity_history_async = AsyncMock(
         return_value=([10000.0, 10200.0], [1749700000, 1749720000])
     )
