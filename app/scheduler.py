@@ -12,14 +12,16 @@ from datetime import datetime
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
-from apscheduler.triggers.interval import IntervalTrigger
 
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
+from app.rh_keep_alive_state import get_last_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 
 log = logging.getLogger(__name__)
 
 ET = pytz.timezone("America/New_York")
+
+_KEEP_ALIVE_INTERVAL_SECONDS = 3 * 24 * 60 * 60  # 3 days
 
 # Singleton — imported and started in main.py lifespan.
 scheduler = AsyncIOScheduler(timezone=ET)
@@ -79,8 +81,20 @@ async def _friday_jobs() -> None:
 
 
 async def _robinhood_keep_alive() -> None:
+    """Run rh_client.keep_alive() at most once every 3 days.
+
+    Checked daily via a cron trigger — wall-clock anchored, so restarts
+    can't drift the schedule. If a check is missed (app down at the
+    scheduled time), the next day's check sees >=3 days elapsed since the
+    last run and catches up immediately.
+    """
     from app.trading.robinhood_client import rh_client
+    now_ts = int(datetime.now(ET).timestamp())
+    last_run = get_last_run_ts()
+    if last_run is not None and now_ts - last_run < _KEEP_ALIVE_INTERVAL_SECONDS:
+        return
     await rh_client.keep_alive()
+    record_run(now_ts)
 
 
 async def _quarterly_tax_report() -> None:
@@ -123,7 +137,7 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _robinhood_keep_alive,
-        IntervalTrigger(days=3, start_date=ET.localize(datetime(2026, 1, 1)), timezone=ET),
+        CronTrigger(hour=1, minute=0, timezone=ET),
         id="robinhood_keep_alive",
         replace_existing=True,
     )
@@ -141,7 +155,8 @@ def setup_jobs() -> None:
     )
     log.info(
         "Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), "
-        "robinhood_keep_alive (every 72 h), quarterly_tax_report (Jan/Apr/Jul/Oct 1), "
+        "robinhood_keep_alive (daily check, runs every ~3 days), "
+        "quarterly_tax_report (Jan/Apr/Jul/Oct 1), "
         "claude_monthly_rebalance (1st of each month 9:35 AM ET)"
     )
 

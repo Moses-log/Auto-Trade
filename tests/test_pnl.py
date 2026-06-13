@@ -157,6 +157,66 @@ def test_scheduler_jobs_registered():
     assert len(job_ids) == 3
 
 
+# ── scheduler.py — _robinhood_keep_alive gating ───────────────────────────────
+#
+# robinhood_keep_alive is checked daily (cron, wall-clock anchored — immune to
+# restart drift) but should only actually run every ~3 days. These tests pin
+# down the gating logic against app.rh_keep_alive_state.
+
+@pytest.mark.asyncio
+@patch("app.scheduler.record_run")
+@patch("app.scheduler.get_last_run_ts", return_value=None)
+@patch("app.trading.robinhood_client.rh_client")
+async def test_robinhood_keep_alive_runs_when_never_run_before(
+    mock_rh_client, mock_get_last_run_ts, mock_record_run
+):
+    from app.scheduler import _robinhood_keep_alive
+    mock_rh_client.keep_alive = AsyncMock()
+
+    await _robinhood_keep_alive()
+
+    mock_rh_client.keep_alive.assert_called_once()
+    mock_record_run.assert_called_once()
+
+
+@pytest.mark.asyncio
+@patch("app.scheduler.record_run")
+@patch("app.scheduler.get_last_run_ts")
+@patch("app.trading.robinhood_client.rh_client")
+async def test_robinhood_keep_alive_skips_when_recently_run(
+    mock_rh_client, mock_get_last_run_ts, mock_record_run
+):
+    """Last run was <3 days ago — today's daily check is a no-op."""
+    from app.scheduler import _robinhood_keep_alive, ET
+    from datetime import datetime
+    mock_rh_client.keep_alive = AsyncMock()
+    mock_get_last_run_ts.return_value = int(datetime.now(ET).timestamp()) - 60 * 60  # 1h ago
+
+    await _robinhood_keep_alive()
+
+    mock_rh_client.keep_alive.assert_not_called()
+    mock_record_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.scheduler.record_run")
+@patch("app.scheduler.get_last_run_ts")
+@patch("app.trading.robinhood_client.rh_client")
+async def test_robinhood_keep_alive_runs_when_overdue(
+    mock_rh_client, mock_get_last_run_ts, mock_record_run
+):
+    """Last run was >=3 days ago — today's daily check catches up."""
+    from app.scheduler import _robinhood_keep_alive, ET
+    from datetime import datetime
+    mock_rh_client.keep_alive = AsyncMock()
+    mock_get_last_run_ts.return_value = int(datetime.now(ET).timestamp()) - 4 * 24 * 60 * 60  # 4d ago
+
+    await _robinhood_keep_alive()
+
+    mock_rh_client.keep_alive.assert_called_once()
+    mock_record_run.assert_called_once()
+
+
 # ── get_spy_bars tests ────────────────────────────────────────────────────────
 
 @patch("app.trading.alpaca_client.get_data_client")
