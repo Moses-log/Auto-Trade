@@ -47,6 +47,8 @@ def generate_equity_chart(
     timestamps: list,
     spy_df,
     title: str,
+    portfolio_color: str = _PORT_COLOR,
+    portfolio_label: str = "Portfolio",
 ) -> bytes:
     """Generate a portfolio vs SPY % return chart as PNG bytes.
 
@@ -54,10 +56,12 @@ def generate_equity_chart(
     so they share a 0% baseline regardless of dollar amounts.
 
     Args:
-        equity:     Portfolio equity values from Alpaca history.
-        timestamps: Corresponding Unix timestamps from Alpaca history.
-        spy_df:     yfinance DataFrame with a "Close" column, or None.
-        title:      Chart title string.
+        equity:          Portfolio equity values from broker history.
+        timestamps:      Corresponding Unix timestamps from broker history.
+        spy_df:          yfinance DataFrame with a "Close" column, or None.
+        title:           Chart title string.
+        portfolio_color: Line/fill color for the portfolio series.
+        portfolio_label: Legend label prefix for the portfolio series.
 
     Returns:
         PNG image as bytes.
@@ -95,16 +99,16 @@ def generate_equity_chart(
     # Portfolio line
     final_port = port_pct[-1] if port_pct else 0.0
     port_sign = "+" if final_port >= 0 else ""
-    _glow(ax, dates, port_pct, _PORT_COLOR, lw=2,
-          label=f"Portfolio  {port_sign}{final_port:.2f}%")
+    _glow(ax, dates, port_pct, portfolio_color, lw=2,
+          label=f"{portfolio_label}  {port_sign}{final_port:.2f}%")
 
     # Fill under portfolio line
     ax.fill_between(dates, port_pct, 0,
                     where=[p >= 0 for p in port_pct],
-                    color=_PORT_COLOR, alpha=0.06, zorder=1)
+                    color=portfolio_color, alpha=0.06, zorder=1)
     ax.fill_between(dates, port_pct, 0,
                     where=[p < 0 for p in port_pct],
-                    color=_PORT_COLOR, alpha=0.06, zorder=1)
+                    color=portfolio_color, alpha=0.06, zorder=1)
 
     # SPY line
     if spy_pct and spy_dates:
@@ -156,6 +160,20 @@ def generate_equity_chart(
     plt.close(fig)
     buf.seek(0)
     return buf.read()
+
+
+def generate_rh_equity_chart(
+    equity: list,
+    timestamps: list,
+    spy_df,
+    title: str,
+) -> bytes:
+    """Generate an RH portfolio vs SPY % return chart (neon green theme)."""
+    return generate_equity_chart(
+        equity, timestamps, spy_df, title,
+        portfolio_color=_RH_LINE_COLOR,
+        portfolio_label="RH Portfolio",
+    )
 
 
 def generate_investor_pie_chart(breakdown: "InvestorBreakdown", date_str: str) -> bytes:

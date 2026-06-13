@@ -311,20 +311,30 @@ class RobinhoodClient:
             log.warning("RH get_buying_power_async failed: %s", exc)
             return None
 
+    def _get_equity_historicals_sync(
+        self, span: str, interval: str, since: Optional[datetime] = None
+    ) -> list[dict]:
+        """Fetch equity_historicals from robin_stocks for `span`/`interval`.
+
+        If `since` is given, only entries at or after that timestamp are kept —
+        robin_stocks has no native "ytd" span, so YTD is approximated by
+        filtering a "year" span.
+        """
+        data = r.get_historical_portfolio(interval=interval, span=span, bounds="regular") or {}
+        historicals = data.get("equity_historicals") or []
+        if since is not None:
+            historicals = [h for h in historicals if _parse_rh_timestamp(h.get("begins_at")) >= since]
+        return historicals
+
     def _get_portfolio_pct_change_sync(
         self, span: str, interval: str, since: Optional[datetime] = None
     ) -> Optional[float]:
         """Compute the RH portfolio's % return over `span` from historical equity.
 
         Uses adjusted equity (excludes the effect of deposits/withdrawals) so the
-        result is comparable to a price return like SPY's. If `since` is given,
-        only equity_historicals at or after that timestamp are used — robin_stocks
-        has no native "ytd" span, so YTD is approximated by filtering a "year" span.
+        result is comparable to a price return like SPY's.
         """
-        data = r.get_historical_portfolio(interval=interval, span=span, bounds="regular") or {}
-        historicals = data.get("equity_historicals") or []
-        if since is not None:
-            historicals = [h for h in historicals if _parse_rh_timestamp(h.get("begins_at")) >= since]
+        historicals = self._get_equity_historicals_sync(span, interval, since)
         if not historicals:
             return None
         open_eq = float(historicals[0].get("adjusted_open_equity") or historicals[0].get("open_equity") or 0)
@@ -345,6 +355,39 @@ class RobinhoodClient:
         except Exception as exc:
             log.warning("RH get_portfolio_pct_change_async failed: %s", exc)
             return None
+
+    async def get_equity_history_async(
+        self, span: str, interval: str, since: Optional[datetime] = None
+    ) -> Optional[tuple[list[float], list[int]]]:
+        """Return (equity_values, unix_timestamps) for charting, or None on failure/empty.
+
+        Equity values prefer adjusted_close_equity (excludes deposit/withdrawal
+        effects) falling back to close_equity. Timestamps come from each entry's
+        begins_at.
+        """
+        if not self.available:
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            historicals = await loop.run_in_executor(
+                None, self._get_equity_historicals_sync, span, interval, since
+            )
+        except Exception as exc:
+            log.warning("RH get_equity_history_async failed: %s", exc)
+            return None
+        if not historicals:
+            return None
+        equity: list[float] = []
+        timestamps: list[int] = []
+        for h in historicals:
+            eq = h.get("adjusted_close_equity") or h.get("close_equity")
+            if eq is None:
+                continue
+            equity.append(float(eq))
+            timestamps.append(int(_parse_rh_timestamp(h.get("begins_at")).timestamp()))
+        if not equity:
+            return None
+        return equity, timestamps
 
     def _close_ticker_sync(self, ticker: str) -> dict:
         pos = self._get_position(ticker)

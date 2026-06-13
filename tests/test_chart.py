@@ -56,6 +56,37 @@ def test_generate_equity_chart_single_data_point():
     assert result[:4] == _PNG_MAGIC
 
 
+def test_generate_equity_chart_custom_portfolio_color_and_label():
+    """RH and other non-Alpaca callers can theme the portfolio line/legend."""
+    from app.chart import generate_equity_chart, _RH_LINE_COLOR
+    equity = [10000.0, 10100.0, 10250.0, 10320.0]
+    timestamps = _fake_timestamps(4)
+    result = generate_equity_chart(
+        equity, timestamps, _fake_spy_df(), "RH Chart",
+        portfolio_color=_RH_LINE_COLOR, portfolio_label="RH Portfolio",
+    )
+    assert isinstance(result, bytes)
+    assert result[:4] == _PNG_MAGIC
+
+
+def test_generate_rh_equity_chart_returns_png_bytes():
+    from app.chart import generate_rh_equity_chart
+    equity = [10000.0, 10100.0, 10250.0, 10320.0]
+    timestamps = _fake_timestamps(4)
+    result = generate_rh_equity_chart(equity, timestamps, _fake_spy_df(), "RH vs SPY")
+    assert isinstance(result, bytes)
+    assert result[:4] == _PNG_MAGIC
+
+
+def test_generate_rh_equity_chart_handles_none_spy():
+    from app.chart import generate_rh_equity_chart
+    equity = [10000.0, 10500.0]
+    timestamps = _fake_timestamps(2)
+    result = generate_rh_equity_chart(equity, timestamps, None, "RH vs SPY")
+    assert isinstance(result, bytes)
+    assert result[:4] == _PNG_MAGIC
+
+
 def _fake_breakdown():
     from app.investors import InvestorBreakdown, InvestorResult
     return InvestorBreakdown(

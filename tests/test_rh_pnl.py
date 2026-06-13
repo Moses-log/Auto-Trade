@@ -3,6 +3,8 @@ os.environ.setdefault("ALPACA_API_KEY", "test")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 
+from datetime import datetime, timezone
+
 import pytest
 from unittest.mock import AsyncMock, patch
 
@@ -70,6 +72,7 @@ async def test_send_rh_report_daily_uses_day_span_and_1d_spy(
     from app.rh_pnl import send_rh_report
 
     mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=0.5)
+    mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
     mock_compute_spy_pct.return_value = 0.3
 
     await send_rh_report("daily")
@@ -97,6 +100,7 @@ async def test_send_rh_report_ytd_passes_since_filter(
     from app.rh_pnl import send_rh_report
 
     mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=5.0)
+    mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
     mock_compute_spy_pct.return_value = 4.0
 
     await send_rh_report("ytd")
@@ -122,6 +126,7 @@ async def test_send_rh_report_handles_missing_spy_and_rh_pct(
     from app.rh_pnl import send_rh_report
 
     mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=None)
+    mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
 
     await send_rh_report("weekly")
 
@@ -129,3 +134,103 @@ async def test_send_rh_report_handles_missing_spy_and_rh_pct(
     assert "Portfolio Return" not in msg
     assert "S&P 500" not in msg
     assert "No trades in this period" in msg
+
+
+# ── send_rh_report chart selection ────────────────────────────────────────────
+
+@pytest.mark.asyncio
+@patch("app.rh_pnl.notify_rh_pnl_with_chart", new_callable=AsyncMock)
+@patch("app.rh_pnl.notify_rh_pnl", new_callable=AsyncMock)
+@patch("app.rh_pnl.generate_rh_equity_chart")
+@patch("app.rh_pnl.fetch_spy_history")
+@patch("app.rh_pnl.compute_spy_pct", return_value=1.0)
+@patch("app.rh_pnl.rh_client")
+@patch("app.rh_pnl.get_totals", return_value=(5, 3))
+@patch("app.rh_pnl.get_all_trades", return_value=[])
+async def test_send_rh_report_uses_equity_chart_when_history_available(
+    mock_get_all_trades, mock_get_totals, mock_rh_client, mock_compute_spy_pct,
+    mock_fetch_spy_history, mock_generate_rh_equity_chart, mock_notify, mock_notify_with_chart,
+):
+    """When RH equity history + SPY history are both available, prefer the
+    normalized %-return equity chart over the trade-based $ P&L chart."""
+    import pandas as pd
+    from app.rh_pnl import send_rh_report
+
+    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=2.0)
+    mock_rh_client.get_equity_history_async = AsyncMock(
+        return_value=([10000.0, 10200.0], [1749700000, 1749720000])
+    )
+    mock_fetch_spy_history.return_value = pd.DataFrame({"Close": [600.0, 605.0]})
+    mock_generate_rh_equity_chart.return_value = b"\x89PNGfakechart"
+
+    await send_rh_report("daily")
+
+    mock_generate_rh_equity_chart.assert_called_once()
+    mock_notify_with_chart.assert_called_once()
+    assert mock_notify_with_chart.call_args[0][1] == b"\x89PNGfakechart"
+    mock_notify.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.rh_pnl.notify_rh_pnl_with_chart", new_callable=AsyncMock)
+@patch("app.rh_pnl.notify_rh_pnl", new_callable=AsyncMock)
+@patch("app.rh_pnl.generate_rh_pnl_chart")
+@patch("app.rh_pnl.generate_rh_equity_chart")
+@patch("app.rh_pnl.fetch_spy_history")
+@patch("app.rh_pnl.compute_spy_pct", return_value=1.0)
+@patch("app.rh_pnl.rh_client")
+@patch("app.rh_pnl.get_totals", return_value=(5, 3))
+@patch("app.rh_pnl.get_all_trades")
+async def test_send_rh_report_falls_back_to_pnl_chart_when_equity_history_unavailable(
+    mock_get_all_trades, mock_get_totals, mock_rh_client, mock_compute_spy_pct,
+    mock_fetch_spy_history, mock_generate_rh_equity_chart, mock_generate_rh_pnl_chart,
+    mock_notify, mock_notify_with_chart,
+):
+    """If RH equity history can't be fetched, fall back to the trade-based
+    cumulative $ P&L chart when there are enough trades to plot."""
+    from app.rh_pnl import send_rh_report
+
+    now = datetime.now(timezone.utc)
+    mock_get_all_trades.return_value = [
+        {"ts": now.isoformat(), "dollar_pnl": 50.0, "is_win": True, "ticker": "SPY"},
+        {"ts": now.isoformat(), "dollar_pnl": -10.0, "is_win": False, "ticker": "SPY"},
+    ]
+    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=2.0)
+    mock_rh_client.get_equity_history_async = AsyncMock(return_value=None)
+    mock_generate_rh_pnl_chart.return_value = b"\x89PNGfallback"
+
+    await send_rh_report("daily")
+
+    mock_generate_rh_equity_chart.assert_not_called()
+    mock_generate_rh_pnl_chart.assert_called_once()
+    mock_notify_with_chart.assert_called_once()
+    assert mock_notify_with_chart.call_args[0][1] == b"\x89PNGfallback"
+
+
+@pytest.mark.asyncio
+@patch("app.rh_pnl.notify_rh_pnl_with_chart", new_callable=AsyncMock)
+@patch("app.rh_pnl.notify_rh_pnl", new_callable=AsyncMock)
+@patch("app.rh_pnl.generate_rh_equity_chart")
+@patch("app.rh_pnl.fetch_spy_history", return_value=None)
+@patch("app.rh_pnl.compute_spy_pct", return_value=1.0)
+@patch("app.rh_pnl.rh_client")
+@patch("app.rh_pnl.get_totals", return_value=(5, 3))
+@patch("app.rh_pnl.get_all_trades", return_value=[])
+async def test_send_rh_report_skips_equity_chart_when_spy_history_unavailable(
+    mock_get_all_trades, mock_get_totals, mock_rh_client, mock_compute_spy_pct,
+    mock_fetch_spy_history, mock_generate_rh_equity_chart, mock_notify, mock_notify_with_chart,
+):
+    """If RH equity history exists but SPY history doesn't, skip the equity
+    chart entirely. With <2 trades, no chart should be sent at all."""
+    from app.rh_pnl import send_rh_report
+
+    mock_rh_client.get_portfolio_pct_change_async = AsyncMock(return_value=2.0)
+    mock_rh_client.get_equity_history_async = AsyncMock(
+        return_value=([10000.0, 10200.0], [1749700000, 1749720000])
+    )
+
+    await send_rh_report("daily")
+
+    mock_generate_rh_equity_chart.assert_not_called()
+    mock_notify_with_chart.assert_not_called()
+    mock_notify.assert_called_once()

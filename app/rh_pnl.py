@@ -6,8 +6,9 @@ from typing import List, Optional
 
 import pytz
 
+from app.chart import generate_rh_equity_chart, generate_rh_pnl_chart
 from app.notifications import notify_rh_pnl, notify_rh_pnl_with_chart
-from app.pnl import compute_spy_pct, format_spy_comparison_lines
+from app.pnl import compute_spy_pct, fetch_spy_history, format_spy_comparison_lines
 from app.rh_trade_record import format_rh_record, get_all_trades, get_totals
 from app.trading.robinhood_client import rh_client
 
@@ -147,18 +148,29 @@ async def send_rh_report(period: str) -> None:
         label = _period_label(period)
 
         span, interval = _RH_SPAN_INTERVAL.get(period, ("all", "day"))
-        rh_pct = await rh_client.get_portfolio_pct_change_async(span, interval, since=_rh_pct_since(period))
+        rh_since = _rh_pct_since(period)
+        rh_pct = await rh_client.get_portfolio_pct_change_async(span, interval, since=rh_since)
         spy_pct = compute_spy_pct(_SPY_PERIOD.get(period, "1d"))
 
         msg = _format_rh_report(label, period_trades, all_wins, all_losses, rh_pct=rh_pct, spy_pct=spy_pct)
 
-        if len(period_trades) >= 2:
-            from app.chart import generate_rh_pnl_chart
+        chart = None
+        equity_history = await rh_client.get_equity_history_async(span, interval, since=rh_since)
+        if equity_history:
+            equity, timestamps = equity_history
+            start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
+            end_date = datetime.now(ET).date() + timedelta(days=1)
+            spy_df = fetch_spy_history(start_date, end_date)
+            if spy_df is not None:
+                chart = generate_rh_equity_chart(equity, timestamps, spy_df, f"RH Portfolio vs S&P 500 — {label}")
+
+        if not chart and len(period_trades) >= 2:
             chart = generate_rh_pnl_chart(period_trades, f"RH P&L — {label}")
-            if chart:
-                await notify_rh_pnl_with_chart(msg, chart)
-                log.info("RH %s P&L report with chart sent (%d trades)", period, len(period_trades))
-                return
+
+        if chart:
+            await notify_rh_pnl_with_chart(msg, chart)
+            log.info("RH %s P&L report with chart sent (%d trades)", period, len(period_trades))
+            return
 
         await notify_rh_pnl(msg)
         log.info("RH %s P&L report sent (%d trades)", period, len(period_trades))
