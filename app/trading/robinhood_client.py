@@ -15,7 +15,6 @@ import asyncio
 import logging
 import os
 import shutil
-from datetime import datetime, timezone
 from typing import Optional
 
 import robin_stocks.robinhood as r
@@ -311,74 +310,36 @@ class RobinhoodClient:
             log.warning("RH get_buying_power_async failed: %s", exc)
             return None
 
-    def _get_equity_historicals_sync(
-        self, span: str, interval: str, since: Optional[datetime] = None
-    ) -> list[dict]:
-        """Fetch equity_historicals from robin_stocks for `span`/`interval`.
+    def _get_portfolio_equity_sync(self) -> Optional[float]:
+        """Fetch RH's current portfolio equity via robin_stocks load_portfolio_profile.
 
-        If `since` is given, only entries at or after that timestamp are kept —
-        robin_stocks has no native "ytd" span, so YTD is approximated by
-        filtering a "year" span.
+        Used for the daily equity-snapshot tracker — get_historical_portfolio
+        (equity_historicals) was retired by Robinhood (404) and is gone for good.
         """
-        data = r.get_historical_portfolio(interval=interval, span=span, bounds="regular")
+        data = r.load_portfolio_profile(account_number=self._account_number())
         if not isinstance(data, dict):
-            log.warning(
-                "RH get_historical_portfolio(span=%s, interval=%s) returned %r", span, interval, data
-            )
-            return []
-        historicals = data.get("equity_historicals") or []
-        if not historicals:
-            log.warning(
-                "RH get_historical_portfolio(span=%s, interval=%s) had no equity_historicals; keys=%s",
-                span, interval, sorted(data.keys()),
-            )
-        if since is not None:
-            historicals = [h for h in historicals if _parse_rh_timestamp(h.get("begins_at")) >= since]
-        return historicals
+            log.warning("RH load_portfolio_profile returned %r", data)
+            return None
+        equity = data.get("equity")
+        if equity is None:
+            log.warning("RH load_portfolio_profile missing 'equity'; keys=%s", sorted(data.keys()))
+            return None
+        try:
+            return float(equity)
+        except (TypeError, ValueError):
+            log.warning("RH load_portfolio_profile equity not numeric: %r", equity)
+            return None
 
-    async def get_equity_history_async(
-        self, span: str, interval: str, since: Optional[datetime] = None
-    ) -> Optional[tuple[list[float], list[int]]]:
-        """Return (equity_values, unix_timestamps) for charting, or None on failure/empty.
-
-        Equity values prefer adjusted_close_equity (excludes deposit/withdrawal
-        effects), falling back through close_equity, adjusted_open_equity, and
-        open_equity — some span/interval combos leave close fields null on
-        incomplete bars, so the open fields are the only value available.
-        Timestamps come from each entry's begins_at.
-        """
+    async def get_portfolio_equity_async(self) -> Optional[float]:
+        """Async wrapper for _get_portfolio_equity_sync."""
         if not self.available:
             return None
         loop = asyncio.get_running_loop()
         try:
-            historicals = await loop.run_in_executor(
-                None, self._get_equity_historicals_sync, span, interval, since
-            )
+            return await loop.run_in_executor(None, self._get_portfolio_equity_sync)
         except Exception as exc:
-            log.warning("RH get_equity_history_async failed: %s", exc, exc_info=True)
+            log.warning("RH get_portfolio_equity_async failed: %s", exc, exc_info=True)
             return None
-        if not historicals:
-            return None
-        equity: list[float] = []
-        timestamps: list[int] = []
-        for h in historicals:
-            eq = (
-                h.get("adjusted_close_equity")
-                or h.get("close_equity")
-                or h.get("adjusted_open_equity")
-                or h.get("open_equity")
-            )
-            if eq is None:
-                continue
-            equity.append(float(eq))
-            timestamps.append(int(_parse_rh_timestamp(h.get("begins_at")).timestamp()))
-        if not equity:
-            log.warning(
-                "RH get_equity_history_async: %d historicals but none had usable equity fields; sample=%r",
-                len(historicals), historicals[0],
-            )
-            return None
-        return equity, timestamps
 
     def _close_ticker_sync(self, ticker: str) -> dict:
         pos = self._get_position(ticker)
@@ -525,13 +486,6 @@ class RobinhoodClient:
 def _is_auth_error(exc: Exception) -> bool:
     msg = str(exc).lower()
     return any(k in msg for k in ("token", "unauthorized", "401", "login", "unauthenticated"))
-
-
-def _parse_rh_timestamp(ts: Optional[str]) -> datetime:
-    """Parse a robin_stocks historicals "begins_at" timestamp (e.g. "2026-01-01T00:00:00Z")."""
-    if not ts:
-        return datetime.min.replace(tzinfo=timezone.utc)
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
 
 
 # Module-level singleton — import this in order_logic.py and main.py

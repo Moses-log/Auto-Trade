@@ -112,6 +112,22 @@ def fetch_spy_history(start_date: _date, end_date: _date):
         return None
 
 
+def fetch_spy_close_price() -> Optional[float]:
+    """Fetch SPY's most recent close price via yfinance.
+
+    Paired with RH's equity snapshot at the same scheduler tick so the two
+    numbers are captured at the same instant and can't drift apart.
+    """
+    try:
+        hist = _yf_fetch(lambda: yf.Ticker("SPY").history(period="1d"))
+        if hist is None or hist.empty:
+            return None
+        return float(hist["Close"].iloc[-1])
+    except Exception as exc:
+        log.warning("yfinance SPY close price fetch failed: %s", exc)
+        return None
+
+
 def format_spy_comparison_lines(pct_pnl: float, spy_pct: float) -> list[str]:
     """Return Discord message lines comparing a portfolio's % return to SPY's.
 

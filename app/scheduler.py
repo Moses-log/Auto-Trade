@@ -15,7 +15,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
-from app.rh_pnl import send_rh_report
+from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 
 log = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ async def _check_rh_period_reports() -> None:
 
 async def _weekday_jobs() -> None:
     """Run Mon–Thu reports in parallel: Alpaca + RH daily, investor breakdown, period checks."""
+    # Record today's RH-equity/SPY-price snapshot first so send_rh_report
+    # below can use it as "today" — keeps the pair in sync, no drift.
+    await record_rh_equity_snapshot()
     await asyncio.gather(
         send_daily_report(),
         send_investor_report(),
@@ -59,6 +62,9 @@ async def _portfolio_snapshot() -> None:
 
 async def _friday_jobs() -> None:
     """Run Friday reports in parallel: Alpaca + RH daily/weekly, investor breakdown, period checks, portfolio snapshot."""
+    # Record today's RH-equity/SPY-price snapshot first so send_rh_report
+    # below can use it as "today" — keeps the pair in sync, no drift.
+    await record_rh_equity_snapshot()
     await asyncio.gather(
         send_daily_report(),
         send_weekly_report(),

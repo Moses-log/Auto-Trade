@@ -308,139 +308,64 @@ async def test_execute_base_entry_is_skipped():
     assert result["status"] == "skipped"
 
 
-# ── get_equity_history_async ──────────────────────────────────────────────────
+# ── get_portfolio_equity_async ────────────────────────────────────────────────
 
 @pytest.mark.asyncio
-async def test_get_equity_history_returns_none_when_unavailable():
+async def test_get_portfolio_equity_returns_none_when_unavailable():
     from app.trading.robinhood_client import RobinhoodClient
     client = RobinhoodClient()
     client.available = False
 
-    result = await client.get_equity_history_async("day", "5minute")
+    result = await client.get_portfolio_equity_async()
 
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_get_equity_history_returns_equity_and_timestamps():
+async def test_get_portfolio_equity_returns_equity_value():
     from app.trading.robinhood_client import RobinhoodClient
     client = RobinhoodClient()
     client.available = True
 
-    historicals = {
-        "equity_historicals": [
-            {"begins_at": "2026-06-12T09:30:00Z", "adjusted_close_equity": "10050.00"},
-            {"begins_at": "2026-06-12T15:30:00Z", "adjusted_close_equity": "10100.00"},
-        ]
-    }
-    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value=historicals):
-        result = await client.get_equity_history_async("day", "5minute")
+    with patch("robin_stocks.robinhood.load_portfolio_profile", return_value={"equity": "10123.45"}):
+        result = await client.get_portfolio_equity_async()
 
-    assert result is not None
-    equity, timestamps = result
-    assert equity == [10050.00, 10100.00]
-    assert len(timestamps) == 2
-    assert all(isinstance(t, int) for t in timestamps)
+    assert result == 10123.45
 
 
 @pytest.mark.asyncio
-async def test_get_equity_history_falls_back_to_unadjusted_close_equity():
+async def test_get_portfolio_equity_returns_none_when_equity_missing():
     from app.trading.robinhood_client import RobinhoodClient
     client = RobinhoodClient()
     client.available = True
 
-    historicals = {
-        "equity_historicals": [
-            {"begins_at": "2026-06-12T09:30:00Z", "close_equity": "5000.00"},
-        ]
-    }
-    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value=historicals):
-        result = await client.get_equity_history_async("day", "5minute")
-
-    assert result is not None
-    equity, _ = result
-    assert equity == [5000.00]
-
-
-@pytest.mark.asyncio
-async def test_get_equity_history_falls_back_to_open_equity_when_close_is_null():
-    """Some span/interval combos (e.g. weekly/hourly) leave close fields null
-    on every bar — fall back to open equity rather than returning None."""
-    from app.trading.robinhood_client import RobinhoodClient
-    client = RobinhoodClient()
-    client.available = True
-
-    historicals = {
-        "equity_historicals": [
-            {"begins_at": "2026-06-08T09:30:00Z", "adjusted_open_equity": "10000.00", "adjusted_close_equity": None, "close_equity": None},
-            {"begins_at": "2026-06-12T15:30:00Z", "adjusted_open_equity": "10100.00", "adjusted_close_equity": None, "close_equity": None},
-        ]
-    }
-    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value=historicals):
-        result = await client.get_equity_history_async("week", "hour")
-
-    assert result is not None
-    equity, timestamps = result
-    assert equity == [10000.00, 10100.00]
-    assert len(timestamps) == 2
-
-
-@pytest.mark.asyncio
-async def test_get_equity_history_returns_none_on_empty_historicals():
-    from app.trading.robinhood_client import RobinhoodClient
-    client = RobinhoodClient()
-    client.available = True
-
-    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value={"equity_historicals": []}):
-        result = await client.get_equity_history_async("day", "5minute")
+    with patch("robin_stocks.robinhood.load_portfolio_profile", return_value={"cash": "100.00"}):
+        result = await client.get_portfolio_equity_async()
 
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_get_equity_history_returns_none_when_portfolio_call_returns_non_dict():
+async def test_get_portfolio_equity_returns_none_on_non_dict():
     """robin_stocks returns the sentinel [None] (not a dict) on a failed/invalid
-    request — don't let that raise AttributeError out of .get("equity_historicals")."""
+    request — don't let that raise AttributeError out of .get("equity")."""
     from app.trading.robinhood_client import RobinhoodClient
     client = RobinhoodClient()
     client.available = True
 
-    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value=[None]):
-        result = await client.get_equity_history_async("week", "hour")
+    with patch("robin_stocks.robinhood.load_portfolio_profile", return_value=[None]):
+        result = await client.get_portfolio_equity_async()
 
     assert result is None
 
 
 @pytest.mark.asyncio
-async def test_get_equity_history_returns_none_on_exception():
+async def test_get_portfolio_equity_returns_none_on_exception():
     from app.trading.robinhood_client import RobinhoodClient
     client = RobinhoodClient()
     client.available = True
 
-    with patch("robin_stocks.robinhood.get_historical_portfolio", side_effect=Exception("network error")):
-        result = await client.get_equity_history_async("day", "5minute")
+    with patch("robin_stocks.robinhood.load_portfolio_profile", side_effect=Exception("network error")):
+        result = await client.get_portfolio_equity_async()
 
     assert result is None
-
-
-@pytest.mark.asyncio
-async def test_get_equity_history_ytd_filters_by_since():
-    from app.trading.robinhood_client import RobinhoodClient
-    from datetime import datetime, timezone
-    client = RobinhoodClient()
-    client.available = True
-
-    historicals = {
-        "equity_historicals": [
-            {"begins_at": "2025-12-15T00:00:00Z", "adjusted_close_equity": "8500.00"},
-            {"begins_at": "2026-01-05T00:00:00Z", "adjusted_close_equity": "9090.00"},
-            {"begins_at": "2026-06-01T00:00:00Z", "adjusted_close_equity": "9690.00"},
-        ]
-    }
-    since = datetime(2026, 1, 1, tzinfo=timezone.utc)
-    with patch("robin_stocks.robinhood.get_historical_portfolio", return_value=historicals):
-        result = await client.get_equity_history_async("year", "day", since=since)
-
-    assert result is not None
-    equity, _ = result
-    assert equity == [9090.00, 9690.00]
