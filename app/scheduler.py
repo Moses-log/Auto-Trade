@@ -123,7 +123,7 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _robinhood_keep_alive,
-        IntervalTrigger(days=3, timezone=ET),
+        IntervalTrigger(days=3, start_date=ET.localize(datetime(2026, 1, 1)), timezone=ET),
         id="robinhood_keep_alive",
         replace_existing=True,
     )
