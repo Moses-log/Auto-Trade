@@ -13,6 +13,7 @@ import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
+from app.config import settings
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
 from app.rh_keep_alive_state import get_last_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
@@ -88,6 +89,8 @@ async def _robinhood_keep_alive() -> None:
     scheduled time), the next day's check sees >=3 days elapsed since the
     last run and catches up immediately.
     """
+    if not settings.rh_enabled:
+        return
     from app.trading.robinhood_client import rh_client
     now_ts = int(datetime.now(ET).timestamp())
     last_run = get_last_run_ts()

@@ -165,6 +165,26 @@ def test_scheduler_jobs_registered():
 
 @pytest.mark.asyncio
 @patch("app.scheduler.record_run")
+@patch("app.scheduler.get_last_run_ts")
+@patch("app.trading.robinhood_client.rh_client")
+async def test_robinhood_keep_alive_skips_when_rh_disabled(
+    mock_rh_client, mock_get_last_run_ts, mock_record_run
+):
+    """RH_ENABLED=false — don't run keep_alive or touch the state file at all."""
+    from app.scheduler import _robinhood_keep_alive
+    mock_rh_client.keep_alive = AsyncMock()
+
+    with patch("app.scheduler.settings") as mock_settings:
+        mock_settings.rh_enabled = False
+        await _robinhood_keep_alive()
+
+    mock_rh_client.keep_alive.assert_not_called()
+    mock_get_last_run_ts.assert_not_called()
+    mock_record_run.assert_not_called()
+
+
+@pytest.mark.asyncio
+@patch("app.scheduler.record_run")
 @patch("app.scheduler.get_last_run_ts", return_value=None)
 @patch("app.trading.robinhood_client.rh_client")
 async def test_robinhood_keep_alive_runs_when_never_run_before(
