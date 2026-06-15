@@ -124,3 +124,110 @@ async def test_notify_trade_does_not_raise_on_exception():
                     alert_price=537.00,
                     avg_entry_price=None,
                 )
+
+
+@pytest.mark.asyncio
+async def test_notify_signal_subscribers_buy_is_sanitized():
+    with patch("app.trade_notifier.notify_signal_feed", new_callable=AsyncMock) as mock_feed:
+        from app.trade_notifier import notify_signal_subscribers
+        await notify_signal_subscribers(ticker="SPY", action="BUY")
+
+    mock_feed.assert_called_once()
+    msg = mock_feed.call_args[0][0]
+    assert "BUY" in msg
+    assert "SPY" in msg
+    assert "🟢" in msg
+    assert "$" not in msg
+
+
+@pytest.mark.asyncio
+async def test_notify_signal_subscribers_sell_uses_red_emoji():
+    with patch("app.trade_notifier.notify_signal_feed", new_callable=AsyncMock) as mock_feed:
+        from app.trade_notifier import notify_signal_subscribers
+        await notify_signal_subscribers(ticker="SPY", action="SELL")
+
+    msg = mock_feed.call_args[0][0]
+    assert "SELL" in msg
+    assert "🔴" in msg
+
+
+@pytest.mark.asyncio
+async def test_notify_signal_subscribers_does_not_raise_on_exception():
+    with patch("app.trade_notifier.notify_signal_feed", side_effect=Exception("discord down")):
+        from app.trade_notifier import notify_signal_subscribers
+        await notify_signal_subscribers(ticker="SPY", action="BUY")
+
+
+@pytest.mark.asyncio
+async def test_notify_trade_broadcasts_signal_on_immediate_fill():
+    fake_order = MagicMock()
+    fake_order.filled_avg_price = "537.42"
+    fake_order.filled_qty = "5"
+    with patch("app.trade_notifier.get_order", return_value=fake_order):
+        with patch("app.trade_notifier.get_position", return_value=None):
+            with patch("app.trade_notifier.notify_trades", new_callable=AsyncMock):
+                with patch("app.trade_notifier.notify_signal_subscribers", new_callable=AsyncMock) as mock_signal:
+                    from app.trade_notifier import notify_trade
+                    await notify_trade(
+                        ticker="SPY", action="BUY",
+                        result={"orders": [{"alpaca_order_id": "ord-123"}]},
+                        alert_price=537.00,
+                        avg_entry_price=None,
+                    )
+    mock_signal.assert_called_once_with("SPY", "BUY")
+
+
+@pytest.mark.asyncio
+async def test_notify_trade_queued_order_does_not_broadcast_signal_yet():
+    """Order queued for next-open fill — signal must wait until the fill is
+    confirmed, so subscribers can't front-run our own pending order."""
+    fake_order = MagicMock()
+    fake_order.filled_avg_price = None
+    with patch("app.trade_notifier.get_order", return_value=fake_order):
+        with patch("app.trade_notifier.get_position", return_value=None):
+            with patch("app.trade_notifier.notify_trades", new_callable=AsyncMock):
+                with patch("app.trade_notifier._schedule_pending_followup", new_callable=AsyncMock):
+                    with patch("app.trade_notifier.notify_signal_subscribers", new_callable=AsyncMock) as mock_signal:
+                        from app.trade_notifier import notify_trade
+                        await notify_trade(
+                            ticker="SPY", action="BUY",
+                            result={"orders": [{"alpaca_order_id": "ord-123"}]},
+                            alert_price=537.00,
+                            avg_entry_price=None,
+                        )
+    mock_signal.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_notify_pending_order_fill_broadcasts_signal_after_fill():
+    fake_order = MagicMock()
+    fake_order.filled_avg_price = "551.80"
+    fake_order.filled_qty = "5"
+    with patch("app.trade_notifier.get_order", return_value=fake_order):
+        with patch("app.trade_notifier.get_position", return_value=None):
+            with patch("app.trade_notifier.notify_trades", new_callable=AsyncMock):
+                with patch("app.trade_notifier.notify_signal_subscribers", new_callable=AsyncMock) as mock_signal:
+                    with patch("app.pending_orders.remove_pending_order"):
+                        from app.trade_notifier import notify_pending_order_fill
+                        await notify_pending_order_fill(
+                            order_id="ord-123", ticker="SPY", action="BUY",
+                            alert_price=537.00, avg_entry_price=None,
+                        )
+    mock_signal.assert_called_once_with("SPY", "BUY")
+
+
+@pytest.mark.asyncio
+async def test_notify_pending_order_fill_no_signal_when_unfilled():
+    fake_order = MagicMock()
+    fake_order.filled_avg_price = None
+    with patch("app.trade_notifier.get_order", return_value=fake_order):
+        with patch("app.trade_notifier.asyncio.sleep", new_callable=AsyncMock):
+            with patch("app.trade_notifier.notify_trades", new_callable=AsyncMock):
+                with patch("app.trade_notifier.notify_signal_subscribers", new_callable=AsyncMock) as mock_signal:
+                    with patch("app.pending_orders.remove_pending_order"):
+                        from app.trade_notifier import notify_pending_order_fill
+                        await notify_pending_order_fill(
+                            order_id="ord-123", ticker="SPY", action="BUY",
+                            alert_price=537.00, avg_entry_price=None,
+                        )
+    mock_signal.assert_not_called()

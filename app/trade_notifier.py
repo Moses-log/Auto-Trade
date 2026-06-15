@@ -8,7 +8,7 @@ from typing import Optional
 import pytz
 
 from app.leverage_state import save_leverage_entry
-from app.notifications import notify_trades
+from app.notifications import notify_trades, notify_signal_feed
 from app.trading.alpaca_client import get_next_trading_day, get_order, get_position
 from app.trade_record import format_record, record_trade_result
 
@@ -155,9 +155,33 @@ async def notify_trade(
             record_str=record_str,
         )
         await notify_trades(message)
+        await notify_signal_subscribers(ticker, action)
 
     except Exception as exc:
         log.warning("Trade notification failed: %s", exc)
+
+
+async def notify_signal_subscribers(ticker: str, action: str) -> None:
+    """Broadcast a sanitized signal (ticker + direction only) to paid subscribers.
+
+    No price, quantity, or P&L — keeps account size and fills private.
+    """
+    try:
+        action_base = action.upper().split(" (")[0]
+        emoji = "🟢" if action_base in _BUY_ACTIONS else "🔴"
+
+        now = datetime.now(CT)
+        hour = int(now.strftime("%I"))
+        tz_label = now.strftime("%Z")
+        time_str = f"{hour}:{now.strftime('%M %p')} {tz_label} — {now.strftime('%B')} {now.day}, {now.year}"
+
+        message = "\n".join([
+            f"{emoji} **SIGNAL — {action_base} {ticker}**",
+            f"🕐 {time_str}",
+        ])
+        await notify_signal_feed(message)
+    except Exception as exc:
+        log.warning("Signal subscriber notification failed: %s", exc)
 
 
 async def notify_pending_order_fill(
@@ -220,6 +244,7 @@ async def notify_pending_order_fill(
             record_str=record_str,
         )
         await notify_trades(message)
+        await notify_signal_subscribers(ticker, action)
     except Exception as exc:
         log.warning("Pending fill notification failed for %s: %s", order_id, exc)
         await notify_trades(f"⚠️ {ticker} ({action.upper()}) filled at open but notification failed — check Alpaca")

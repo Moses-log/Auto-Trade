@@ -95,6 +95,17 @@ async def notify_trades(message: str) -> None:
         log.warning("Trade Discord notification failed: %s", exc)
 
 
+async def notify_signal_feed(message: str) -> None:
+    """Post to the paid signal-subscriber Discord feed. No-op if unconfigured."""
+    url = settings.signal_subscribers_webhook_url
+    if not url:
+        return
+    try:
+        await _client.post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("Signal feed Discord notification failed: %s", exc)
+
+
 async def notify_with_chart(message: str, chart_bytes: bytes) -> None:
     """Send a Discord message with a PNG chart attachment to the main channel."""
     url = settings.discord_webhook_url

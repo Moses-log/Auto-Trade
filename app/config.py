@@ -80,6 +80,9 @@ class Settings(BaseSettings):
     # ── Portfolio Snapshot (RH pie chart + valuation) ─────────────────────────
     portfolio_snapshot_webhook_url: Optional[str] = None
 
+    # ── Signal Subscribers (paid Discord feed — sanitized BUY/SELL alerts) ────
+    signal_subscribers_webhook_url: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 
