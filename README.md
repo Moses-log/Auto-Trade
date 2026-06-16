@@ -18,7 +18,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   ┌─────────────────┐   ┌──────────────────┐   ┌───────────────────────────────┐
   │  TradingView    │   │  You (manually   │   │       APScheduler             │
   │  Pine Script    │   │  read signal &   │   │  1st of month, 9:35 AM ET     │
-  │  strategy.alert │   │  confirm trade)  │   │  → Claude Monthly Rebalance   │
+  │  strategy.alert │   │  confirm trade)  │   │  → Kimi Monthly Rebalance   │
   └────────┬────────┘   └────────┬─────────┘   └───────────────┬───────────────┘
            │                     │                              │
            │ POST /webhook        │ POST /claude-signal         │ run_monthly_rebalance()
@@ -27,7 +27,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 ║                        FastAPI Server  (Render)                                  ║
 ║                                                                                  ║
 ║  ┌──────────────────────┐  ┌─────────────────────┐  ┌──────────────────────┐   ║
-║  │   KIMI STRATEGY      │  │  CLAUDE AUTOPILOT   │  │   CLAUDE MANAGER     │   ║
+║  │   KIMI STRATEGY      │  │  KIMI AUTOPILOT     │  │   KIMI MANAGER       │   ║
 ║  │                      │  │  PORTFOLIO          │  │   (Autonomous)       │   ║
 ║  │  SPY DCA overlay     │  │                     │  │                      │   ║
 ║  │  • base_entry        │  │  Manual picks from  │  │  Calls Anthropic API │   ║
@@ -39,7 +39,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 ║  │  RH (mirror)         │  │                     │  │    CPI)              │   ║
 ║  │                      │  │  Tracked in         │  │  • Earnings dates    │   ║
 ║  │  SPY ONLY — never    │  │  claude_portfolio   │  │  • Rebalance history │   ║
-║  │  touched by Claude   │  │  .json              │  │                      │   ║
+║  │  touched by Kimi     │  │  .json              │  │                      │   ║
 ║  └──────────┬───────────┘  └─────────┬───────────┘  └──────────┬───────────┘   ║
 ║             │                        │    yfinance ─────────────┤               ║
 ║             │                        │    FRED API  ────────────┤               ║
@@ -59,8 +59,8 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
    │     ALPACA           │                         │    ROBINHOOD         │
    │  Kimi strategy only  │                         │  All 3 strategies    │
    │  (SPY via DCA)       │                         │  • Kimi SPY mirror   │
-   │                      │                         │  • Claude Autopilot  │
-   │  alpaca-py SDK       │                         │  • Claude Manager    │
+   │                      │                         │  • Kimi Autopilot    │
+   │  alpaca-py SDK       │                         │  • Kimi Manager      │
    └──────────────────────┘                         └──────────────────────┘
 
 ════════════════════════════════════════════════════════════════
@@ -68,7 +68,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 ════════════════════════════════════════════════════════════════
 
   Kimi Invest ──► GET /public-stats            ← SPY LIFO stats + spot counter
-  kimiinvest.com   GET /public-claude-callouts ← Claude Manager trade callouts
+  kimiinvest.com   GET /public-claude-callouts ← Kimi Manager trade callouts
                    (both: 1-hour in-memory cache, no auth, CORS open)
 
   Whop.com    ──► POST /whop-webhook           ← membership.went_valid  → decrement spots
@@ -81,10 +81,10 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 
   Mon–Thu 4:00 PM ET ──► Alpaca daily P&L  +  RH daily P&L  +  Investor breakdown
   Fri     4:00 PM ET ──► Above  +  weekly P&L charts  +  Portfolio Pie Chart
-  1st of month 9:35 AM ET ──► Claude autonomous portfolio rebalance
+  1st of month 9:35 AM ET ──► Kimi autonomous portfolio rebalance
   Every 72 hours ──────► RH session keep-alive (silent token refresh)
   Jan/Apr/Jul/Oct 1 ───► Quarterly Alpaca + RH tax summaries
-  9:31 AM ET next open ► Queued Claude sell fill confirmation (when after-hours)
+  9:31 AM ET next open ► Queued Kimi sell fill confirmation (when after-hours)
 
 ════════════════════════════════════════════════════════════════
   DISCORD CHANNELS
@@ -92,8 +92,8 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 
   DISCORD_TRADES_WEBHOOK_URL        ← Alpaca trade fills (Kimi)
   RH_DISCORD_WEBHOOK_URL            ← Robinhood trade fills (Kimi mirror)
-  CLAUDE_PORTFOLIO_WEBHOOK_URL      ← Claude Autopilot manual signal trades + fill confirmations
-  CLAUDE_MANAGER_WEBHOOK_URL        ← Claude autonomous analysis, rebalance trades, benchmark
+  CLAUDE_PORTFOLIO_WEBHOOK_URL      ← Kimi Autopilot manual signal trades + fill confirmations
+  CLAUDE_MANAGER_WEBHOOK_URL        ← Kimi autonomous analysis, rebalance trades, benchmark
   PORTFOLIO_SNAPSHOT_WEBHOOK_URL    ← Friday RH pie chart + valuation rating
   RH_PNL_WEBHOOK_URL                ← Robinhood P&L reports (daily/weekly/monthly)
   RH_SESSION_WEBHOOK_URL            ← RH session alerts (expiry, keep-alive)
@@ -102,7 +102,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   ALPACA_TAX_WEBHOOK_URL            ← Quarterly Alpaca tax summaries
   RH_TAX_WEBHOOK_URL                ← Quarterly RH tax summaries
   SIGNAL_SUBSCRIBERS_WEBHOOK_URL    ← Paid Kimi Invest Discord: Kimi BUY/SELL signals + WIN/LOSS
-  CLAUDE_SUBSCRIBERS_WEBHOOK_URL    ← Paid Kimi Invest Discord: Claude BUY/SELL/TRIM/DOUBLE_DOWN signals
+  CLAUDE_SUBSCRIBERS_WEBHOOK_URL    ← Paid Kimi Invest Discord: Kimi BUY/SELL/TRIM/DOUBLE_DOWN signals
 
 ════════════════════════════════════════════════════════════════
   PERSISTENT DISK  (/data on Render)
@@ -111,11 +111,11 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   robinhood.pickle          ← RH session token (auto-refreshed every 72 h)
   investors.json            ← Investor deposit history
   trade_record.json         ← Alpaca win/loss record
-  rh_trade_record.json      ← RH win/loss record (Kimi + all Claude sells)
+  rh_trade_record.json      ← RH win/loss record (all strategies)
   leverage_entry.json       ← ADD_LEVERAGE fill prices (accurate DCA P&L)
-  pending_orders.json       ← Queued orders (Alpaca + Claude sells) — survive restarts
+  pending_orders.json       ← Queued orders (Alpaca + Kimi sells) — survive restarts
   idempotency.json          ← Seen alert IDs (duplicate suppression, 5 min TTL)
-  claude_portfolio.json     ← Claude Autopilot + Manager positions + W-L record
+  claude_portfolio.json     ← Kimi Autopilot + Manager positions + W-L record
   claude_rebalance_log.json ← Monthly rebalance audit log (36 entries max)
   rh_positions_cache.json   ← Last-known RH positions (pie chart fallback)
   early_access.json         ← Kimi Invest early-access spot counter (0–15, Whop-driven)
@@ -134,11 +134,11 @@ Dollar-cost-averaging overlay triggered by TradingView Pine Script alerts. Execu
 - **Remove Leverage** — closes only the DCA portion, leaving the base position intact.
 - **Stop Loss** — closes the entire position on both brokers.
 
-> SPY is managed exclusively by the Kimi strategy. Neither Claude system will ever touch SPY.
+> SPY is managed exclusively by the Kimi strategy. Neither Kimi system will ever touch SPY.
 
 ---
 
-### 2 — Claude Autopilot Portfolio
+### 2 — Kimi Autopilot Portfolio
 
 Manual endpoint for trading signals from [@theaiportfolios](https://x.com/theaiportfolios) on Twitter/X. You read the tweet, confirm it's a live signal, and fire the endpoint. The bot executes on Robinhood using `CLAUDE_LEVERAGE_FACTOR` (default 5%) of buying power.
 
@@ -152,17 +152,17 @@ Positions tracked in `/data/claude_portfolio.json` with entry price, qty, W-L re
 
 ---
 
-### 3 — Claude Portfolio Manager (Autonomous)
+### 3 — Kimi Portfolio Manager (Autonomous)
 
 On the **1st of each month at 9:35 AM ET**, the system:
 
 1. Fetches all RH positions + buying power
 2. Enriches each holding with yfinance fundamentals (Forward P/E, ROE, margins, growth, earnings date) — **all tickers in parallel**
 3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
-4. Loads **last 3 rebalance log entries** to give Claude its own performance history
+4. Loads **last 3 rebalance log entries** to give the system its own performance history
 5. Calls **claude-opus-4-8** via the Anthropic API with a full Ackman-style scoring framework
-6. Claude scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage — using macro conditions and upcoming earnings dates to inform timing
-7. Claude proposes an optimal portfolio using five trade actions:
+6. The system scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage — using macro conditions and upcoming earnings dates to inform timing
+7. The system proposes an optimal portfolio using five trade actions:
    - **BUY** — open or add to a position (delta-buy: only invests the additional dollars needed to reach target weight)
    - **DOUBLE_DOWN** — explicitly add to an existing position with elevated conviction (same delta-buy execution, distinct Discord signal)
    - **SELL** — close an entire position
@@ -175,9 +175,9 @@ On the **1st of each month at 9:35 AM ET**, the system:
 
 Can also be triggered on-demand via `/rebalance` Discord slash command or `POST /run-rebalance`.
 
-#### Claude Manager Investment Strategy
+#### Kimi Portfolio Manager Investment Strategy
 
-The strategy is defined entirely in the system prompt at `app/claude_manager.py:37` (`_SYSTEM_PROMPT`). Here is what it instructs Claude to do:
+The strategy is defined entirely in the system prompt at `app/claude_manager.py:37` (`_SYSTEM_PROMPT`). Here is what it instructs the system to do:
 
 **Objective:** Maximize long-term risk-adjusted returns and outperform the S&P 500 over rolling 3, 5, and 10-year periods.
 
@@ -186,7 +186,7 @@ The strategy is defined entirely in the system prompt at `app/claude_manager.py:
 - Only U.S. publicly traded stocks with a market cap above $5 billion.
 - Position sizes between 5% and 25% per stock.
 - Cash is a valid position — never force deployment into mediocre opportunities.
-- SPY is permanently excluded — it is managed by the Kimi DCA strategy and Claude must never touch it.
+- SPY is permanently excluded — it is managed by the Kimi DCA strategy and Kimi Portfolio Manager must never touch it.
 
 **Scoring Framework — every stock is scored 0–100:**
 
@@ -210,7 +210,7 @@ The strategy is defined entirely in the system prompt at `app/claude_manager.py:
 - **Macro calibration**: VIX, 10-year Treasury yield, and CPI YoY are provided. High VIX → favor defensiveness. Rising yields → pressure on growth multiples. Elevated CPI → watch margin compression.
 
 **Self-awareness (last 3 months of history injected into the prompt):**
-- Claude sees its own prior analyses, what trades it proposed, and how the portfolio performed vs SPY each month.
+- The system sees its own prior analyses, what trades it proposed, and how the portfolio performed vs SPY each month.
 - Prevents momentum-chasing its own prior decisions and allows it to course-correct.
 
 ---
@@ -250,16 +250,16 @@ app/
 ├── rh_pnl.py             # Robinhood P&L engine (daily/weekly/monthly/yearly)
 ├── chart.py              # Alpaca portfolio vs SPY equity curve chart (cyberpunk style)
 ├── portfolio_report.py   # RH pie chart + valuation rating (Friday snapshot)
-├── macro_context.py      # Macro indicators for Claude prompt (VIX, 10Y yield, CPI via FRED)
+├── macro_context.py      # Macro indicators for the rebalance prompt (VIX, 10Y yield, CPI via FRED)
 │
 ├── claude_manager.py     # Autonomous monthly portfolio manager (Anthropic API)
-├── claude_portfolio.py   # Claude position tracker — open/close/trim/W-L for both Claude systems
+├── claude_portfolio.py   # Kimi position tracker — open/close/trim/W-L for both Kimi systems
 │
 ├── investors.py          # Investor data model, equity math, Discord report formatting
 ├── trade_record.py       # Alpaca win/loss counter
-├── rh_trade_record.py    # Robinhood win/loss counter (Kimi + Claude sells)
+├── rh_trade_record.py    # Robinhood win/loss counter (all strategies)
 ├── leverage_state.py     # Stores ADD_LEVERAGE fill price per ticker for P&L accuracy
-├── pending_orders.py     # Persist queued orders to disk (Alpaca + Claude sells)
+├── pending_orders.py     # Persist queued orders to disk (Alpaca + Kimi sells)
 ├── tax.py                # Quarterly Alpaca + RH tax summary reports
 ├── interactions.py       # Discord Ed25519 signature verification + option parsing
 ├── discord_commands.py   # All slash command handlers
@@ -306,19 +306,19 @@ scripts/
 | `RH_SESSION_WEBHOOK_URL` | — | Discord channel for RH session status (expiry, keep-alive) |
 | `RH_PNL_WEBHOOK_URL` | — | Discord channel for RH P&L reports |
 
-### Claude Autopilot Portfolio
+### Kimi Autopilot Portfolio
 
 | Variable | Default | Description |
 |---|---|---|
 | `CLAUDE_LEVERAGE_FACTOR` | `0.05` | Fraction of RH buying power per `/claude-signal` trade (5%) |
-| `CLAUDE_PORTFOLIO_WEBHOOK_URL` | — | Discord channel for Claude Autopilot trade signals and fill confirmations |
+| `CLAUDE_PORTFOLIO_WEBHOOK_URL` | — | Discord channel for Kimi Autopilot trade signals and fill confirmations |
 
-### Claude Portfolio Manager (Autonomous)
+### Kimi Portfolio Manager (Autonomous)
 
 | Variable | Description |
 |---|---|
 | `ANTHROPIC_API_KEY` | Anthropic API key — required for autonomous monthly rebalance |
-| `CLAUDE_MANAGER_WEBHOOK_URL` | Discord channel for Claude analysis, rebalance trades, and benchmark comparisons |
+| `CLAUDE_MANAGER_WEBHOOK_URL` | Discord channel for Kimi analysis, rebalance trades, and benchmark comparisons |
 | `FRED_API_KEY` | Free FRED API key (fred.stlouisfed.org → My Account → API Keys) — enables live CPI data in the rebalance prompt. Optional; VIX and 10Y yield work without it. |
 
 ### Portfolio Snapshot
@@ -332,7 +332,7 @@ scripts/
 | Variable | Description |
 |---|---|
 | `SIGNAL_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Kimi BUY/SELL signals with WIN/LOSS on sells. No P&L amounts or quantities. |
-| `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Claude Manager BUY/DOUBLE_DOWN/SELL/TRIM signals posted on every autonomous trade. |
+| `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Kimi Manager BUY/DOUBLE_DOWN/SELL/TRIM signals posted on every autonomous trade. |
 | `WHOP_WEBHOOK_SECRET` | HMAC-SHA256 secret for verifying Whop membership webhook payloads. Optional — signature check is skipped if not set. |
 
 ### Discord Slash Commands
@@ -444,7 +444,7 @@ Main TradingView alert receiver (Kimi strategy). Validates secret, deduplicates,
 ---
 
 ### `POST /claude-signal`
-Manually execute a Claude Autopilot trade from a Twitter signal. Uses `CLAUDE_LEVERAGE_FACTOR` sizing on Robinhood.
+Manually execute a Kimi Autopilot trade from a Twitter signal. Uses `CLAUDE_LEVERAGE_FACTOR` sizing on Robinhood.
 
 ```json
 {
@@ -460,7 +460,7 @@ Manually execute a Claude Autopilot trade from a Twitter signal. Uses `CLAUDE_LE
 ---
 
 ### `POST /run-rebalance`
-Manually trigger the Claude autonomous portfolio rebalance (same as `/rebalance` slash command).
+Manually trigger the Kimi autonomous portfolio rebalance (same as `/rebalance` slash command).
 
 ```json
 { "secret": "YOUR_WEBHOOK_SECRET" }
@@ -511,10 +511,10 @@ All commands are ephemeral (only visible to you) and restricted to `DISCORD_YOUR
 | `/status` | — | Shows live Alpaca + Robinhood account status and all open positions |
 | `/positions` | `broker` (opt.) | Lists all open positions with real-time P&L |
 | `/close` | `ticker`, `broker` (opt.) | Closes a position by ticker on Alpaca, Robinhood, or both |
-| `/rebalance` | — | Triggers the Claude autonomous portfolio rebalance immediately |
+| `/rebalance` | — | Triggers the Kimi autonomous portfolio rebalance immediately |
 | `/portfolio` | — | Posts the RH portfolio pie chart + valuation ratings on-demand |
 | `/tax alpaca` | `year` (opt.) | Posts Alpaca realized gains/losses for the given tax year |
-| `/tax robinhood` | `year` (opt.) | Posts RH realized gains/losses for the given tax year (Kimi + Claude) |
+| `/tax robinhood` | `year` (opt.) | Posts RH realized gains/losses for the given tax year (all strategies) |
 
 **One-time setup:** After any command changes, re-run:
 ```powershell
@@ -535,7 +535,7 @@ $env:DISCORD_APP_ID="..."; $env:DISCORD_BOT_TOKEN="..."; python scripts/register
 | `remove_leverage` | SELL only the DCA portion | Sell full position |
 | `stop_loss` | Close all positions | Sell full position |
 
-## Trade Actions (Claude Manager)
+## Trade Actions (Kimi Portfolio Manager)
 
 | Action | JSON field | Behaviour |
 |---|---|---|
@@ -567,57 +567,57 @@ Position: 0.1216 shares
 🕐 1:32 PM CDT — May 11, 2026
 ```
 
-### Claude Autopilot (`CLAUDE_PORTFOLIO_WEBHOOK_URL`)
+### Kimi Autopilot (`CLAUDE_PORTFOLIO_WEBHOOK_URL`)
 ```
-🟢 🤖 CLAUDE BUY — FICO
+🟢 🤖 KIMI BUY — FICO
 Qty: 0.43 shares @ $1,840.00
 🕐 2:15 PM CDT — June 1, 2026
 📌 https://x.com/theaiportfolios/status/...
 
 — next morning if after-hours —
 
-✅ 🤖 CLAUDE SELL FILLED — FICO
+✅ 🤖 KIMI SELL FILLED — FICO
 Qty: 0.43 shares @ $1,891.50
 P&L: +$22.15 (+2.80%) 🟢 WIN
-Claude Record: 5W - 1L
+Kimi Record: 5W - 1L
 🕐 9:31 AM CDT — June 2, 2026
 ```
 
-### Claude Manager (`CLAUDE_MANAGER_WEBHOOK_URL`)
+### Kimi Manager (`CLAUDE_MANAGER_WEBHOOK_URL`)
 The rebalance posts several messages in sequence:
 
 ```
-🤖 CLAUDE PORTFOLIO MANAGER — MONTHLY REBALANCE
+🤖 KIMI PORTFOLIO MANAGER — MONTHLY REBALANCE
 Fetching portfolio and running analysis... 🕐 9:35 AM CT — June 1, 2026
 
-📊 CLAUDE MONTHLY PORTFOLIO ANALYSIS
+📊 KIMI MONTHLY PORTFOLIO ANALYSIS
 [Full written analysis — chunked across multiple Discord messages if >2000 chars]
 
 ⚡ EXECUTING 4 TRADE(S) — 🕐 9:36 AM CT
 
-🔥 CLAUDE DOUBLE_DOWN — META
+🔥 KIMI DOUBLE_DOWN — META
 Qty: 0.834 shares @ $601.00
 Target: 22% weight — Invested: $501.23
 🕐 9:36 AM CT
 
-✂️ CLAUDE TRIM — NVDA
+✂️ KIMI TRIM — NVDA
 Sold 2.000 shares @ $127.50 → reduced to 8% target
 P&L: +$84.20 🟢
-Claude Record: 7W - 2L
+Kimi Record: 7W - 2L
 🕐 9:36 AM CT
 
-🔴 CLAUDE SELL — NOW
+🔴 KIMI SELL — NOW
 Qty: 5.5 shares @ $210.00
 P&L: +$312.00 (+18.42%) 🟢 WIN
-Claude Record: 8W - 2L
+Kimi Record: 8W - 2L
 🕐 9:36 AM CT
 
-🟢 CLAUDE BUY — FICO
+🟢 KIMI BUY — FICO
 Qty: 1.234 shares @ $1,842.00
 Target: 15% weight — Invested: $2,271.73
 🕐 9:36 AM CT
 
-✅ CLAUDE PORTFOLIO REBALANCE COMPLETE — 🕐 9:37 AM CT — June 1, 2026
+✅ KIMI PORTFOLIO REBALANCE COMPLETE — 🕐 9:37 AM CT — June 1, 2026
 
 🟢 This month:   Portfolio +3.21%  |  SPY +1.84%  |  Alpha +1.37%
 🟢 Since 2026-01-01:  Portfolio +18.50%  |  SPY +12.30%  |  Alpha +6.20%
@@ -625,7 +625,7 @@ Target: 15% weight — Invested: $2,271.73
 — or when no trades needed —
 
 ✅ NO CHANGES THIS MONTH
-Claude determined the current portfolio requires no rebalancing.
+Kimi Portfolio Manager determined the current portfolio requires no rebalancing.
 
 🟢 This month:   Portfolio +1.10%  |  SPY +0.82%  |  Alpha +0.28%
 ```
@@ -673,11 +673,11 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `robinhood.pickle` | Auth endpoints, keep-alive | RH session token |
 | `investors.json` | `/deposit`, `/withdraw` | Investor deposit history |
 | `trade_record.json` | Every Alpaca sell | Alpaca win/loss record |
-| `rh_trade_record.json` | Every Kimi RH sell + every Claude sell | Robinhood win/loss + tax record |
+| `rh_trade_record.json` | Every RH sell (all strategies) | Robinhood win/loss + tax record |
 | `leverage_entry.json` | Every `add_leverage` | DCA fill price for accurate P&L |
-| `pending_orders.json` | After-hours Alpaca + Claude queued sells | Queued order fill notifications — survive restarts |
+| `pending_orders.json` | After-hours Alpaca + Kimi queued sells | Queued order fill notifications — survive restarts |
 | `idempotency.json` | Every webhook hit | Duplicate alert suppression (5-min TTL) |
-| `claude_portfolio.json` | `/claude-signal`, Claude Manager | Claude positions + W-L record |
+| `claude_portfolio.json` | `/claude-signal`, Kimi Manager | Kimi positions + W-L record |
 | `claude_rebalance_log.json` | Monthly rebalance | Full audit log — macro context, analysis, positions before, trades executed/skipped, SPY price (capped at 36 entries) |
 | `rh_positions_cache.json` | Every successful RH fetch | Last-known positions for pie chart fallback when API is down |
 | `early_access.json` | `/whop-webhook` (Whop events) | Kimi Invest spot counter — starts at 15, decrements on new Whop member, increments on cancellation |
@@ -709,7 +709,7 @@ On **January 1, April 1, July 1, and October 1** at 8:00 AM ET:
 - **January 1** → reports the completed prior year
 - **April / July / October 1** → reports the current year to date
 
-The RH tax report captures **all RH sells** — Kimi strategy trades and all Claude trades (both Autopilot and Manager). Posted to `ALPACA_TAX_WEBHOOK_URL` and `RH_TAX_WEBHOOK_URL`.
+The RH tax report captures **all RH sells** — Kimi strategy trades and all Kimi Portfolio Manager trades (both Autopilot and Manager). Posted to `ALPACA_TAX_WEBHOOK_URL` and `RH_TAX_WEBHOOK_URL`.
 
 ---
 
@@ -744,8 +744,8 @@ The investor breakdown report (`/report alpaca type:Investor Breakdown`, daily M
 
 Three separate records updated on every sell:
 - **Alpaca** — `TRADE_RECORD_PATH` (`/data/trade_record.json`)
-- **Robinhood (tax)** — `/data/rh_trade_record.json` — captures Kimi sells, Claude Autopilot sells, and Claude Manager sells (including TRIM). Used by `/tax robinhood`.
-- **Claude** — `/data/claude_portfolio.json` — tracks Claude Autopilot + Manager W-L record independently, shown in Claude trade Discord messages.
+- **Robinhood (tax)** — `/data/rh_trade_record.json` — captures Kimi sells, Kimi Autopilot sells, and Kimi Manager sells (including TRIM). Used by `/tax robinhood`.
+- **Kimi Portfolio Manager** — `/data/claude_portfolio.json` — tracks Kimi Autopilot + Manager W-L record independently, shown in Kimi trade Discord messages.
 
 For `remove_leverage`, P&L is calculated against the stored ADD_LEVERAGE fill price rather than the blended position average — giving an accurate view of the DCA trade independent of the base position.
 
@@ -767,7 +767,7 @@ When an order is placed after market hours:
 3. Schedules a job at 9:31 AM ET next trading day to poll for the fill
 4. On fill, posts a full `(FILLED AT OPEN)` notification with actual fill price and P&L
 
-**Robinhood (Claude sells):**
+**Robinhood (Kimi sells):**
 Same flow, but the pending entry has `broker="claude_sell"` and resolves via `notify_claude_pending_sell_fill`, which posts to `CLAUDE_PORTFOLIO_WEBHOOK_URL` (Autopilot) or `CLAUDE_MANAGER_WEBHOOK_URL` (Manager) with actual fill price, P&L, and win/loss record.
 
 ---
