@@ -35,7 +35,7 @@ from app.idempotency import is_duplicate, mark_processed
 from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
-from app.notifications import notify, close_http_client, notify_rh_session, notify_signal_feed
+from app.notifications import notify, close_http_client, notify_rh_session
 from app.rh_trade_notifier import notify_rh_trade
 from app.pnl import (
     ET,
@@ -551,13 +551,6 @@ async def webhook(request: Request):
             rh_result=result.get("robinhood", {}),
             alert_price=payload.price,
         )
-
-        if payload.action != TradingAction.BASE_ENTRY and result.get("orders"):
-            _is_buy = payload.action not in _SELL_ACTIONS
-            _emoji = "🟢" if _is_buy else "🔴"
-            _side = "BUY" if _is_buy else "SELL"
-            _price_str = f" @ ${payload.price:,.2f}" if payload.price else ""
-            await notify_signal_feed(f"{_emoji} **{_side} {payload.ticker}**{_price_str}")
 
         return JSONResponse(
             status_code=status.HTTP_200_OK,

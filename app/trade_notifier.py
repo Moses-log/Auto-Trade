@@ -155,31 +155,53 @@ async def notify_trade(
             record_str=record_str,
         )
         await notify_trades(message)
-        await notify_signal_subscribers(ticker, action)
+        await notify_signal_subscribers(ticker, action, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
 
     except Exception as exc:
         log.warning("Trade notification failed: %s", exc)
 
 
-async def notify_signal_subscribers(ticker: str, action: str) -> None:
-    """Broadcast a sanitized signal (ticker + direction only) to paid subscribers.
+_ACTION_LABEL: dict[str, str] = {
+    "ADD_LEVERAGE":    "BUY",
+    "REMOVE_LEVERAGE": "SELL",
+    "STOP_LOSS":       "SELL",
+    "BASE_ENTRY":      "BUY",
+    "CLOSE_LONG":      "SELL",
+    "CLOSE_SHORT":     "BUY",
+    "REVERSE_TO_LONG": "BUY",
+    "REVERSE_TO_SHORT":"SELL",
+}
 
-    No price, quantity, or P&L — keeps account size and fills private.
+
+async def notify_signal_subscribers(
+    ticker: str,
+    action: str,
+    dollar_pnl: Optional[float] = None,
+    pct_pnl: Optional[float] = None,
+) -> None:
+    """Broadcast a sanitized signal to paid subscribers.
+
+    Buys: direction + ticker. Sells: adds WIN or LOSS (no amounts).
+    No quantity, price, or P&L figures — keeps account details private.
     """
     try:
         action_base = action.upper().split(" (")[0]
-        emoji = "🟢" if action_base in _BUY_ACTIONS else "🔴"
+        label = _ACTION_LABEL.get(action_base, action_base)
+        is_buy = action_base in _BUY_ACTIONS
+        emoji = "🟢" if is_buy else "🔴"
 
         now = datetime.now(CT)
         hour = int(now.strftime("%I"))
         tz_label = now.strftime("%Z")
         time_str = f"{hour}:{now.strftime('%M %p')} {tz_label} — {now.strftime('%B')} {now.day}, {now.year}"
 
-        message = "\n".join([
-            f"{emoji} **SIGNAL — {action_base} {ticker}**",
-            f"🕐 {time_str}",
-        ])
-        await notify_signal_feed(message)
+        lines = [f"{emoji} **SIGNAL — {label} {ticker}**"]
+
+        if not is_buy and dollar_pnl is not None:
+            lines.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
+
+        lines.append(f"🕐 {time_str}")
+        await notify_signal_feed("\n".join(lines))
     except Exception as exc:
         log.warning("Signal subscriber notification failed: %s", exc)
 
@@ -244,7 +266,7 @@ async def notify_pending_order_fill(
             record_str=record_str,
         )
         await notify_trades(message)
-        await notify_signal_subscribers(ticker, action)
+        await notify_signal_subscribers(ticker, action, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
     except Exception as exc:
         log.warning("Pending fill notification failed for %s: %s", order_id, exc)
         await notify_trades(f"⚠️ {ticker} ({action.upper()}) filled at open but notification failed — check Alpaca")
