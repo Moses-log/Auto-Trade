@@ -209,6 +209,14 @@ async def public_claude_callouts():
     return {"callouts": callouts}
 
 
+@app.get("/public-claude-performance", tags=["public"])
+async def public_claude_performance():
+    """Kimi Portfolio Manager vs SPY normalized performance since inception. No auth required."""
+    from app.claude_callouts import get_claude_performance
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, get_claude_performance)
+
+
 @app.post("/whop-webhook", tags=["public"])
 async def whop_webhook(request: Request):
     """Receive Whop membership events and update the early-access spot counter."""

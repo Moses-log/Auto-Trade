@@ -64,3 +64,62 @@ def get_claude_callouts() -> list:
 
     callouts.reverse()
     return callouts[:100]
+
+
+def get_claude_performance() -> dict:
+    """Return portfolio vs SPY performance normalized to 0% at inception."""
+    empty = {"data_points": [], "portfolio_pct": 0.0, "spy_pct": 0.0, "alpha": 0.0, "inception": None}
+    if not os.path.exists(_LOG_PATH):
+        return empty
+    try:
+        with open(_LOG_PATH) as f:
+            entries = json.load(f)
+    except Exception as exc:
+        log.warning("Failed to read rebalance log for performance: %s", exc)
+        return empty
+
+    completed = [
+        e for e in entries
+        if e.get("status") == "completed"
+        and e.get("portfolio_value")
+        and e.get("spy_price_at_rebalance")
+    ]
+    if not completed:
+        return empty
+
+    first_portfolio = completed[0]["portfolio_value"]
+    first_spy = completed[0]["spy_price_at_rebalance"]
+
+    data_points = []
+    for entry in completed:
+        ts = entry.get("timestamp", "")
+        try:
+            dt = datetime.fromisoformat(ts).astimezone(timezone.utc)
+            label = dt.strftime("%b %Y")
+        except Exception:
+            label = ts[:7] if ts else "—"
+
+        portfolio_pct = (entry["portfolio_value"] / first_portfolio - 1) * 100
+        spy_pct = (entry["spy_price_at_rebalance"] / first_spy - 1) * 100
+        data_points.append({
+            "label": label,
+            "portfolio_pct": round(portfolio_pct, 2),
+            "spy_pct": round(spy_pct, 2),
+        })
+
+    final_port = data_points[-1]["portfolio_pct"]
+    final_spy  = data_points[-1]["spy_pct"]
+    inception  = None
+    try:
+        dt = datetime.fromisoformat(completed[0]["timestamp"]).astimezone(timezone.utc)
+        inception = dt.strftime("%B %Y")
+    except Exception:
+        pass
+
+    return {
+        "data_points": data_points,
+        "portfolio_pct": round(final_port, 2),
+        "spy_pct": round(final_spy, 2),
+        "alpha": round(final_port - final_spy, 2),
+        "inception": inception,
+    }
