@@ -126,6 +126,18 @@ async def get_public_stats() -> dict:
     stats = compute_stats(orders)
     stats["spots_remaining"] = load_spots()
 
-    _cache["data"]    = stats
-    _cache["expires"] = now + 3600
+    if orders:
+        # Successful fetch — cache for 1 hour
+        _cache["data"]    = stats
+        _cache["expires"] = now + 3600
+    elif _cache["data"] is not None:
+        # Alpaca fetch failed — return stale cache rather than caching zeros
+        stale = dict(_cache["data"])
+        stale["spots_remaining"] = stats["spots_remaining"]
+        return stale
+    else:
+        # No prior cache and fetch failed — cache briefly so we retry in 1 min
+        _cache["data"]    = stats
+        _cache["expires"] = now + 60
+
     return stats

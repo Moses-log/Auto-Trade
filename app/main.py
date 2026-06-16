@@ -270,6 +270,9 @@ async def interactions(request: Request, background_tasks: BackgroundTasks):
     if user_id != settings.discord_your_user_id:
         return {"type": 4, "data": {"content": "Unauthorized.", "flags": 64}}
 
+    if data.get("type") != 2:
+        return JSONResponse(status_code=400, content={"error": "Unsupported interaction type"})
+
     token = data["token"]
     command = data["data"]["name"]
     options = parse_options(data["data"].get("options", []))

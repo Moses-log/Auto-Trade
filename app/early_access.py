@@ -1,8 +1,10 @@
 import json
 import os
+import threading
 
 _SPOTS_PATH = "/data/early_access.json"
 _MAX_SPOTS = 15
+_lock = threading.Lock()
 
 
 def load_spots() -> int:
@@ -17,19 +19,23 @@ def load_spots() -> int:
 
 def _save_spots(n: int) -> None:
     os.makedirs(os.path.dirname(_SPOTS_PATH), exist_ok=True)
-    with open(_SPOTS_PATH, "w") as f:
+    tmp = _SPOTS_PATH + ".tmp"
+    with open(tmp, "w") as f:
         json.dump({"spots_remaining": n}, f)
+    os.replace(tmp, _SPOTS_PATH)
 
 
 def decrement_spots() -> int:
-    current = load_spots()
-    new = max(0, current - 1)
-    _save_spots(new)
-    return new
+    with _lock:
+        current = load_spots()
+        new = max(0, current - 1)
+        _save_spots(new)
+        return new
 
 
 def increment_spots() -> int:
-    current = load_spots()
-    new = min(_MAX_SPOTS, current + 1)
-    _save_spots(new)
-    return new
+    with _lock:
+        current = load_spots()
+        new = min(_MAX_SPOTS, current + 1)
+        _save_spots(new)
+        return new

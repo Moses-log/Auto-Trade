@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 async def _edit_original(token: str, content: str) -> None:
     url = f"https://discord.com/api/v10/webhooks/{settings.discord_app_id}/{token}/messages/@original"
     try:
-        await get_http_client().patch(url, json={"content": content}, timeout=10)
+        await get_http_client().patch(url, json={"content": content[:1990]}, timeout=10)
     except Exception as exc:
         log.warning("Failed to edit Discord follow-up: %s", exc)
 

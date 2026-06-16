@@ -23,7 +23,9 @@ def _load() -> list:
 
 
 def _save(orders: list) -> None:
-    _FILE.write_text(json.dumps({"pending": orders}))
+    tmp = _FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"pending": orders}))
+    tmp.replace(_FILE)  # atomic rename — survives kill signals mid-write
 
 
 def save_pending_order(

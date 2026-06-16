@@ -360,16 +360,25 @@ async def run_monthly_rebalance() -> None:
         """Fetch quarterly financials and post chart to manager + subscriber channels."""
         try:
             from app.financials_chart import fetch_quarterly_financials, generate_financials_chart
-            from app.notifications import notify_claude_signal_feed_with_chart
             loop = asyncio.get_running_loop()
             fin_data = await loop.run_in_executor(None, fetch_quarterly_financials, tkr)
             if fin_data is None:
                 return
             chart_bytes = await loop.run_in_executor(None, generate_financials_chart, fin_data)
+        except Exception as exc:
+            log.warning("Financials chart generation failed for %s: %s", tkr, exc)
+            return
+
+        try:
             await notify_claude_manager_with_chart("", chart_bytes)
+        except Exception as exc:
+            log.warning("Financials chart → manager channel failed for %s: %s", tkr, exc)
+
+        try:
+            from app.notifications import notify_claude_signal_feed_with_chart
             await notify_claude_signal_feed_with_chart("", chart_bytes)
         except Exception as exc:
-            log.warning("Financials chart failed for %s: %s", tkr, exc)
+            log.warning("Financials chart → subscriber channel failed for %s: %s", tkr, exc)
 
     if not settings.anthropic_api_key:
         log.error("ANTHROPIC_API_KEY not set — skipping monthly rebalance")
@@ -618,14 +627,14 @@ async def run_monthly_rebalance() -> None:
             else:
                 pnl_line = (f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN" if dollar_pnl >= 0
                             else f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS") if dollar_pnl is not None else ""
-                lines = [f"🔴 **KIMI SELL — {ticker}**", f"Qty: {qty:g} shares @ ${fill:,.2f}"]
+                lines = [f"🔴 **KIMI SELL — {ticker}**", f"Qty: {qty:g} shares @ ${fill or 0:,.2f}"]
                 if pnl_line:
                     lines.append(pnl_line)
                 lines += [f"Kimi Record: {wins}W - {losses}L", _timestamp()]
             await notify_claude_manager("\n".join(lines))
             if not queued:
                 from app.notifications import notify_claude_signal_feed
-                sub_sig = [f"🔴 **KIMI SELL — {ticker}**", f"@ ${fill:,.2f}"]
+                sub_sig = [f"🔴 **KIMI SELL — {ticker}**", f"@ ${fill or 0:,.2f}"]
                 if dollar_pnl is not None:
                     sub_sig.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
                 sub_sig.append(_timestamp())
@@ -700,14 +709,14 @@ async def run_monthly_rebalance() -> None:
             else:
                 pnl_line = (f"P&L: +${dollar_pnl:,.2f} 🟢" if dollar_pnl >= 0 else f"P&L: -${abs(dollar_pnl):,.2f} 🔴") if dollar_pnl is not None else ""
                 lines = [f"✂️ **KIMI TRIM — {ticker}**",
-                         f"Sold {qty_sold:g} shares @ ${fill:,.2f} → reduced to {target_wt}% target"]
+                         f"Sold {qty_sold:g} shares @ ${fill or 0:,.2f} → reduced to {target_wt}% target"]
                 if pnl_line:
                     lines.append(pnl_line)
                 lines += [f"Kimi Record: {wins}W - {losses}L", _timestamp()]
             await notify_claude_manager("\n".join(lines))
             if not queued:
                 from app.notifications import notify_claude_signal_feed
-                sub_sig = [f"✂️ **KIMI TRIM — {ticker}**", f"@ ${fill:,.2f} → target {target_wt}% weight", _timestamp()]
+                sub_sig = [f"✂️ **KIMI TRIM — {ticker}**", f"@ ${fill or 0:,.2f} → target {target_wt}% weight", _timestamp()]
                 asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
@@ -765,7 +774,7 @@ async def run_monthly_rebalance() -> None:
                          f"Target: {target_wt}% weight — Investing: ${invest_dollars:,.2f}", _timestamp()]
             else:
                 lines = [f"{buy_emoji} **KIMI {action_label} — {ticker}**",
-                         f"Qty: {qty:g} shares @ ${fill:,.2f}",
+                         f"Qty: {qty:g} shares @ ${fill or 0:,.2f}",
                          f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}", _timestamp()]
 
             await notify_claude_manager("\n".join(lines))
@@ -774,7 +783,7 @@ async def run_monthly_rebalance() -> None:
                 sig_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
                 sub_sig = [
                     f"{sig_emoji} **KIMI {action_label} — {ticker}**",
-                    f"@ ${fill:,.2f}",
+                    f"@ ${fill or 0:,.2f}",
                     f"Target: {target_wt}% weight",
                     _timestamp(),
                 ]
