@@ -174,7 +174,7 @@ async def test_notify_trade_broadcasts_signal_on_immediate_fill():
                         alert_price=537.00,
                         avg_entry_price=None,
                     )
-    mock_signal.assert_called_once_with("SPY", "BUY")
+    mock_signal.assert_called_once_with("SPY", "BUY", dollar_pnl=None, pct_pnl=None)
 
 
 @pytest.mark.asyncio
@@ -213,7 +213,7 @@ async def test_notify_pending_order_fill_broadcasts_signal_after_fill():
                             order_id="ord-123", ticker="SPY", action="BUY",
                             alert_price=537.00, avg_entry_price=None,
                         )
-    mock_signal.assert_called_once_with("SPY", "BUY")
+    mock_signal.assert_called_once_with("SPY", "BUY", dollar_pnl=None, pct_pnl=None)
 
 
 @pytest.mark.asyncio
