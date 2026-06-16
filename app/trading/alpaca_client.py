@@ -271,7 +271,7 @@ def get_all_spy_orders() -> list:
         status=QueryOrderStatus.CLOSED,
         limit=500,
     )
-    orders = get_client().get_orders(filter=req) or []
+    orders = get_client().get_orders(req) or []
     return [o for o in orders if o.symbol == "SPY" and o.status == AlpacaOrderStatus.FILLED]
 
 
