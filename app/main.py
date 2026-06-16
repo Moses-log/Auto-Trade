@@ -27,6 +27,7 @@ from typing import Optional
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
@@ -113,6 +114,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
 
 # ── Exception handlers ────────────────────────────────────────────────────────
 
@@ -183,6 +191,51 @@ async def healthz():
         "uptime_s":     round(time.time() - _start_time, 1),
         "timestamp":    datetime.now(timezone.utc).isoformat(),
     }
+
+
+@app.get("/public-stats", tags=["public"])
+async def public_stats():
+    """Live Kimi bot performance stats for the Edgemart landing page. No auth required."""
+    from app.public_stats import get_public_stats
+    return await get_public_stats()
+
+
+@app.post("/whop-webhook", tags=["public"])
+async def whop_webhook(request: Request):
+    """Receive Whop membership events and update the early-access spot counter."""
+    import hashlib
+    import hmac as _hmac
+
+    body = await request.body()
+
+    if settings.whop_webhook_secret:
+        sig_header = request.headers.get("Whop-Signature", "")
+        expected = _hmac.new(
+            settings.whop_webhook_secret.encode(),
+            body,
+            hashlib.sha256,
+        ).hexdigest()
+        if not _hmac.compare_digest(sig_header, expected):
+            return JSONResponse(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                content={"error": "Invalid signature."},
+            )
+
+    try:
+        import json as _json
+        data       = _json.loads(body)
+        event_type = data.get("event", "")
+        from app.early_access import decrement_spots, increment_spots
+        if event_type == "membership.went_valid":
+            remaining = decrement_spots()
+            log.info("Whop member joined — spots remaining: %d", remaining)
+        elif event_type == "membership.went_invalid":
+            remaining = increment_spots()
+            log.info("Whop member left — spots remaining: %d", remaining)
+    except Exception as exc:
+        log.warning("Whop webhook processing error: %s", exc)
+
+    return {"status": "ok"}
 
 
 @app.post("/interactions", tags=["discord"])
