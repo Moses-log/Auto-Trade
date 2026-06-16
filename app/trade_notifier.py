@@ -155,7 +155,7 @@ async def notify_trade(
             record_str=record_str,
         )
         await notify_trades(message)
-        await notify_signal_subscribers(ticker, action, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
+        await notify_signal_subscribers(ticker, action, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl, filled_price=filled_price)
 
     except Exception as exc:
         log.warning("Trade notification failed: %s", exc)
@@ -178,11 +178,12 @@ async def notify_signal_subscribers(
     action: str,
     dollar_pnl: Optional[float] = None,
     pct_pnl: Optional[float] = None,
+    filled_price: Optional[float] = None,
 ) -> None:
     """Broadcast a sanitized signal to paid subscribers.
 
-    Buys: direction + ticker. Sells: adds WIN or LOSS (no amounts).
-    No quantity, price, or P&L figures — keeps account details private.
+    Shows entry/exit price and P&L percentage on sells.
+    No quantity or dollar P&L — keeps account size private.
     """
     try:
         action_base = action.upper().split(" (")[0]
@@ -197,8 +198,14 @@ async def notify_signal_subscribers(
 
         lines = [f"{emoji} **SIGNAL — {label} {ticker}**"]
 
-        if not is_buy and dollar_pnl is not None:
-            lines.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
+        if filled_price is not None:
+            lines.append(f"@ ${filled_price:,.2f}")
+
+        if not is_buy and pct_pnl is not None and dollar_pnl is not None:
+            if dollar_pnl >= 0:
+                lines.append(f"P&L: +{pct_pnl:.2f}% 🟢 WIN")
+            else:
+                lines.append(f"P&L: -{abs(pct_pnl):.2f}% 🔴 LOSS")
 
         lines.append(f"🕐 {time_str}")
         await notify_signal_feed("\n".join(lines))
@@ -266,7 +273,7 @@ async def notify_pending_order_fill(
             record_str=record_str,
         )
         await notify_trades(message)
-        await notify_signal_subscribers(ticker, action, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
+        await notify_signal_subscribers(ticker, action, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl, filled_price=filled_price)
     except Exception as exc:
         log.warning("Pending fill notification failed for %s: %s", order_id, exc)
         await notify_trades(f"⚠️ {ticker} ({action.upper()}) filled at open but notification failed — check Alpaca")

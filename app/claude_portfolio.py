@@ -24,7 +24,10 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    _FILE.write_text(json.dumps(data, indent=2))
+    _FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(_FILE)
 
 
 def get_position(ticker: str) -> Optional[dict]:

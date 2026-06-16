@@ -48,5 +48,7 @@ async def save_leverage_entry(ticker: str, price: float) -> None:
             except Exception:
                 pass
         data[ticker] = price
-        _STATE_FILE.write_text(json.dumps(data), encoding="utf-8")
+        tmp = _STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        tmp.replace(_STATE_FILE)
         log.info("Saved leverage entry price", extra={"ticker": ticker, "price": price})

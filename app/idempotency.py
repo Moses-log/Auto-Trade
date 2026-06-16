@@ -46,7 +46,9 @@ def _load() -> dict:
 
 
 def _save(seen: dict) -> None:
-    _FILE.write_text(json.dumps(seen))
+    tmp = _FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(seen))
+    tmp.replace(_FILE)
 
 
 def _evict_expired(seen: dict) -> dict:

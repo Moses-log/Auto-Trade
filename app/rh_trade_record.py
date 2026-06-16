@@ -27,7 +27,9 @@ def _load() -> dict:
 
 def _save(record: dict) -> None:
     _RECORD_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _RECORD_FILE.write_text(json.dumps(record))
+    tmp = _RECORD_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(record))
+    tmp.replace(_RECORD_FILE)
 
 
 async def record_rh_trade(

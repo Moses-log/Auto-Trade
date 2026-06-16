@@ -435,17 +435,6 @@ async def run_monthly_rebalance() -> None:
             await notify_claude_manager("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
             return
 
-        # Guard: if positions came back empty but buying power is suspiciously low
-        # (suggesting a silent fetch failure rather than a genuine all-cash portfolio),
-        # abort rather than letting Claude redeploy cash into a portfolio it can't see.
-        if not positions and buying_power < portfolio_value * 0.99:
-            log_entry["status"] = "failed_fetch"
-            await notify_claude_manager(
-                "⚠️ **REBALANCE ABORTED** — positions returned empty but buying power is low.\n"
-                "This likely means the Robinhood API failed silently. Rebalance skipped to avoid "
-                "over-buying into a portfolio whose current holdings are invisible."
-            )
-            return
 
         # ── 2. Enrich holdings + fetch SPY, macro context, history in parallel ──
         from app.macro_context import fetch_macro_context
@@ -707,7 +696,8 @@ async def run_monthly_rebalance() -> None:
                          f"Selling {qty_sold:g} shares ≈ ${result.get('price_est', 0):,.2f} → target {target_wt}%",
                          _timestamp()]
             else:
-                pnl_line = (f"P&L: +${dollar_pnl:,.2f} 🟢" if dollar_pnl >= 0 else f"P&L: -${abs(dollar_pnl):,.2f} 🔴") if dollar_pnl is not None else ""
+                pnl_line = (f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN" if dollar_pnl >= 0
+                            else f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS") if dollar_pnl is not None else ""
                 lines = [f"✂️ **KIMI TRIM — {ticker}**",
                          f"Sold {qty_sold:g} shares @ ${fill or 0:,.2f} → reduced to {target_wt}% target"]
                 if pnl_line:
@@ -716,7 +706,10 @@ async def run_monthly_rebalance() -> None:
             await notify_claude_manager("\n".join(lines))
             if not queued:
                 from app.notifications import notify_claude_signal_feed
-                sub_sig = [f"✂️ **KIMI TRIM — {ticker}**", f"@ ${fill or 0:,.2f} → target {target_wt}% weight", _timestamp()]
+                sub_sig = [f"✂️ **KIMI TRIM — {ticker}**", f"@ ${fill or 0:,.2f} → target {target_wt}% weight"]
+                if dollar_pnl is not None:
+                    sub_sig.append(f"P&L: +{pct_pnl:.2f}% 🟢 WIN" if dollar_pnl >= 0 else f"P&L: -{abs(pct_pnl):.2f}% 🔴 LOSS")
+                sub_sig.append(_timestamp())
                 asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
