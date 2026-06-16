@@ -202,7 +202,7 @@ async def public_stats():
 
 @app.get("/public-claude-callouts", tags=["public"])
 async def public_claude_callouts():
-    """Claude Portfolio Manager trade callouts for the Edgemart portfolio page. No auth required."""
+    """Kimi Portfolio Manager trade callouts for the Kimi Invest portfolio page. No auth required."""
     from app.claude_callouts import get_claude_callouts
     loop = asyncio.get_running_loop()
     callouts = await loop.run_in_executor(None, get_claude_callouts)
@@ -403,7 +403,7 @@ async def claude_signal(body: _ClaudeSignalRequest):
 
     if rh_status == "failed":
         reason = rh_result.get("reason", "unknown")
-        await notify_claude_portfolio(f"❌ 🤖 CLAUDE {action} {ticker} FAILED: {reason}")
+        await notify_claude_portfolio(f"❌ 🤖 KIMI {action} {ticker} FAILED: {reason}")
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content={"status": "failed", "reason": reason},
@@ -415,7 +415,7 @@ async def claude_signal(body: _ClaudeSignalRequest):
 
     note = rh_result.get("note")
     if note:
-        await notify_claude_portfolio(f"ℹ️ 🤖 CLAUDE {action} {ticker}: {note}")
+        await notify_claude_portfolio(f"ℹ️ 🤖 KIMI {action} {ticker}: {note}")
         return JSONResponse(status_code=status.HTTP_200_OK, content={"status": "ok", "note": note})
 
     queued = rh_result.get("queued", False)
@@ -429,14 +429,14 @@ async def claude_signal(body: _ClaudeSignalRequest):
         if queued:
             price_str = f"≈${fill_price:,.2f}" if fill_price else "unknown"
             lines = [
-                f"⏳ 🤖 **CLAUDE BUY — {ticker}**",
+                f"⏳ 🤖 **KIMI BUY — {ticker}**",
                 f"Qty: {qty:g} shares queued for next market open @ {price_str}",
                 f"🕐 {time_str}",
             ]
         else:
             price_str = f"${fill_price:,.2f}" if fill_price else "unknown"
             lines = [
-                f"🟢 🤖 **CLAUDE BUY — {ticker}**",
+                f"🟢 🤖 **KIMI BUY — {ticker}**",
                 f"Qty: {qty:g} shares @ {price_str}",
                 f"🕐 {time_str}",
             ]
@@ -481,14 +481,14 @@ async def claude_signal(body: _ClaudeSignalRequest):
         if queued:
             price_str = f"≈${fill_price:,.2f}" if fill_price else "unknown"
             lines = [
-                f"⏳ 🤖 **CLAUDE SELL — {ticker}**",
+                f"⏳ 🤖 **KIMI SELL — {ticker}**",
                 f"Qty: {qty:g} shares queued for next market open @ {price_str}",
                 f"🕐 {time_str}",
             ]
         else:
             price_str = f"${fill_price:,.2f}" if fill_price else "unknown"
             lines = [
-                f"🔴 🤖 **CLAUDE SELL — {ticker}**",
+                f"🔴 🤖 **KIMI SELL — {ticker}**",
                 f"Qty: {qty:g} shares @ {price_str}",
             ]
             if dollar_pnl is not None and pct_pnl is not None:
@@ -496,7 +496,7 @@ async def claude_signal(body: _ClaudeSignalRequest):
                     lines.append(f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN")
                 else:
                     lines.append(f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS")
-            lines.append(f"Claude Record: {record_str}")
+            lines.append(f"Kimi Record: {record_str}")
             lines.append(f"🕐 {time_str}")
         if body.tweet_url:
             lines.append(f"📌 {body.tweet_url}")

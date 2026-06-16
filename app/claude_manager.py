@@ -331,10 +331,10 @@ async def notify_claude_pending_sell_fill(
 
     prefix = "🤖 " if source == "autopilot" else ""
     await notify_fn(
-        f"✅ {prefix}**CLAUDE SELL FILLED — {ticker}**\n"
+        f"✅ {prefix}**KIMI SELL FILLED — {ticker}**\n"
         f"Qty: {qty:g} shares @ ${fill_price:,.2f}\n"
         f"{pnl_str}\n"
-        f"Claude Record: {wins}W - {losses}L\n"
+        f"Kimi Record: {wins}W - {losses}L\n"
         f"{_timestamp()}"
     )
 
@@ -372,7 +372,7 @@ async def run_monthly_rebalance() -> None:
     if not settings.anthropic_api_key:
         log.error("ANTHROPIC_API_KEY not set — skipping monthly rebalance")
         await notify_claude_manager(
-            "⚠️ **CLAUDE PORTFOLIO REBALANCE SKIPPED**\n"
+            "⚠️ **KIMI PORTFOLIO REBALANCE SKIPPED**\n"
             "ANTHROPIC_API_KEY is not configured in environment."
         )
         return
@@ -380,13 +380,13 @@ async def run_monthly_rebalance() -> None:
     if not rh_client.available:
         log.warning("RH session unavailable — skipping monthly rebalance")
         await notify_claude_manager(
-            "⚠️ **CLAUDE PORTFOLIO REBALANCE SKIPPED**\n"
+            "⚠️ **KIMI PORTFOLIO REBALANCE SKIPPED**\n"
             "Robinhood session is offline."
         )
         return
 
     await notify_claude_manager(
-        f"🤖 **CLAUDE PORTFOLIO MANAGER — MONTHLY REBALANCE**\n"
+        f"🤖 **KIMI PORTFOLIO MANAGER — MONTHLY REBALANCE**\n"
         f"Fetching portfolio and running analysis... {_timestamp()}"
     )
 
@@ -504,7 +504,7 @@ async def run_monthly_rebalance() -> None:
 
         # Full analysis → Discord
         analysis_body = re.sub(r"```json.*?```", "", response_text, flags=re.DOTALL).strip()
-        await notify_claude_manager(f"📊 **CLAUDE MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}")
+        await notify_claude_manager(f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}")
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
@@ -516,7 +516,7 @@ async def run_monthly_rebalance() -> None:
 
         if trade_block.get("no_changes"):
             log_entry["status"] = "no_changes"
-            no_changes_msg = "✅ **NO CHANGES THIS MONTH**\nClaude determined the current portfolio requires no rebalancing."
+            no_changes_msg = "✅ **NO CHANGES THIS MONTH**\nKimi Portfolio Manager determined the current portfolio requires no rebalancing."
             benchmark_str = _format_benchmark(log_entry, all_history_records)
             if benchmark_str:
                 no_changes_msg += f"\n\n{benchmark_str}"
@@ -577,13 +577,13 @@ async def run_monthly_rebalance() -> None:
             result = await rh_client.close_ticker_async(ticker)
 
             if result.get("note"):
-                await notify_claude_manager(f"ℹ️ CLAUDE SELL {ticker}: {result['note']}")
+                await notify_claude_manager(f"ℹ️ KIMI SELL {ticker}: {result['note']}")
                 log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": result["note"]})
                 continue
 
             if result.get("status") != "ok" or not result.get("qty"):
                 reason = result.get("reason", "unknown")
-                await notify_claude_manager(f"❌ **CLAUDE SELL — {ticker}** FAILED: {reason}")
+                await notify_claude_manager(f"❌ **KIMI SELL — {ticker}** FAILED: {reason}")
                 log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": reason})
                 continue
 
@@ -608,15 +608,15 @@ async def run_monthly_rebalance() -> None:
             })
 
             if queued:
-                lines = [f"⏳ **CLAUDE SELL — {ticker}** (queued for open)",
+                lines = [f"⏳ **KIMI SELL — {ticker}** (queued for open)",
                          f"Qty: {qty:g} shares ≈ ${result.get('price_est', 0):,.2f}", _timestamp()]
             else:
                 pnl_line = (f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN" if dollar_pnl >= 0
                             else f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS") if dollar_pnl is not None else ""
-                lines = [f"🔴 **CLAUDE SELL — {ticker}**", f"Qty: {qty:g} shares @ ${fill:,.2f}"]
+                lines = [f"🔴 **KIMI SELL — {ticker}**", f"Qty: {qty:g} shares @ ${fill:,.2f}"]
                 if pnl_line:
                     lines.append(pnl_line)
-                lines += [f"Claude Record: {wins}W - {losses}L", _timestamp()]
+                lines += [f"Kimi Record: {wins}W - {losses}L", _timestamp()]
             await notify_claude_manager("\n".join(lines))
             if not queued:
                 from app.notifications import notify_claude_signal_feed
@@ -664,7 +664,7 @@ async def run_monthly_rebalance() -> None:
 
             if result.get("status") != "ok":
                 reason = result.get("reason", "unknown")
-                await notify_claude_manager(f"❌ **CLAUDE TRIM — {ticker}** FAILED: {reason}")
+                await notify_claude_manager(f"❌ **KIMI TRIM — {ticker}** FAILED: {reason}")
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": reason})
                 continue
 
@@ -689,16 +689,16 @@ async def run_monthly_rebalance() -> None:
             })
 
             if queued:
-                lines = [f"⏳ **CLAUDE TRIM — {ticker}** (queued for open)",
+                lines = [f"⏳ **KIMI TRIM — {ticker}** (queued for open)",
                          f"Selling {qty_sold:g} shares ≈ ${result.get('price_est', 0):,.2f} → target {target_wt}%",
                          _timestamp()]
             else:
                 pnl_line = (f"P&L: +${dollar_pnl:,.2f} 🟢" if dollar_pnl >= 0 else f"P&L: -${abs(dollar_pnl):,.2f} 🔴") if dollar_pnl is not None else ""
-                lines = [f"✂️ **CLAUDE TRIM — {ticker}**",
+                lines = [f"✂️ **KIMI TRIM — {ticker}**",
                          f"Sold {qty_sold:g} shares @ ${fill:,.2f} → reduced to {target_wt}% target"]
                 if pnl_line:
                     lines.append(pnl_line)
-                lines += [f"Claude Record: {wins}W - {losses}L", _timestamp()]
+                lines += [f"Kimi Record: {wins}W - {losses}L", _timestamp()]
             await notify_claude_manager("\n".join(lines))
             if not queued:
                 from app.notifications import notify_claude_signal_feed
@@ -728,7 +728,7 @@ async def run_monthly_rebalance() -> None:
                 else:
                     reason = f"needed ${delta_dollars:,.0f} more, only ${available_budget:,.0f} available"
                 await notify_claude_manager(
-                    f"⚠️ **CLAUDE {action_label} — {ticker}** skipped\n{reason}\n{_timestamp()}"
+                    f"⚠️ **KIMI {action_label} — {ticker}** skipped\n{reason}\n{_timestamp()}"
                 )
                 log_entry["trades_skipped"].append({"action": action_label, "ticker": ticker, "reason": reason})
                 continue
@@ -737,7 +737,7 @@ async def run_monthly_rebalance() -> None:
 
             if result.get("status") != "ok":
                 reason = result.get("reason", "unknown")
-                await notify_claude_manager(f"❌ **CLAUDE {action_label} — {ticker}** FAILED: {reason}")
+                await notify_claude_manager(f"❌ **KIMI {action_label} — {ticker}** FAILED: {reason}")
                 log_entry["trades_skipped"].append({"action": action_label, "ticker": ticker, "reason": reason})
                 continue
 
@@ -755,11 +755,11 @@ async def run_monthly_rebalance() -> None:
 
             buy_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
             if queued:
-                lines = [f"⏳ **CLAUDE {action_label} — {ticker}** (queued for open)",
+                lines = [f"⏳ **KIMI {action_label} — {ticker}** (queued for open)",
                          f"Qty: {qty:g} shares ≈ ${est:,.2f}",
                          f"Target: {target_wt}% weight — Investing: ${invest_dollars:,.2f}", _timestamp()]
             else:
-                lines = [f"{buy_emoji} **CLAUDE {action_label} — {ticker}**",
+                lines = [f"{buy_emoji} **KIMI {action_label} — {ticker}**",
                          f"Qty: {qty:g} shares @ ${fill:,.2f}",
                          f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}", _timestamp()]
 
@@ -776,7 +776,7 @@ async def run_monthly_rebalance() -> None:
 
         # ── 7. Benchmark comparison ───────────────────────────────────────────
         benchmark_str = _format_benchmark(log_entry, all_history_records)
-        completion_msg = f"✅ **CLAUDE PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}"
+        completion_msg = f"✅ **KIMI PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}"
         if benchmark_str:
             completion_msg += f"\n\n{benchmark_str}"
         await notify_claude_manager(completion_msg)
