@@ -4,7 +4,7 @@ A production-ready Python / FastAPI service that runs **three parallel trading s
 
 Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 
-**Public landing page:** [Edgemart](https://moses-log.github.io/edgemart-site/) — live SPY performance stats, cumulative return chart, and Whop signup. Powered by `GET /public-stats` on this server.
+**Public landing page:** [Kimi Invest](https://moses-log.github.io/kimi-invest-site/) — live SPY performance stats, cumulative return chart, and Whop signup. Powered by `GET /public-stats` on this server.
 
 ---
 
@@ -64,6 +64,18 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
    └──────────────────────┘                         └──────────────────────┘
 
 ════════════════════════════════════════════════════════════════
+  PUBLIC WEBSITE  (GitHub Pages → Moses-log/kimi-invest-site)
+════════════════════════════════════════════════════════════════
+
+  Kimi Invest ──► GET /public-stats            ← SPY LIFO stats + spot counter
+  kimiinvest.com   GET /public-claude-callouts ← Claude Manager trade callouts
+                   (both: 1-hour in-memory cache, no auth, CORS open)
+
+  Whop.com    ──► POST /whop-webhook           ← membership.went_valid  → decrement spots
+                                                  membership.went_invalid → increment spots
+                                                  writes /data/early_access.json (0–15)
+
+════════════════════════════════════════════════════════════════
   SCHEDULED JOBS  (APScheduler inside the FastAPI process)
 ════════════════════════════════════════════════════════════════
 
@@ -89,7 +101,8 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   DISCORD_INVESTORS_WEBHOOK_URL     ← Investor equity breakdown
   ALPACA_TAX_WEBHOOK_URL            ← Quarterly Alpaca tax summaries
   RH_TAX_WEBHOOK_URL                ← Quarterly RH tax summaries
-  SIGNAL_SUBSCRIBERS_WEBHOOK_URL    ← Paid subscriber feed: Kimi BUY/SELL signals + WIN/LOSS
+  SIGNAL_SUBSCRIBERS_WEBHOOK_URL    ← Paid Kimi Invest Discord: Kimi BUY/SELL signals + WIN/LOSS
+  CLAUDE_SUBSCRIBERS_WEBHOOK_URL    ← Paid Kimi Invest Discord: Claude BUY/SELL/TRIM/DOUBLE_DOWN signals
 
 ════════════════════════════════════════════════════════════════
   PERSISTENT DISK  (/data on Render)
@@ -105,7 +118,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   claude_portfolio.json     ← Claude Autopilot + Manager positions + W-L record
   claude_rebalance_log.json ← Monthly rebalance audit log (36 entries max)
   rh_positions_cache.json   ← Last-known RH positions (pie chart fallback)
-  early_access.json         ← Edgemart early-access spot counter (0–15, Whop-driven)
+  early_access.json         ← Kimi Invest early-access spot counter (0–15, Whop-driven)
 ```
 
 ---
@@ -230,7 +243,7 @@ app/
 ├── notifications.py      # All Discord notification helpers (12 channel routes)
 ├── trade_notifier.py     # Alpaca trade notification + queued order scheduling + signal subscriber broadcast
 ├── rh_trade_notifier.py  # Robinhood (Kimi) trade notification
-├── early_access.py       # Edgemart early-access spot counter (persisted to /data/early_access.json)
+├── early_access.py       # Kimi Invest early-access spot counter (persisted to /data/early_access.json)
 ├── public_stats.py       # Live LIFO stat computation + 1-hour in-memory cache for /public-stats
 │
 ├── pnl.py                # Alpaca P&L engine (daily/weekly/monthly/yearly/YTD/all-time/since-inception/custom)
@@ -314,11 +327,12 @@ scripts/
 |---|---|
 | `PORTFOLIO_SNAPSHOT_WEBHOOK_URL` | Discord channel for Friday RH pie chart + valuation ratings |
 
-### Edgemart Public Site
+### Kimi Invest Public Site
 
 | Variable | Description |
 |---|---|
-| `SIGNAL_SUBSCRIBERS_WEBHOOK_URL` | Paid Discord subscriber channel — receives Kimi BUY/SELL signals with WIN/LOSS on sells. No P&L amounts or quantities are included. |
+| `SIGNAL_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Kimi BUY/SELL signals with WIN/LOSS on sells. No P&L amounts or quantities. |
+| `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Claude Manager BUY/DOUBLE_DOWN/SELL/TRIM signals posted on every autonomous trade. |
 | `WHOP_WEBHOOK_SECRET` | HMAC-SHA256 secret for verifying Whop membership webhook payloads. Optional — signature check is skipped if not set. |
 
 ### Discord Slash Commands
@@ -377,7 +391,7 @@ Deep health check — verifies Alpaca API + Robinhood session. Always returns HT
 ---
 
 ### `GET /public-stats`
-Public, no-auth endpoint powering the Edgemart landing page. Pulls all filled SPY orders from Alpaca, runs LIFO matching, and returns live performance stats. Response is cached in memory for 1 hour.
+Public, no-auth endpoint powering the Kimi Invest landing page. Pulls all filled SPY orders from Alpaca, runs LIFO matching, and returns live performance stats. Response is cached in memory for 1 hour.
 
 ```json
 {
@@ -617,7 +631,7 @@ Claude determined the current portfolio requires no rebalancing.
 ```
 
 ### Paid Signal Subscribers (`SIGNAL_SUBSCRIBERS_WEBHOOK_URL`)
-Broadcast to the paid Edgemart Discord channel on every Kimi fill. No quantities, prices, or dollar amounts — subscribers see the signal direction and outcome only.
+Broadcast to the paid Kimi Invest Discord channel on every Kimi fill. No quantities, prices, or dollar amounts — subscribers see the signal direction and outcome only.
 
 ```
 🟢 SIGNAL — BUY SPY
@@ -666,7 +680,7 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `claude_portfolio.json` | `/claude-signal`, Claude Manager | Claude positions + W-L record |
 | `claude_rebalance_log.json` | Monthly rebalance | Full audit log — macro context, analysis, positions before, trades executed/skipped, SPY price (capped at 36 entries) |
 | `rh_positions_cache.json` | Every successful RH fetch | Last-known positions for pie chart fallback when API is down |
-| `early_access.json` | `/whop-webhook` (Whop events) | Edgemart spot counter — starts at 15, decrements on new Whop member, increments on cancellation |
+| `early_access.json` | `/whop-webhook` (Whop events) | Kimi Invest spot counter — starts at 15, decrements on new Whop member, increments on cancellation |
 
 ---
 
