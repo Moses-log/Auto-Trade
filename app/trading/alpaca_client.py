@@ -265,6 +265,17 @@ def get_orders_filled_range(after: datetime, until: datetime) -> list:
 
 
 @_retry
+def get_all_spy_orders() -> list:
+    """Return all closed SPY orders (filled), up to 500, sorted ascending by fill time."""
+    req = GetOrdersRequest(
+        status=QueryOrderStatus.CLOSED,
+        limit=500,
+    )
+    orders = get_client().get_orders(filter=req) or []
+    return [o for o in orders if o.symbol == "SPY" and o.status == AlpacaOrderStatus.FILLED]
+
+
+@_retry
 def get_all_positions() -> list:
     """Return all open positions as a list of Position objects."""
     return get_client().get_all_positions()
