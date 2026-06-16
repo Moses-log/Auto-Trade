@@ -83,6 +83,9 @@ class Settings(BaseSettings):
     # ── Signal Subscribers (paid Discord feed — sanitized BUY/SELL alerts) ────
     signal_subscribers_webhook_url: Optional[str] = None
 
+    # ── Whop webhook (early-access spot counter) ──────────────────────────────
+    whop_webhook_secret: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 
