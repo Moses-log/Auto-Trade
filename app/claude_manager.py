@@ -357,15 +357,17 @@ async def run_monthly_rebalance() -> None:
     from app.notifications import notify_claude_manager, notify_claude_manager_with_chart
 
     async def _post_financials_chart(tkr: str) -> None:
-        """Fetch quarterly financials and post chart to Discord (fire-and-forget)."""
+        """Fetch quarterly financials and post chart to manager + subscriber channels."""
         try:
             from app.financials_chart import fetch_quarterly_financials, generate_financials_chart
+            from app.notifications import notify_claude_signal_feed_with_chart
             loop = asyncio.get_running_loop()
             fin_data = await loop.run_in_executor(None, fetch_quarterly_financials, tkr)
             if fin_data is None:
                 return
             chart_bytes = await loop.run_in_executor(None, generate_financials_chart, fin_data)
             await notify_claude_manager_with_chart("", chart_bytes)
+            await notify_claude_signal_feed_with_chart("", chart_bytes)
         except Exception as exc:
             log.warning("Financials chart failed for %s: %s", tkr, exc)
 
@@ -502,9 +504,12 @@ async def run_monthly_rebalance() -> None:
         trade_block = _parse_trade_block(response_text)
         log_entry["trade_block"] = trade_block
 
-        # Full analysis → Discord
+        # Full analysis → main Discord + subscriber feed
         analysis_body = re.sub(r"```json.*?```", "", response_text, flags=re.DOTALL).strip()
-        await notify_claude_manager(f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}")
+        analysis_msg = f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}"
+        await notify_claude_manager(analysis_msg)
+        from app.notifications import notify_claude_signal_feed
+        asyncio.create_task(notify_claude_signal_feed(analysis_msg))
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
@@ -620,11 +625,11 @@ async def run_monthly_rebalance() -> None:
             await notify_claude_manager("\n".join(lines))
             if not queued:
                 from app.notifications import notify_claude_signal_feed
-                sig = [f"🔴 **SIGNAL — SELL {ticker}**"]
+                sub_sig = [f"🔴 **KIMI SELL — {ticker}**", f"@ ${fill:,.2f}"]
                 if dollar_pnl is not None:
-                    sig.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
-                sig.append(_timestamp())
-                asyncio.create_task(notify_claude_signal_feed("\n".join(sig)))
+                    sub_sig.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
+                sub_sig.append(_timestamp())
+                asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
 
         # ── 5b. Execute TRIMs ─────────────────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "TRIM"):
@@ -702,8 +707,8 @@ async def run_monthly_rebalance() -> None:
             await notify_claude_manager("\n".join(lines))
             if not queued:
                 from app.notifications import notify_claude_signal_feed
-                sig = [f"✂️ **SIGNAL — TRIM {ticker}**", f"Reduced to {target_wt}% target", _timestamp()]
-                asyncio.create_task(notify_claude_signal_feed("\n".join(sig)))
+                sub_sig = [f"✂️ **KIMI TRIM — {ticker}**", f"@ ${fill:,.2f} → target {target_wt}% weight", _timestamp()]
+                asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
         available_budget = buying_power + expected_sell_proceeds
@@ -767,8 +772,13 @@ async def run_monthly_rebalance() -> None:
             if not queued:
                 from app.notifications import notify_claude_signal_feed
                 sig_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
-                sig = [f"{sig_emoji} **SIGNAL — {action_label} {ticker}**", f"Long-term pick · Target {target_wt}%", _timestamp()]
-                asyncio.create_task(notify_claude_signal_feed("\n".join(sig)))
+                sub_sig = [
+                    f"{sig_emoji} **KIMI {action_label} — {ticker}**",
+                    f"@ ${fill:,.2f}",
+                    f"Target: {target_wt}% weight",
+                    _timestamp(),
+                ]
+                asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
             asyncio.create_task(_post_financials_chart(ticker))
             available_budget = max(0.0, available_budget - invest_dollars)
 

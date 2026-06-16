@@ -107,14 +107,32 @@ async def notify_signal_feed(message: str) -> None:
 
 
 async def notify_claude_signal_feed(message: str) -> None:
-    """Post to the paid Claude Manager subscriber Discord feed. No-op if unconfigured."""
+    """Post to the paid Kimi Portfolio Manager subscriber Discord feed. No-op if unconfigured."""
+    url = settings.claude_subscribers_webhook_url
+    if not url:
+        return
+    for chunk in _chunk(message, 1990):
+        try:
+            await _client.post(url, json={"content": chunk}, timeout=5)
+        except Exception as exc:
+            log.warning("Claude signal feed Discord notification failed: %s", exc)
+
+
+async def notify_claude_signal_feed_with_chart(message: str, chart_bytes: bytes) -> None:
+    """Send a financials chart PNG to CLAUDE_SUBSCRIBERS_WEBHOOK_URL."""
     url = settings.claude_subscribers_webhook_url
     if not url:
         return
     try:
-        await _client.post(url, json={"content": message[:2000]}, timeout=5)
+        payload = {"content": message[:2000]} if message else {}
+        await _client.post(
+            url,
+            data={"payload_json": _json.dumps(payload)},
+            files={"file": ("financials.png", chart_bytes, "image/png")},
+            timeout=15,
+        )
     except Exception as exc:
-        log.warning("Claude signal feed Discord notification failed: %s", exc)
+        log.warning("Claude signal feed chart notification failed: %s", exc)
 
 
 async def notify_with_chart(message: str, chart_bytes: bytes) -> None:
