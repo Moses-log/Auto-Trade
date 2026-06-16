@@ -200,6 +200,15 @@ async def public_stats():
     return await get_public_stats()
 
 
+@app.get("/public-claude-callouts", tags=["public"])
+async def public_claude_callouts():
+    """Claude Portfolio Manager trade callouts for the Edgemart portfolio page. No auth required."""
+    from app.claude_callouts import get_claude_callouts
+    loop = asyncio.get_running_loop()
+    callouts = await loop.run_in_executor(None, get_claude_callouts)
+    return {"callouts": callouts}
+
+
 @app.post("/whop-webhook", tags=["public"])
 async def whop_webhook(request: Request):
     """Receive Whop membership events and update the early-access spot counter."""

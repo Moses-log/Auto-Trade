@@ -618,6 +618,13 @@ async def run_monthly_rebalance() -> None:
                     lines.append(pnl_line)
                 lines += [f"Claude Record: {wins}W - {losses}L", _timestamp()]
             await notify_claude_manager("\n".join(lines))
+            if not queued:
+                from app.notifications import notify_claude_signal_feed
+                sig = [f"🔴 **SIGNAL — SELL {ticker}**"]
+                if dollar_pnl is not None:
+                    sig.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
+                sig.append(_timestamp())
+                asyncio.create_task(notify_claude_signal_feed("\n".join(sig)))
 
         # ── 5b. Execute TRIMs ─────────────────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "TRIM"):
@@ -693,6 +700,10 @@ async def run_monthly_rebalance() -> None:
                     lines.append(pnl_line)
                 lines += [f"Claude Record: {wins}W - {losses}L", _timestamp()]
             await notify_claude_manager("\n".join(lines))
+            if not queued:
+                from app.notifications import notify_claude_signal_feed
+                sig = [f"✂️ **SIGNAL — TRIM {ticker}**", f"Reduced to {target_wt}% target", _timestamp()]
+                asyncio.create_task(notify_claude_signal_feed("\n".join(sig)))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
         available_budget = buying_power + expected_sell_proceeds
@@ -753,6 +764,11 @@ async def run_monthly_rebalance() -> None:
                          f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}", _timestamp()]
 
             await notify_claude_manager("\n".join(lines))
+            if not queued:
+                from app.notifications import notify_claude_signal_feed
+                sig_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
+                sig = [f"{sig_emoji} **SIGNAL — {action_label} {ticker}**", f"Long-term pick · Target {target_wt}%", _timestamp()]
+                asyncio.create_task(notify_claude_signal_feed("\n".join(sig)))
             asyncio.create_task(_post_financials_chart(ticker))
             available_budget = max(0.0, available_budget - invest_dollars)
 

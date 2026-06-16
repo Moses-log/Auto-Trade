@@ -94,6 +94,10 @@ def compute_stats(filled_orders: list) -> dict:
         day = dt.strftime("%d").lstrip("0") or "0"
         return dt.strftime(f"%b {day}, %Y")
 
+    # Stats reflect all trades; display capped at 100 most recent
+    if len(cumulative) > 100:
+        cumulative = cumulative[-100:]
+
     return {
         "trades":       len(trades),
         "wins":         len(wins),
