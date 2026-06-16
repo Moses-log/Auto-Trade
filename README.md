@@ -4,6 +4,8 @@ A production-ready Python / FastAPI service that runs **three parallel trading s
 
 Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 
+**Public landing page:** [Edgemart](https://moses-log.github.io/edgemart-site/) — live SPY performance stats, cumulative return chart, and Whop signup. Powered by `GET /public-stats` on this server.
+
 ---
 
 ## System Visual Map
@@ -87,6 +89,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   DISCORD_INVESTORS_WEBHOOK_URL     ← Investor equity breakdown
   ALPACA_TAX_WEBHOOK_URL            ← Quarterly Alpaca tax summaries
   RH_TAX_WEBHOOK_URL                ← Quarterly RH tax summaries
+  SIGNAL_SUBSCRIBERS_WEBHOOK_URL    ← Paid subscriber feed: Kimi BUY/SELL signals + WIN/LOSS
 
 ════════════════════════════════════════════════════════════════
   PERSISTENT DISK  (/data on Render)
@@ -102,6 +105,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   claude_portfolio.json     ← Claude Autopilot + Manager positions + W-L record
   claude_rebalance_log.json ← Monthly rebalance audit log (36 entries max)
   rh_positions_cache.json   ← Last-known RH positions (pie chart fallback)
+  early_access.json         ← Edgemart early-access spot counter (0–15, Whop-driven)
 ```
 
 ---
@@ -223,9 +227,11 @@ app/
 ├── idempotency.py        # Duplicate-alert suppression — disk-backed TTL store
 ├── logging_config.py     # Structured JSON logging setup
 │
-├── notifications.py      # All Discord notification helpers (11 channel routes)
-├── trade_notifier.py     # Alpaca trade notification + queued order scheduling
+├── notifications.py      # All Discord notification helpers (12 channel routes)
+├── trade_notifier.py     # Alpaca trade notification + queued order scheduling + signal subscriber broadcast
 ├── rh_trade_notifier.py  # Robinhood (Kimi) trade notification
+├── early_access.py       # Edgemart early-access spot counter (persisted to /data/early_access.json)
+├── public_stats.py       # Live LIFO stat computation + 1-hour in-memory cache for /public-stats
 │
 ├── pnl.py                # Alpaca P&L engine (daily/weekly/monthly/yearly/YTD/all-time/since-inception/custom)
 ├── rh_pnl.py             # Robinhood P&L engine (daily/weekly/monthly/yearly)
@@ -308,6 +314,13 @@ scripts/
 |---|---|
 | `PORTFOLIO_SNAPSHOT_WEBHOOK_URL` | Discord channel for Friday RH pie chart + valuation ratings |
 
+### Edgemart Public Site
+
+| Variable | Description |
+|---|---|
+| `SIGNAL_SUBSCRIBERS_WEBHOOK_URL` | Paid Discord subscriber channel — receives Kimi BUY/SELL signals with WIN/LOSS on sells. No P&L amounts or quantities are included. |
+| `WHOP_WEBHOOK_SECRET` | HMAC-SHA256 secret for verifying Whop membership webhook payloads. Optional — signature check is skipped if not set. |
+
 ### Discord Slash Commands
 
 | Variable | Description |
@@ -360,6 +373,36 @@ Lightweight liveness probe.
 
 ### `GET /healthz`
 Deep health check — verifies Alpaca API + Robinhood session. Always returns HTTP 200; check `status` field.
+
+---
+
+### `GET /public-stats`
+Public, no-auth endpoint powering the Edgemart landing page. Pulls all filled SPY orders from Alpaca, runs LIFO matching, and returns live performance stats. Response is cached in memory for 1 hour.
+
+```json
+{
+  "trades": 8,
+  "wins": 5,
+  "losses": 3,
+  "win_rate": 62.5,
+  "profit_factor": 1.84,
+  "date_range": { "from": "Apr 22, 2026", "to": "Jun 11, 2026" },
+  "cumulative_returns": [{ "trade": 1, "pct": 2.31, "won": true }, ...],
+  "spots_remaining": 12
+}
+```
+
+No sensitive data is exposed — no account equity, dollar P&L, order IDs, or credentials.
+
+---
+
+### `POST /whop-webhook`
+Receives Whop membership events and updates the early-access spot counter in `/data/early_access.json`.
+
+- `membership.went_valid` → decrement spots (floor: 0)
+- `membership.went_invalid` → increment spots (cap: 15)
+
+Signature verified via `Whop-Signature` HMAC-SHA256 header when `WHOP_WEBHOOK_SECRET` is set.
 
 ---
 
@@ -573,6 +616,20 @@ Claude determined the current portfolio requires no rebalancing.
 🟢 This month:   Portfolio +1.10%  |  SPY +0.82%  |  Alpha +0.28%
 ```
 
+### Paid Signal Subscribers (`SIGNAL_SUBSCRIBERS_WEBHOOK_URL`)
+Broadcast to the paid Edgemart Discord channel on every Kimi fill. No quantities, prices, or dollar amounts — subscribers see the signal direction and outcome only.
+
+```
+🟢 SIGNAL — BUY SPY
+🕐 10:32 AM CDT — June 15, 2026
+
+🔴 SIGNAL — SELL SPY
+🟢 WIN
+🕐 2:14 PM CDT — June 15, 2026
+```
+
+---
+
 ### Portfolio Snapshot (`PORTFOLIO_SNAPSHOT_WEBHOOK_URL`)
 Text + attached PNG donut chart (every Friday + `/portfolio`):
 ```
@@ -609,6 +666,7 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `claude_portfolio.json` | `/claude-signal`, Claude Manager | Claude positions + W-L record |
 | `claude_rebalance_log.json` | Monthly rebalance | Full audit log — macro context, analysis, positions before, trades executed/skipped, SPY price (capped at 36 entries) |
 | `rh_positions_cache.json` | Every successful RH fetch | Last-known positions for pie chart fallback when API is down |
+| `early_access.json` | `/whop-webhook` (Whop events) | Edgemart spot counter — starts at 15, decrements on new Whop member, increments on cancellation |
 
 ---
 
