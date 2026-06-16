@@ -50,7 +50,14 @@ def compute_stats(filled_orders: list) -> dict:
                 proceeds   = matched * price
                 dollar_pnl = proceeds - cost_basis
                 pct_pnl    = (dollar_pnl / cost_basis) * 100
-                trades.append({"won": dollar_pnl >= 0, "dollar_pnl": dollar_pnl, "pct_pnl": pct_pnl})
+                trades.append({
+                    "won":       dollar_pnl >= 0,
+                    "dollar_pnl": dollar_pnl,
+                    "pct_pnl":   pct_pnl,
+                    "date":      dt.strftime("%m/%d"),
+                    "buy_price": round(cost_basis / matched, 2),
+                    "sell_price": round(price, 2),
+                })
                 last_sell_dt = dt
 
     if not trades:
@@ -71,7 +78,15 @@ def compute_stats(filled_orders: list) -> dict:
     running = 0.0
     for i, t in enumerate(trades, 1):
         running += t["pct_pnl"]
-        cumulative.append({"trade": i, "pct": round(running, 4), "won": t["won"]})
+        cumulative.append({
+            "trade":      i,
+            "pct":        round(running, 4),
+            "won":        t["won"],
+            "trade_pct":  round(t["pct_pnl"], 2),
+            "date":       t["date"],
+            "buy":        t["buy_price"],
+            "sell":       t["sell_price"],
+        })
 
     def _fmt(dt) -> str:
         if dt is None:
