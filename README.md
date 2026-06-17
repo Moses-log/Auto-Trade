@@ -85,6 +85,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
                          + RH equity snapshot (for historical P&L comparisons)
   Fri     4:00 PM ET ──► Above  +  weekly P&L charts  +  Portfolio Pie Chart
   1st of month 9:35 AM ET ──► Kimi autonomous portfolio rebalance
+  Daily midnight ET ────► Gist backup — all critical /data/ files pushed to private GitHub Gist
   Daily (wall-clock) ──► RH session keep-alive check (runs every ~72 h actual)
   Jan/Apr/Jul/Oct 1 ───► Quarterly Alpaca + RH tax summaries
   9:31 AM ET next open ► Queued Kimi sell fill confirmation (when after-hours)
@@ -180,41 +181,39 @@ Can also be triggered on-demand via `/rebalance` Discord slash command or `POST 
 
 #### Kimi Portfolio Manager Investment Strategy
 
-The strategy is defined entirely in the system prompt at `app/claude_manager.py:37` (`_SYSTEM_PROMPT`). Here is what it instructs the system to do:
+The strategy is defined entirely in the system prompt at `app/claude_manager.py` (`_SYSTEM_PROMPT`).
 
-**Objective:** Maximize long-term risk-adjusted returns and outperform the S&P 500 over rolling 3, 5, and 10-year periods.
+**Core Philosophy:** The stock market rewards companies that solve the world's biggest future problems. Do not simply buy cheap or large companies — identify the businesses *creating* the future. Prioritize innovation, technological disruption, and long-term economic transformation while maintaining strict standards for profitability, valuation, and execution.
 
 **Portfolio Constraints:**
-- 5–10 stocks maximum. No ETFs, options, leverage, or short positions.
-- Only U.S. publicly traded stocks with a market cap above $5 billion.
-- Position sizes between 5% and 25% per stock.
-- Cash is a valid position — never force deployment into mediocre opportunities.
-- SPY is permanently excluded — it is managed by the Kimi DCA strategy and Kimi Portfolio Manager must never touch it.
+- 5–10 stocks. No ETFs, options, leverage, or short positions. U.S.-listed only, market cap above $2 billion.
+- Cash below 10% unless market conditions are exceptionally unfavorable.
+- Position sizes up to 25%. No single sector above 50%.
+- SPY is permanently excluded — managed by the Kimi DCA strategy.
 
-**Scoring Framework — every stock is scored 0–100:**
+**Scoring Framework — every stock scored 0–100:**
 
 | Dimension | Weight | What it measures |
 |---|---|---|
-| Quality | 30% | ROIC, ROE, gross/operating margin trends, debt-to-equity, interest coverage, FCF consistency |
-| Growth | 25% | Revenue growth, EPS growth, FCF growth, TAM expansion, market share gains |
-| Momentum | 20% | Relative strength vs S&P 500, 6-month and 12-month price performance, 200-day MA position, institutional accumulation |
-| Valuation | 15% | Forward P/E, PEG, EV/EBITDA, FCF yield, DCF estimates |
-| Competitive Advantage | 10% | Brand strength, network effects, switching costs, proprietary technology, industry leadership |
+| Growth | 25% | Revenue growth, EPS growth, FCF growth, TAM expansion, market share |
+| Future Dominance Potential | 25% | Exposure to future megatrends, technological leadership, innovation velocity, R&D, patent portfolio, category leadership potential |
+| Quality | 20% | ROIC, ROE, gross/operating margin trends, balance sheet, debt, FCF consistency |
+| Momentum | 15% | Relative strength vs S&P 500, institutional accumulation, 200-day MA position |
+| Valuation | 15% | Forward P/E, PEG, EV/EBITDA, FCF yield, growth-adjusted valuation |
 
-**Philosophy:**
-- Think like Bill Ackman and Leopold Aschenbrenner — concentrate in the highest-conviction positions, avoid mega-caps where possible, maximize returns.
-- Prefer founder-led or highly aligned management. Prefer durable competitive advantages.
-- Avoid deteriorating fundamentals, excessive debt, speculative meme stocks, and negative FCF unless growth is exceptional.
-- Diversify across industries when possible; no single sector above 40% of portfolio.
-- If only 5–7 stocks meet the required standard, do not force diversification.
+**Future Dominance Themes (evolve with the world):**
+AI & infrastructure · Robotics & automation · Space economy · Energy transformation (nuclear, SMRs, storage) · Biotechnology · Digital infrastructure (cloud, cybersecurity, semis) · Defense technology
+
+**Mega-Winner Rule:** Actively search for potential 10x opportunities. A company does not need to be profitable today if revenue growth exceeds 25% annually, gross margins are strong, the TAM is massive, the path to profitability is credible, and it leads a future-dominant industry.
+
+**Bubble Protection:** Never buy solely because something is trending. Require real revenue, improving fundamentals, strong balance sheet, evidence of execution, and sustainable competitive advantages.
 
 **Macro and Timing Rules (injected live into the prompt):**
-- **Earnings avoidance**: Do not initiate or significantly increase a position within 3 days of earnings unless conviction is very high. Days-to-earnings is provided for every holding.
-- **Macro calibration**: VIX, 10-year Treasury yield, and CPI YoY are provided. High VIX → favor defensiveness. Rising yields → pressure on growth multiples. Elevated CPI → watch margin compression.
+- **Earnings avoidance**: Avoid initiating or significantly increasing positions within 3 days of earnings unless conviction is very high.
+- **Macro calibration**: VIX, 10-year Treasury yield, and CPI YoY are provided. High VIX → defensiveness. Rising yields → pressure on growth multiples.
 
 **Self-awareness (last 3 months of history injected into the prompt):**
-- The system sees its own prior analyses, what trades it proposed, and how the portfolio performed vs SPY each month.
-- Prevents momentum-chasing its own prior decisions and allows it to course-correct.
+- The system sees its own prior analyses, proposed trades, and portfolio performance vs SPY each month — prevents momentum-chasing and enables course correction.
 
 ---
 
@@ -247,7 +246,9 @@ app/
 ├── trade_notifier.py     # Alpaca trade notification + queued order scheduling + signal subscriber broadcast
 ├── rh_trade_notifier.py  # Robinhood (Kimi) trade notification
 ├── early_access.py       # Kimi Invest early-access spot counter (persisted to /data/early_access.json)
-├── public_stats.py       # Live FIFO stat computation + 1-hour in-memory cache for /public-stats
+├── public_stats.py       # Kimi Strategy stats — serves kimi_trades.json (verified) with Alpaca FIFO fallback; auto-appends SPY fills
+├── kimi_trades.json      # Verified SPY round-trip history (seed); live copy accumulates on /data/kimi_trades.json
+├── backup.py             # GitHub Gist offsite backup — PATCHes all critical /data/ files nightly + after every deposit
 ├── visits.py             # Atomic visit counter backed by /data/visits.json (thread-safe tmp+rename writes)
 │
 ├── pnl.py                # Alpaca P&L engine (daily/weekly/monthly/yearly/YTD/all-time/since-inception/custom)
@@ -341,6 +342,13 @@ scripts/
 | `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Kimi Manager BUY/DOUBLE_DOWN/SELL/TRIM signals posted on every autonomous trade. |
 | `WHOP_WEBHOOK_SECRET` | HMAC-SHA256 secret for verifying Whop membership webhook payloads. Optional — signature check is skipped if not set. |
 
+### GitHub Gist Backup
+
+| Variable | Description |
+|---|---|
+| `GITHUB_GIST_TOKEN` | GitHub Personal Access Token with **`gist`** scope — generate at github.com/settings/tokens |
+| `GITHUB_GIST_ID` | ID of the private Gist to update (visible in the Gist URL after your username) |
+
 ### Discord Slash Commands
 
 | Variable | Description |
@@ -397,17 +405,22 @@ Deep health check — verifies Alpaca API + Robinhood session. Always returns HT
 ---
 
 ### `GET /public-stats`
-Public, no-auth endpoint powering the Kimi Invest landing page. Pulls all filled SPY orders from Alpaca, runs **FIFO** cost-basis matching, and returns live performance stats. Response is cached in memory for 1 hour.
+Public, no-auth endpoint powering the Kimi Invest landing page. Serves live SPY strategy performance stats. Response is cached in memory for 1 hour.
+
+**Data source priority:**
+1. `/data/kimi_trades.json` (persistent disk) — manually verified round trips; auto-appended on every SPY sell fill via `trade_notifier.py → append_kimi_trade()`
+2. `app/kimi_trades.json` (repo seed) — fallback if live file not yet initialized
+3. Alpaca FIFO computation — fallback if neither file exists
 
 ```json
 {
-  "trades": 8,
-  "wins": 5,
-  "losses": 3,
-  "win_rate": 62.5,
-  "profit_factor": 1.84,
-  "date_range": { "from": "Apr 22, 2026", "to": "Jun 11, 2026" },
-  "cumulative_returns": [{ "trade": 1, "pct": 2.31, "won": true }, ...],
+  "trades": 22,
+  "wins": 13,
+  "losses": 9,
+  "win_rate": 59.1,
+  "profit_factor": 2.00,
+  "date_range": { "from": "Apr 22, 2026", "to": "Jun 16, 2026" },
+  "cumulative_returns": [{ "trade": 1, "pct": 0.20, "won": true, "date": "04/22", "buy": 709.17, "sell": 710.59 }, ...],
   "spots_remaining": 12
 }
 ```
@@ -489,6 +502,17 @@ Manually execute a Kimi Autopilot trade from a Twitter signal. Uses `CLAUDE_LEVE
 ```
 
 `action` must be `BUY` or `SELL`. Records position in `/data/claude_portfolio.json` and notifies `CLAUDE_PORTFOLIO_WEBHOOK_URL`. After-hours sells are queued and resolved at market open.
+
+---
+
+### `POST /run-backup`
+Manually trigger a Gist backup on demand. Useful for verifying that `GITHUB_GIST_TOKEN` and `GITHUB_GIST_ID` are correctly configured.
+
+```json
+{ "secret": "YOUR_WEBHOOK_SECRET" }
+```
+
+Returns `{"ok": true, "files_backed_up": [...]}` on success, or `{"ok": false, "error": "not_configured"}` if env vars are missing.
 
 ---
 
@@ -716,6 +740,7 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `early_access.json` | `/whop-webhook` (Whop events) | Kimi Invest spot counter — starts at 15, decrements on new Whop member, increments on cancellation |
 | `rh_equity_history.json` | Daily 4 PM ET scheduler | RH portfolio equity + SPY price snapshots — used for all RH P&L period comparisons (replaces retired RH historicals API) |
 | `visits.json` | `GET /public-visit-count` | Cumulative visitor count for kimiinvest.com displayed in the corner widget |
+| `kimi_trades.json` | Every SPY sell fill (auto) + `/run-backup` seed | Verified SPY round-trip history powering `/public-stats`. Seeded from repo on first deploy; auto-appended on every SPY sell. Also included in nightly Gist backup. |
 
 ---
 
@@ -885,6 +910,17 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Backend updates (June 17, 2026)
+
+| Change | Details |
+|---|---|
+| GitHub Gist offsite backup | `app/backup.py` — PATCHes all critical `/data/` files to a private GitHub Gist. Runs daily at midnight ET via APScheduler and immediately after every `/deposit`. Requires `GITHUB_GIST_TOKEN` and `GITHUB_GIST_ID` env vars. |
+| `/run-backup` endpoint | `POST /run-backup` (secret-protected) triggers an on-demand Gist backup — useful for verifying credentials and testing recovery. |
+| Kimi trade stats accuracy fix | `/public-stats` now serves from `kimi_trades.json` (verified round-trip data) instead of computing from Alpaca FIFO. Root cause: `get_all_spy_orders()` fetched all historical orders with no date filter, so old buy orders contaminated the FIFO stack and produced wrong buy prices on all 20 trades and flipped 4 WIN/LOSS results. Corrected stats: 22 trades, 13W/9L, 59.1% win rate, 2.00 profit factor. |
+| Auto-recording SPY trades | `trade_notifier.py` calls `append_kimi_trade()` on every SPY sell fill (both immediate and pending-fill-at-open paths). Atomically appends the verified round trip to `/data/kimi_trades.json` and busts the stats cache — no manual updates needed going forward. |
+| Live trades seeding | On startup, `init_live_trades()` copies the repo seed (`app/kimi_trades.json`) to `/data/kimi_trades.json` if the live file doesn't exist yet, ensuring the first deploy starts with the verified 22-trade history. |
+| Kimi Portfolio Manager strategy overhaul | Replaced generic value-investing framework with a future-dominance strategy. New scoring: Future Dominance Potential 25% (new), Growth 25%, Quality 20% (down from 30%), Momentum 15% (down from 20%), Valuation 15%. Added Mega-Winner Rule (unprofitable companies allowed if growth >25%), Adaptive Future Framework, AI/robotics/space/energy themes, Bubble Protection rules. Market cap floor lowered from $5B to $2B. |
 
 ### Frontend — kimiinvest.com (June 2026)
 
