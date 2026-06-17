@@ -1,8 +1,10 @@
 import asyncio
+import json
 import logging
 import time
 from collections import deque
-from datetime import timezone
+from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 from app.early_access import load_spots
@@ -10,6 +12,73 @@ from app.early_access import load_spots
 log = logging.getLogger(__name__)
 
 _cache: dict = {"data": None, "expires": 0.0}
+
+_MANUAL_TRADES_PATH = Path(__file__).parent / "kimi_trades.json"
+
+
+def _load_manual_trades() -> list | None:
+    if not _MANUAL_TRADES_PATH.exists():
+        return None
+    try:
+        return json.loads(_MANUAL_TRADES_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("Failed to load manual trades: %s", exc)
+        return None
+
+
+def _fmt_full_date(s: str) -> str:
+    try:
+        dt = datetime.strptime(s, "%Y-%m-%d")
+        return dt.strftime(f"%b {dt.day}, %Y")
+    except Exception:
+        return s
+
+
+def compute_stats_from_manual(trades_data: list) -> dict:
+    """Build the same stats dict as compute_stats(), but from kimi_trades.json."""
+    if not trades_data:
+        return {
+            "trades": 0, "wins": 0, "losses": 0,
+            "win_rate": 0, "profit_factor": 0,
+            "date_range": {"from": "", "to": ""},
+            "cumulative_returns": [],
+        }
+
+    wins   = [t for t in trades_data if t["won"]]
+    losses = [t for t in trades_data if not t["won"]]
+    gross_win  = sum(t["dollar_pnl"] for t in wins)
+    gross_loss = abs(sum(t["dollar_pnl"] for t in losses))
+    profit_factor = round(gross_win / gross_loss, 2) if gross_loss > 0 else 0
+
+    cumulative: list = []
+    running = 0.0
+    for i, t in enumerate(trades_data, 1):
+        running += t["pct_pnl"]
+        cumulative.append({
+            "trade":      i,
+            "pct":        round(running, 4),
+            "won":        t["won"],
+            "trade_pct":  round(t["pct_pnl"], 2),
+            "date":       t["date"],
+            "buy":        t["buy"],
+            "sell":       t["sell"],
+        })
+
+    if len(cumulative) > 100:
+        cumulative = cumulative[-100:]
+
+    return {
+        "trades":        len(trades_data),
+        "wins":          len(wins),
+        "losses":        len(losses),
+        "win_rate":      round(len(wins) / len(trades_data) * 100, 1),
+        "profit_factor": profit_factor,
+        "date_range": {
+            "from": _fmt_full_date(trades_data[0].get("full_date", "")),
+            "to":   _fmt_full_date(trades_data[-1].get("full_date", "")),
+        },
+        "cumulative_returns": cumulative,
+    }
 
 
 def compute_stats(filled_orders: list) -> dict:
@@ -111,10 +180,22 @@ def compute_stats(filled_orders: list) -> dict:
 
 
 async def get_public_stats() -> dict:
-    """Return cached stats, refreshing from Alpaca if the 1-hour TTL has expired."""
+    """Return cached stats.
+
+    Prefers kimi_trades.json (manually verified data) when present.
+    Falls back to live Alpaca order computation if the file is absent.
+    """
     now = time.time()
     if _cache["data"] is not None and now < _cache["expires"]:
         return _cache["data"]
+
+    manual = _load_manual_trades()
+    if manual is not None:
+        stats = compute_stats_from_manual(manual)
+        stats["spots_remaining"] = load_spots()
+        _cache["data"]    = stats
+        _cache["expires"] = now + 3600
+        return stats
 
     loop = asyncio.get_running_loop()
     try:
@@ -128,16 +209,13 @@ async def get_public_stats() -> dict:
     stats["spots_remaining"] = load_spots()
 
     if orders:
-        # Successful fetch — cache for 1 hour
         _cache["data"]    = stats
         _cache["expires"] = now + 3600
     elif _cache["data"] is not None:
-        # Alpaca fetch failed — return stale cache rather than caching zeros
         stale = dict(_cache["data"])
         stale["spots_remaining"] = stats["spots_remaining"]
         return stale
     else:
-        # No prior cache and fetch failed — cache briefly so we retry in 1 min
         _cache["data"]    = stats
         _cache["expires"] = now + 60
 
