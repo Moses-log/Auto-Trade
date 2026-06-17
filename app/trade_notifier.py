@@ -138,6 +138,12 @@ async def notify_trade(
             dollar_pnl = (filled_price - avg_entry_price) * filled_qty
             pct_pnl = (filled_price - avg_entry_price) / avg_entry_price * 100
 
+        # Auto-record completed SPY round trips for the public chart
+        if (ticker.upper() == "SPY" and action_base not in _BUY_ACTIONS
+                and avg_entry_price and filled_price and filled_qty):
+            from app.public_stats import append_kimi_trade
+            append_kimi_trade(ticker, avg_entry_price, filled_price, filled_qty)
+
         record_str: Optional[str] = None
         if dollar_pnl is not None:
             wins, losses = await record_trade_result(dollar_pnl >= 0)
@@ -255,6 +261,13 @@ async def notify_pending_order_fill(
         if avg_entry_price and filled_price and filled_qty and avg_entry_price != 0:
             dollar_pnl = (filled_price - avg_entry_price) * filled_qty
             pct_pnl = (filled_price - avg_entry_price) / avg_entry_price * 100
+
+        # Auto-record completed SPY round trips for the public chart
+        action_base = action.upper().split(" (")[0]
+        if (ticker.upper() == "SPY" and action_base not in _BUY_ACTIONS
+                and avg_entry_price and filled_price and filled_qty):
+            from app.public_stats import append_kimi_trade
+            append_kimi_trade(ticker, avg_entry_price, filled_price, filled_qty)
 
         record_str: Optional[str] = None
         if dollar_pnl is not None:

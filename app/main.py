@@ -105,6 +105,8 @@ async def lifespan(app: FastAPI):
                 "Session unavailable on startup — trading is paused.\n"
                 "POST `/robinhood-auth` with your SMS code to activate."
             )
+    from app.public_stats import init_live_trades
+    init_live_trades()
     setup_jobs()
     reschedule_pending_orders()
     scheduler.start()

@@ -1,6 +1,8 @@
 import asyncio
 import json
 import logging
+import os
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -12,18 +14,74 @@ from app.early_access import load_spots
 log = logging.getLogger(__name__)
 
 _cache: dict = {"data": None, "expires": 0.0}
+_write_lock = threading.Lock()
 
-_MANUAL_TRADES_PATH = Path(__file__).parent / "kimi_trades.json"
+# Seed: shipped in the repo, read-only reference
+_SEED_TRADES_PATH = Path(__file__).parent / "kimi_trades.json"
+# Live: persistent disk on Render; accumulates new trades across deploys
+_LIVE_TRADES_PATH = Path(os.getenv("DATA_DIR", "/data")) / "kimi_trades.json"
+
+
+def init_live_trades() -> None:
+    """Copy seed trades to persistent disk on first deploy (if live file absent)."""
+    if _LIVE_TRADES_PATH.exists():
+        return
+    if not _SEED_TRADES_PATH.exists():
+        return
+    try:
+        _LIVE_TRADES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _LIVE_TRADES_PATH.write_text(
+            _SEED_TRADES_PATH.read_text(encoding="utf-8"), encoding="utf-8"
+        )
+        log.info("Seeded live kimi_trades.json from repo (%d bytes)", _LIVE_TRADES_PATH.stat().st_size)
+    except Exception as exc:
+        log.warning("Could not seed live kimi_trades.json: %s", exc)
 
 
 def _load_manual_trades() -> list | None:
-    if not _MANUAL_TRADES_PATH.exists():
-        return None
-    try:
-        return json.loads(_MANUAL_TRADES_PATH.read_text(encoding="utf-8"))
-    except Exception as exc:
-        log.warning("Failed to load manual trades: %s", exc)
-        return None
+    """Prefer the live persistent-disk file; fall back to the repo seed."""
+    for path in (_LIVE_TRADES_PATH, _SEED_TRADES_PATH):
+        if not path.exists():
+            continue
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            log.warning("Failed to load %s: %s", path, exc)
+    return None
+
+
+def append_kimi_trade(ticker: str, buy: float, sell: float, qty: float) -> None:
+    """Append a completed SPY round trip to the live kimi_trades.json and bust cache.
+
+    Called automatically by trade_notifier on every SPY sell fill so the
+    public chart stays current without any manual intervention.
+    """
+    if ticker.upper() != "SPY":
+        return
+    pct_pnl  = round((sell - buy) / buy * 100, 2)
+    dollar_pnl = round((sell - buy) * qty, 2)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    entry = {
+        "date":       datetime.strptime(today, "%Y-%m-%d").strftime("%m/%d"),
+        "full_date":  today,
+        "buy":        round(buy, 2),
+        "sell":       round(sell, 2),
+        "pct_pnl":   pct_pnl,
+        "dollar_pnl": dollar_pnl,
+        "won":        dollar_pnl >= 0,
+    }
+    with _write_lock:
+        trades = _load_manual_trades() or []
+        trades.append(entry)
+        _LIVE_TRADES_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp = _LIVE_TRADES_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(trades, indent=2), encoding="utf-8")
+        tmp.replace(_LIVE_TRADES_PATH)
+    _cache["expires"] = 0.0  # bust cache so next request reads the updated file
+    log.info(
+        "Auto-appended SPY trade: buy=%.2f sell=%.2f pct=%.2f%% (%s)",
+        buy, sell, pct_pnl, "WIN" if dollar_pnl >= 0 else "LOSS",
+    )
 
 
 def _fmt_full_date(s: str) -> str:
