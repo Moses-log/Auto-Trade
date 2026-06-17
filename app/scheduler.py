@@ -124,6 +124,11 @@ async def _claude_monthly_rebalance() -> None:
     await run_monthly_rebalance()
 
 
+async def _nightly_backup() -> None:
+    from app.backup import push_backup
+    await push_backup()
+
+
 def setup_jobs() -> None:
     """Register cron jobs — two parallel bundles replacing five staggered jobs."""
     scheduler.add_job(
@@ -156,11 +161,18 @@ def setup_jobs() -> None:
         id="claude_monthly_rebalance",
         replace_existing=True,
     )
+    scheduler.add_job(
+        _nightly_backup,
+        CronTrigger(hour=0, minute=0, timezone=ET),
+        id="nightly_backup",
+        replace_existing=True,
+    )
     log.info(
         "Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), "
         "robinhood_keep_alive (daily check, runs every ~3 days), "
         "quarterly_tax_report (Jan/Apr/Jul/Oct 1), "
-        "claude_monthly_rebalance (1st of each month 9:35 AM ET)"
+        "claude_monthly_rebalance (1st of each month 9:35 AM ET), "
+        "nightly_backup (daily midnight ET)"
     )
 
 

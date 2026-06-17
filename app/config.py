@@ -89,6 +89,12 @@ class Settings(BaseSettings):
     # ── Whop webhook (early-access spot counter) ──────────────────────────────
     whop_webhook_secret: Optional[str] = None
 
+    # ── GitHub Gist backup (second offsite copy of /data/ files) ─────────────
+    # PAT with "gist" scope — github.com/settings/tokens
+    github_gist_token: Optional[str] = None
+    # ID of the private Gist to update (visible in the Gist URL)
+    github_gist_id: Optional[str] = None
+
     model_config = SettingsConfigDict(env_file=".env", case_sensitive=False)
 
 

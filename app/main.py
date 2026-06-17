@@ -68,6 +68,15 @@ log = logging.getLogger(__name__)
 
 _start_time = time.time()
 
+# Keep strong references to fire-and-forget background tasks to prevent GC.
+_bg_tasks: set = set()
+
+
+def _fire(coro) -> None:
+    t = asyncio.create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
+
 _SELL_ACTIONS = {
     TradingAction.SELL,
     TradingAction.CLOSE_LONG,
@@ -740,6 +749,9 @@ async def deposit(request: Request) -> dict:
         else:
             match.deposits.append(new_deposit)
         save_investors(investors)
+
+    from app.backup import push_backup
+    _fire(push_backup())
 
     return {
         "investor": match.name,
