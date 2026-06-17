@@ -764,6 +764,18 @@ async def deposit(request: Request) -> dict:
     }
 
 
+@app.post("/run-backup", tags=["admin"])
+async def run_backup(request: Request) -> dict:
+    """Manually trigger a Gist backup. Body: {"secret": "..."}"""
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={"error": "Request body must be valid JSON."})
+    verify_webhook_secret(body.get("secret", ""))
+    from app.backup import push_backup
+    return await push_backup()
+
+
 @app.post("/run-rebalance", tags=["trading"])
 async def run_rebalance(request: Request, background_tasks: BackgroundTasks) -> dict:
     """Manually trigger the Claude portfolio monthly rebalance. Body: {"secret": "..."}"""
