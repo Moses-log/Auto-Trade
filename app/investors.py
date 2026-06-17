@@ -70,7 +70,9 @@ def serialize_investors(investors: list[Investor]) -> str:
 
 
 def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> None:
-    path.write_text(serialize_investors(investors), encoding="utf-8")
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(serialize_investors(investors), encoding="utf-8")
+    tmp.replace(path)
 
 
 def get_total_deposited(investor: Investor) -> float:

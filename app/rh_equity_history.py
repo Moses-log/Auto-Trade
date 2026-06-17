@@ -45,7 +45,9 @@ def _load() -> List[EquitySnapshot]:
 
 def _save(snapshots: List[EquitySnapshot]) -> None:
     _RECORD_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _RECORD_FILE.write_text(json.dumps(snapshots))
+    tmp = _RECORD_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(snapshots))
+    tmp.replace(_RECORD_FILE)
 
 
 async def record_snapshot(date: str, ts: int, equity: float, spy_close: float) -> None:

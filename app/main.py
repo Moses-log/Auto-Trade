@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from app.config import settings
-from app.idempotency import is_duplicate, mark_processed
+from app.idempotency import check_and_mark
 from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, TradingAction
@@ -552,6 +552,12 @@ async def webhook(request: Request):
             content={"error": "Request body must be valid JSON."},
         )
 
+    if not isinstance(raw, dict):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Request body must be a JSON object."},
+        )
+
     log.debug("Raw alert received", extra={"body": raw})
 
     # ── 2. Secret check ───────────────────────────────────────────────────────
@@ -586,8 +592,8 @@ async def webhook(request: Request):
         },
     )
 
-    # ── 4. Idempotency check ──────────────────────────────────────────────────
-    if is_duplicate(payload):
+    # ── 4. Idempotency check (atomic: check + mark in one lock acquisition) ────
+    if check_and_mark(payload):
         log.info(
             "Duplicate alert ignored",
             extra={"ticker": payload.ticker, "order_id": payload.order_id},
@@ -612,7 +618,6 @@ async def webhook(request: Request):
                 avg_entry_price = float(pos.avg_entry_price)
 
         result = await execute_action(payload)
-        mark_processed(payload)
 
         log.info(
             "Trade executed",
@@ -687,6 +692,12 @@ async def deposit(request: Request) -> dict:
         return JSONResponse(
             status_code=status.HTTP_400_BAD_REQUEST,
             content={"error": "Request body must be valid JSON."},
+        )
+
+    if not isinstance(body, dict):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Request body must be a JSON object."},
         )
 
     verify_webhook_secret(body.get("secret", ""))

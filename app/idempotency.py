@@ -60,7 +60,7 @@ def is_duplicate(payload: AlertPayload) -> bool:
     """Return True if this alert was already processed within the TTL window."""
     with _lock:
         seen = _evict_expired(_load())
-        _save(seen)  # persist eviction so expired entries don't accumulate
+        _save(seen)
         return _make_key(payload) in seen
 
 
@@ -70,3 +70,21 @@ def mark_processed(payload: AlertPayload) -> None:
         seen = _evict_expired(_load())
         seen[_make_key(payload)] = time.time() + settings.idempotency_ttl
         _save(seen)
+
+
+def check_and_mark(payload: AlertPayload) -> bool:
+    """Atomically check-and-mark in one lock acquisition.
+
+    Returns True if already processed (caller should treat as duplicate).
+    Returns False and records the key if this is the first time we see it.
+    Eliminates the TOCTOU window between a separate is_duplicate() + mark_processed().
+    """
+    with _lock:
+        seen = _evict_expired(_load())
+        key = _make_key(payload)
+        if key in seen:
+            _save(seen)
+            return True
+        seen[key] = time.time() + settings.idempotency_ttl
+        _save(seen)
+        return False

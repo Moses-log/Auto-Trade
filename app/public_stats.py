@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import time
+from collections import deque
 from datetime import timezone
 from typing import Optional
 
@@ -15,7 +16,7 @@ def compute_stats(filled_orders: list) -> dict:
     """LIFO-match buys to sells and return performance stats dict."""
     orders = sorted(filled_orders, key=lambda o: o.filled_at)
 
-    buy_stack: list = []   # each entry: [qty_remaining, fill_price, fill_dt]
+    buy_stack: deque = deque()  # FIFO: [qty_remaining, fill_price, fill_dt]
     trades:    list = []
     first_dt:  Optional[object] = None
     last_sell_dt: Optional[object] = None
@@ -37,14 +38,14 @@ def compute_stats(filled_orders: list) -> dict:
             matched    = 0.0
 
             while remaining > 1e-6 and buy_stack:
-                bq, bp, _ = buy_stack[-1]
+                bq, bp, _ = buy_stack[0]
                 take        = min(remaining, bq)
                 cost_basis += take * bp
                 matched    += take
                 remaining  -= take
-                buy_stack[-1][0] -= take
-                if buy_stack[-1][0] < 1e-6:
-                    buy_stack.pop()
+                buy_stack[0][0] -= take
+                if buy_stack[0][0] < 1e-6:
+                    buy_stack.popleft()
 
             if matched > 1e-6:
                 proceeds   = matched * price

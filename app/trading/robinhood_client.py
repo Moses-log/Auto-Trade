@@ -223,7 +223,7 @@ class RobinhoodClient:
         result = r.order_buy_fractional_by_quantity(
             ticker, qty, account_number=self._account_number()
         ) or {}
-        if not result.get("id") and not result.get("cancel"):
+        if not result.get("id"):
             raise ValueError(f"Robinhood order rejected: {result}")
         log.info("Robinhood BUY placed", extra={"ticker": ticker, "qty": qty})
         return result
@@ -232,7 +232,7 @@ class RobinhoodClient:
         result = r.order_sell_fractional_by_quantity(
             ticker, qty, account_number=self._account_number()
         ) or {}
-        if not result.get("id") and not result.get("cancel"):
+        if not result.get("id"):
             raise ValueError(f"Robinhood sell order rejected: {result}")
         log.info("Robinhood SELL placed", extra={"ticker": ticker, "qty": qty})
         return result

@@ -216,7 +216,9 @@ async def send_weekly_report() -> None:
                 log.warning("Could not fetch current equity for weekly report: %s", exc)
 
         # P&L from the same equity list the chart uses
-        open_eq = equity[0] if equity and equity[0] else 1.0
+        open_eq = next((eq for eq in equity if eq), None)
+        if open_eq is None:
+            raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for weekly report")
@@ -279,7 +281,9 @@ async def send_monthly_report() -> None:
             except Exception as exc:
                 log.warning("Could not fetch current equity for monthly report: %s", exc)
 
-        open_eq = equity[0] if equity and equity[0] else 1.0
+        open_eq = next((eq for eq in equity if eq), None)
+        if open_eq is None:
+            raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for monthly report")
@@ -341,7 +345,9 @@ async def send_yearly_report() -> None:
             except Exception as exc:
                 log.warning("Could not fetch current equity for yearly report: %s", exc)
 
-        open_eq = equity[0] if equity and equity[0] else 1.0
+        open_eq = next((eq for eq in equity if eq), None)
+        if open_eq is None:
+            raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for yearly report")
@@ -406,7 +412,9 @@ async def send_ytd_report() -> None:
             except Exception as exc:
                 log.warning("Could not fetch current equity for YTD report: %s", exc)
 
-        open_eq = equity[0] if equity and equity[0] else 1.0
+        open_eq = next((eq for eq in equity if eq), None)
+        if open_eq is None:
+            raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for YTD report")
@@ -470,7 +478,9 @@ async def send_alltime_report() -> None:
                 log.warning("Could not fetch current equity for all-time report: %s", exc)
 
         # P&L from the same equity list the chart uses, with None guard
-        open_eq = equity[0] if equity and equity[0] else 1.0
+        open_eq = next((eq for eq in equity if eq), None)
+        if open_eq is None:
+            raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for all-time report")
@@ -546,7 +556,9 @@ async def _send_since_date_report(start_date: _date, label: str, period_key: str
             except Exception as exc:
                 log.warning("Could not fetch current equity for %s report: %s", label, exc)
 
-        open_eq = equity[0] if equity and equity[0] else 1.0
+        open_eq = next((eq for eq in equity if eq), None)
+        if open_eq is None:
+            raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError(f"No valid close equity for {label} report")

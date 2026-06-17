@@ -11,6 +11,7 @@ to call the Anthropic Messages API directly — no anthropic SDK needed.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -26,6 +27,16 @@ from app.config import settings
 
 _CT = pytz.timezone("America/Chicago")
 _LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
+
+# Keeps strong references to fire-and-forget tasks so GC cannot cancel them mid-execution.
+_bg_tasks: set = set()
+
+
+def _fire(coro) -> None:
+    """Schedule a coroutine as a background task that won't be GC'd."""
+    t = asyncio.create_task(coro)
+    _bg_tasks.add(t)
+    t.add_done_callback(_bg_tasks.discard)
 
 
 def _timestamp() -> str:
@@ -507,7 +518,7 @@ async def run_monthly_rebalance() -> None:
         analysis_msg = f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}"
         await notify_claude_manager(analysis_msg)
         from app.notifications import notify_claude_signal_feed
-        asyncio.create_task(notify_claude_signal_feed(analysis_msg))
+        _fire(notify_claude_signal_feed(analysis_msg))
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
@@ -627,7 +638,7 @@ async def run_monthly_rebalance() -> None:
                 if dollar_pnl is not None:
                     sub_sig.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
                 sub_sig.append(_timestamp())
-                asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
+                _fire(notify_claude_signal_feed("\n".join(sub_sig)))
 
         # ── 5b. Execute TRIMs ─────────────────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "TRIM"):
@@ -710,7 +721,7 @@ async def run_monthly_rebalance() -> None:
                 if dollar_pnl is not None:
                     sub_sig.append(f"P&L: +{pct_pnl:.2f}% 🟢 WIN" if dollar_pnl >= 0 else f"P&L: -{abs(pct_pnl):.2f}% 🔴 LOSS")
                 sub_sig.append(_timestamp())
-                asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
+                _fire(notify_claude_signal_feed("\n".join(sub_sig)))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
         available_budget = buying_power + expected_sell_proceeds
@@ -780,8 +791,8 @@ async def run_monthly_rebalance() -> None:
                     f"Target: {target_wt}% weight",
                     _timestamp(),
                 ]
-                asyncio.create_task(notify_claude_signal_feed("\n".join(sub_sig)))
-            asyncio.create_task(_post_financials_chart(ticker))
+                _fire(notify_claude_signal_feed("\n".join(sub_sig)))
+            _fire(_post_financials_chart(ticker))
             available_budget = max(0.0, available_budget - invest_dollars)
 
         log_entry["status"] = "completed"

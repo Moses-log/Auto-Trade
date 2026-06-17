@@ -36,4 +36,6 @@ def get_last_run_ts() -> Optional[int]:
 def record_run(ts: int) -> None:
     """Persist the unix timestamp of a keep-alive run."""
     _RECORD_FILE.parent.mkdir(parents=True, exist_ok=True)
-    _RECORD_FILE.write_text(json.dumps({"last_run_ts": ts}))
+    tmp = _RECORD_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps({"last_run_ts": ts}))
+    tmp.replace(_RECORD_FILE)
