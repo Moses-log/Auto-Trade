@@ -4,7 +4,7 @@ A production-ready Python / FastAPI service that runs **three parallel trading s
 
 Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 
-**Public landing page:** [Kimi Invest](https://moses-log.github.io/kimi-invest-site/) — live SPY performance stats, cumulative return chart, and Whop signup. Powered by `GET /public-stats` on this server.
+**Public landing page:** [kimiinvest.com](https://kimiinvest.com) — live SPY performance stats, cumulative return chart, track record chart, and Whop signup. Powered by `GET /public-stats`, `GET /public-claude-performance`, and `GET /public-visit-count` on this server.
 
 ---
 
@@ -67,9 +67,11 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   PUBLIC WEBSITE  (GitHub Pages → Moses-log/kimi-invest-site)
 ════════════════════════════════════════════════════════════════
 
-  Kimi Invest ──► GET /public-stats            ← SPY LIFO stats + spot counter
-  kimiinvest.com   GET /public-claude-callouts ← Kimi Manager trade callouts
-                   (both: 1-hour in-memory cache, no auth, CORS open)
+  Kimi Invest ──► GET /public-stats             ← SPY FIFO stats + spot counter
+  kimiinvest.com   GET /public-claude-performance ← Kimi Manager portfolio vs SPY chart
+                   GET /public-claude-callouts   ← Kimi Manager trade callouts
+                   GET /public-visit-count       ← atomic visit counter (increments on fetch)
+                   (all: no auth, CORS open, stats endpoint 1-hour in-memory cache)
 
   Whop.com    ──► POST /whop-webhook           ← membership.went_valid  → decrement spots
                                                   membership.went_invalid → increment spots
@@ -80,9 +82,10 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 ════════════════════════════════════════════════════════════════
 
   Mon–Thu 4:00 PM ET ──► Alpaca daily P&L  +  RH daily P&L  +  Investor breakdown
+                         + RH equity snapshot (for historical P&L comparisons)
   Fri     4:00 PM ET ──► Above  +  weekly P&L charts  +  Portfolio Pie Chart
   1st of month 9:35 AM ET ──► Kimi autonomous portfolio rebalance
-  Every 72 hours ──────► RH session keep-alive (silent token refresh)
+  Daily (wall-clock) ──► RH session keep-alive check (runs every ~72 h actual)
   Jan/Apr/Jul/Oct 1 ───► Quarterly Alpaca + RH tax summaries
   9:31 AM ET next open ► Queued Kimi sell fill confirmation (when after-hours)
 
@@ -244,7 +247,8 @@ app/
 ├── trade_notifier.py     # Alpaca trade notification + queued order scheduling + signal subscriber broadcast
 ├── rh_trade_notifier.py  # Robinhood (Kimi) trade notification
 ├── early_access.py       # Kimi Invest early-access spot counter (persisted to /data/early_access.json)
-├── public_stats.py       # Live LIFO stat computation + 1-hour in-memory cache for /public-stats
+├── public_stats.py       # Live FIFO stat computation + 1-hour in-memory cache for /public-stats
+├── visits.py             # Atomic visit counter backed by /data/visits.json (thread-safe tmp+rename writes)
 │
 ├── pnl.py                # Alpaca P&L engine (daily/weekly/monthly/yearly/YTD/all-time/since-inception/custom)
 ├── rh_pnl.py             # Robinhood P&L engine (daily/weekly/monthly/yearly)
@@ -261,6 +265,8 @@ app/
 ├── leverage_state.py     # Stores ADD_LEVERAGE fill price per ticker for P&L accuracy
 ├── pending_orders.py     # Persist queued orders to disk (Alpaca + Kimi sells)
 ├── tax.py                # Quarterly Alpaca + RH tax summary reports
+├── rh_equity_history.py  # Daily RH equity + SPY price snapshot store (replaces retired RH historicals API)
+├── rh_keep_alive_state.py # Persists last RH keep-alive timestamp for restart-immune cadence tracking
 ├── interactions.py       # Discord Ed25519 signature verification + option parsing
 ├── discord_commands.py   # All slash command handlers
 ├── scheduler.py          # APScheduler job registration
@@ -391,7 +397,7 @@ Deep health check — verifies Alpaca API + Robinhood session. Always returns HT
 ---
 
 ### `GET /public-stats`
-Public, no-auth endpoint powering the Kimi Invest landing page. Pulls all filled SPY orders from Alpaca, runs LIFO matching, and returns live performance stats. Response is cached in memory for 1 hour.
+Public, no-auth endpoint powering the Kimi Invest landing page. Pulls all filled SPY orders from Alpaca, runs **FIFO** cost-basis matching, and returns live performance stats. Response is cached in memory for 1 hour.
 
 ```json
 {
@@ -407,6 +413,33 @@ Public, no-auth endpoint powering the Kimi Invest landing page. Pulls all filled
 ```
 
 No sensitive data is exposed — no account equity, dollar P&L, order IDs, or credentials.
+
+---
+
+### `GET /public-claude-performance`
+Public, no-auth endpoint returning the Kimi Portfolio Manager's cumulative return vs SPY since inception, normalized to 0% at the first recorded rebalance. Reads `claude_rebalance_log.json` and returns `portfolio_value` and `spy_price_at_rebalance` for each completed entry.
+
+```json
+{
+  "data_points": [
+    { "label": "Jan 2026", "portfolio_pct": 0.0, "spy_pct": 0.0 },
+    { "label": "Feb 2026", "portfolio_pct": 4.21, "spy_pct": 1.83 }
+  ],
+  "portfolio_pct": 4.21,
+  "spy_pct": 1.83,
+  "alpha": 2.38,
+  "inception": "January 2026"
+}
+```
+
+---
+
+### `GET /public-visit-count`
+Public, no-auth endpoint that atomically increments and returns the site-wide visit counter. The frontend delays this call by 3 seconds to filter bot/crawler traffic.
+
+```json
+{ "count": 1482 }
+```
 
 ---
 
@@ -681,6 +714,8 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `claude_rebalance_log.json` | Monthly rebalance | Full audit log — macro context, analysis, positions before, trades executed/skipped, SPY price (capped at 36 entries) |
 | `rh_positions_cache.json` | Every successful RH fetch | Last-known positions for pie chart fallback when API is down |
 | `early_access.json` | `/whop-webhook` (Whop events) | Kimi Invest spot counter — starts at 15, decrements on new Whop member, increments on cancellation |
+| `rh_equity_history.json` | Daily 4 PM ET scheduler | RH portfolio equity + SPY price snapshots — used for all RH P&L period comparisons (replaces retired RH historicals API) |
+| `visits.json` | `GET /public-visit-count` | Cumulative visitor count for kimiinvest.com displayed in the corner widget |
 
 ---
 
@@ -754,6 +789,8 @@ For `remove_leverage`, P&L is calculated against the stored ADD_LEVERAGE fill pr
 ## Idempotency
 
 TradingView can fire the same alert multiple times. The system deduplicates via a disk-backed JSON store. A fingerprint is derived from `order_id + ticker` (preferred) or `ticker + action + timestamp`. Fingerprints expire after `IDEMPOTENCY_TTL` seconds (default: 300). The file survives restarts.
+
+The check-and-mark operation is **atomic** — a single `check_and_mark()` call acquires the lock, reads the store, and either returns `True` (duplicate) or writes the key and returns `False`. This eliminates the TOCTOU race where two concurrent webhooks could both pass a separate `is_duplicate()` check before either called `mark_processed()`.
 
 ---
 
@@ -844,3 +881,36 @@ Generate a strong webhook secret:
 ```bash
 python -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+---
+
+## Recent Changes
+
+### Frontend — kimiinvest.com (June 2026)
+
+| Change | Details |
+|---|---|
+| Custom domain | Migrated from `moses-log.github.io/kimi-invest-site` to `kimiinvest.com` via GoDaddy DNS + GitHub Pages HTTPS enforcement |
+| Track Record chart | New section showing Kimi Portfolio Manager cumulative return vs SPY since inception, fetched from `GET /public-claude-performance` |
+| How to Join section | Step-by-step 3-step join flow (Visit Whop → Free Trial checkout → Discord invite) |
+| Early Access banner | Fixed top bar with early access notice; dismissable (resets nav position on close) |
+| 14-day free trial emphasis | Trial badge above hero CTAs; accent-colored trust item; animated free-tag in Final CTA |
+| Google Analytics GA4 | Property `G-BJ8SS3S9LC` added with custom `button_click` and `whop_click` events |
+| Visit counter widget | Bottom-left visitor count powered by `GET /public-visit-count`; 3-second dwell delay filters bots |
+| Section reorder | Narrative flow: Performance → AI Manager → Track Record → Benefits → Discord → Research → Education → FAQ → How to Join → CTA |
+| Anchor scroll fix | `scroll-padding-top: 100px` (nav 64px + banner 36px); resets to 64px when banner dismissed |
+| Alpaca/Robinhood disclosures | All strategy mentions clarify trades execute on the owner's personal accounts |
+
+### Backend bug fixes (June 2026)
+
+| Severity | Bug | Fix |
+|---|---|---|
+| Critical | Concurrent webhooks could both pass `is_duplicate()` before either called `mark_processed()`, placing duplicate trades | Replaced two-step check+mark with atomic `check_and_mark()` in one lock acquisition |
+| Critical | `rh_equity_history.py` wrote history file non-atomically — a Render restart mid-write truncated/corrupted JSON permanently | Write to `.tmp` then atomic `os.replace()` |
+| Critical | `investors.py` wrote deposit records non-atomically — restart risk on real-money data | Same atomic write fix |
+| Critical | `rh_keep_alive_state.py` non-atomic write — truncation caused unintended login cadence drift | Same atomic write fix |
+| Critical | `POST /webhook` and `POST /deposit` called `.get()` on the parsed JSON body without checking type — a JSON array body caused an unhandled `AttributeError` 500 | Added `isinstance(raw, dict)` guard returning 400 |
+| High | All six P&L report functions fell back to `1.0` as opening equity when Alpaca returned `0` — producing `+999,900%` P&L in Discord | Forward-scan for first nonzero equity value; raises a clean error if none found |
+| High | `public_stats.py` used LIFO cost-basis matching while `tax.py` uses FIFO — win rate and cumulative return shown publicly disagreed with tax records for multi-entry positions | Switched `list + pop()` to `collections.deque + popleft()` for FIFO |
+| High | `robinhood_client.py` accepted orders with a `cancel` URL key as confirmed, masking certain rejected orders | Check only `result.get("id")` for order acceptance |
+| Medium | All `asyncio.create_task()` calls in `claude_manager.py` were fire-and-forget with no stored reference — Python's GC could cancel in-flight subscriber Discord notifications | All background tasks go through `_fire()` helper that keeps strong reference in module-level `_bg_tasks` set |
