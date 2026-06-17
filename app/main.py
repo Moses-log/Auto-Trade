@@ -209,6 +209,15 @@ async def public_claude_callouts():
     return {"callouts": callouts}
 
 
+@app.get("/public-visit-count", tags=["public"])
+async def public_visit_count():
+    """Increment and return total site view count. No auth required."""
+    from app.visits import increment_and_get
+    loop = asyncio.get_running_loop()
+    count = await loop.run_in_executor(None, increment_and_get)
+    return {"count": count}
+
+
 @app.get("/public-claude-performance", tags=["public"])
 async def public_claude_performance():
     """Kimi Portfolio Manager vs SPY normalized performance since inception. No auth required."""
