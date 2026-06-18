@@ -17,11 +17,14 @@ from typing import Optional
 import pytz
 
 from app.chart import generate_equity_chart, generate_investor_pie_chart
-from app.investors import compute_breakdown, format_discord_message, get_deposit_events, load_investors
+from app.investors import compute_breakdown, format_discord_message, load_investors
 from app.notifications import notify, notify_investors, notify_investors_with_chart, notify_with_chart
 import yfinance as yf
 
-from app.trading.alpaca_client import get_account, get_latest_price, get_portfolio_history, get_next_trading_day
+from app.trading.alpaca_client import (
+    get_account, get_alpaca_deposit_events, get_latest_price,
+    get_portfolio_history, get_next_trading_day,
+)
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +112,7 @@ def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
     raw_close = next((eq for eq in reversed(equity) if eq is not None), None)
     if raw_close is None:
         raise ValueError(f"No valid close equity for {period} report")
-    adj = deposit_adjusted_equity(equity, timestamps, get_deposit_events())
+    adj = deposit_adjusted_equity(equity, timestamps, get_alpaca_deposit_events())
     open_adj = next((eq for eq in adj if eq), None) or equity[0]
     close_adj = next((eq for eq in reversed(adj) if eq is not None), None) or raw_close
     dollar = close_adj - open_adj
@@ -266,7 +269,7 @@ async def send_weekly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for weekly report")
-        _devts = get_deposit_events()
+        _devts = get_alpaca_deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -335,7 +338,7 @@ async def send_monthly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for monthly report")
-        _devts = get_deposit_events()
+        _devts = get_alpaca_deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -403,7 +406,7 @@ async def send_yearly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for yearly report")
-        _devts = get_deposit_events()
+        _devts = get_alpaca_deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -477,7 +480,7 @@ async def send_ytd_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for YTD report")
-        _devts = get_deposit_events()
+        _devts = get_alpaca_deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -546,7 +549,7 @@ async def send_alltime_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for all-time report")
-        _devts = get_deposit_events()
+        _devts = get_alpaca_deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -628,7 +631,7 @@ async def _send_since_date_report(start_date: _date, label: str, period_key: str
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError(f"No valid close equity for {label} report")
-        _devts = get_deposit_events()
+        _devts = get_alpaca_deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq

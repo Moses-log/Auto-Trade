@@ -31,6 +31,7 @@ from alpaca.trading.requests import (
     GetPortfolioHistoryRequest,
     GetCalendarRequest,
     GetOrdersRequest,
+    GetAccountActivitiesRequest,
 )
 from alpaca.trading.enums import QueryOrderStatus, OrderStatus as AlpacaOrderStatus
 from alpaca.common.enums import Sort
@@ -332,6 +333,34 @@ def get_next_trading_day() -> date:
     while next_day.weekday() >= 5:
         next_day += timedelta(days=1)
     return next_day
+
+
+def get_alpaca_deposit_events() -> list[tuple[str, float]]:
+    """Return [(iso_date, amount), ...] for cash deposits into the Alpaca account.
+
+    Queries the account activities API for CSD (cash deposit) and JNLC (journal
+    cash contribution) activity types — both represent external capital additions.
+    Returns an empty list on any error (failure is non-fatal; charts fall back to
+    showing raw equity with no deposit adjustment).
+    """
+    try:
+        req = GetAccountActivitiesRequest(activity_types=["CSD", "JNLC"])
+        activities = get_client().get_account_activities(req=req)
+        events = []
+        for act in activities or []:
+            try:
+                net = float(act.net_amount)
+                if net <= 0:
+                    continue
+                # NonTradeActivity.date is a datetime.date
+                act_date = act.date if isinstance(act.date, str) else act.date.isoformat()
+                events.append((act_date[:10], net))
+            except Exception:
+                continue
+        return sorted(events)
+    except Exception as exc:
+        log.warning("Could not fetch Alpaca deposit activities: %s", exc)
+        return []
 
 
 # ── Internal helpers ──────────────────────────────────────────────────────────

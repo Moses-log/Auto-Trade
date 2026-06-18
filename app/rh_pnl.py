@@ -9,8 +9,7 @@ import pytz
 
 from app.chart import generate_rh_equity_chart, generate_rh_pnl_chart
 from app.notifications import notify_rh_pnl, notify_rh_pnl_with_chart
-from app.pnl import deposit_adjusted_equity, fetch_spy_close_price, format_spy_comparison_lines
-from app.investors import get_deposit_events
+from app.pnl import fetch_spy_close_price, format_spy_comparison_lines
 from app.rh_equity_history import get_snapshots, record_snapshot
 from app.rh_trade_record import format_rh_record, get_all_trades, get_totals
 from app.trading.robinhood_client import rh_client
@@ -177,14 +176,8 @@ async def send_rh_report(period: str) -> None:
                 baseline = next((s for s in snapshots if s["date"] >= start_date), None)
 
             if baseline is not None:
-                _devts = get_deposit_events()
-                period_deposits = sum(
-                    amt for dt, amt in _devts
-                    if baseline["date"] < dt <= latest["date"]
-                )
-                rh_adj = latest["equity"] - period_deposits
                 if baseline["equity"]:
-                    rh_pct = (rh_adj - baseline["equity"]) / baseline["equity"] * 100
+                    rh_pct = (latest["equity"] - baseline["equity"]) / baseline["equity"] * 100
                 if baseline["spy_close"]:
                     spy_pct = (latest["spy_close"] - baseline["spy_close"]) / baseline["spy_close"] * 100
 
@@ -192,12 +185,11 @@ async def send_rh_report(period: str) -> None:
                     period_snapshots = [s for s in snapshots if baseline["ts"] <= s["ts"] <= latest["ts"]]
                     equity = [s["equity"] for s in period_snapshots]
                     timestamps = [s["ts"] for s in period_snapshots]
-                    _adj_equity = deposit_adjusted_equity(equity, timestamps, _devts)
                     spy_df = pd.DataFrame(
                         {"Close": [s["spy_close"] for s in period_snapshots]},
                         index=pd.to_datetime(timestamps, unit="s"),
                     )
-                    chart = generate_rh_equity_chart(_adj_equity, timestamps, spy_df, f"RH Portfolio vs S&P 500 — {label}")
+                    chart = generate_rh_equity_chart(equity, timestamps, spy_df, f"RH Portfolio vs S&P 500 — {label}")
 
         msg = _format_rh_report(label, period_trades, all_wins, all_losses, rh_pct=rh_pct, spy_pct=spy_pct)
 
