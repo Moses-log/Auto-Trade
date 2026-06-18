@@ -16,12 +16,22 @@ _LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.j
 
 
 def _detect_rh_deposits_in_period(start_date: str, end_date: str) -> float:
-    """Return estimated deposits to the RH account between start_date (exclusive) and end_date (inclusive).
+    """Return sum of RH deposits between start_date (exclusive) and end_date (inclusive).
 
-    Scans rh_equity_history daily snapshots for day-over-day equity jumps that
-    exceed the SPY return by >20 percentage points — too large to be trading
-    gains, so they are treated as external capital injections.
+    Primary source: rh_deposits.json (explicitly logged via /rh_deposit command).
+    Fallback: scans rh_equity_history daily snapshots for day-over-day equity
+    jumps >20% above SPY — too large to be trading gains, so treated as deposits.
     """
+    try:
+        from app.rh_deposit_log import get_rh_deposit_events
+        events = get_rh_deposit_events()
+        explicit = sum(amt for dt, amt in events if start_date < dt <= end_date)
+        if explicit > 0:
+            return explicit
+    except Exception as exc:
+        log.warning("RH deposit log read failed: %s", exc)
+
+    # Fallback: auto-detect from equity history snapshots
     try:
         from app.rh_equity_history import get_snapshots
         snapshots = get_snapshots()
@@ -36,12 +46,11 @@ def _detect_rh_deposits_in_period(start_date: str, end_date: str) -> float:
             spy_return = 0.0
             if prev.get("spy_close") and curr.get("spy_close") and prev["spy_close"] > 0:
                 spy_return = (curr["spy_close"] - prev["spy_close"]) / prev["spy_close"]
-            excess = equity_return - spy_return
-            if excess > 0.20:
-                total += prev["equity"] * excess
+            if equity_return - spy_return > 0.20:
+                total += prev["equity"] * (equity_return - spy_return)
         return total
     except Exception as exc:
-        log.warning("RH deposit detection failed: %s", exc)
+        log.warning("RH deposit auto-detection failed: %s", exc)
         return 0.0
 
 

@@ -155,6 +155,24 @@ COMMANDS: list = [
         ],
     },
     {
+        "name": "rh_deposit",
+        "description": "Log a cash deposit to the Robinhood trading account (strips it from track record chart)",
+        "options": [
+            {
+                "name": "amount",
+                "description": "Deposit amount in USD",
+                "type": 10,
+                "required": True,
+            },
+            {
+                "name": "date",
+                "description": "Deposit date (YYYY-MM-DD, defaults to today)",
+                "type": 3,
+                "required": False,
+            },
+        ],
+    },
+    {
         "name": "status",
         "description": "Show Alpaca + Robinhood account status and open positions",
         "options": [],

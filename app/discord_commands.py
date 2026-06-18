@@ -374,6 +374,33 @@ async def handle_tax_robinhood(year: int, token: str) -> None:
     await _edit_original(token, f"✅ Robinhood tax summary for {year} posted to channel.")
 
 
+async def handle_rh_deposit(amount: float, deposit_date: Optional[str], token: str) -> None:
+    if amount <= 0:
+        await _edit_original(token, "❌ Amount must be positive")
+        return
+    if deposit_date:
+        try:
+            datetime.strptime(deposit_date, "%Y-%m-%d")
+        except ValueError:
+            await _edit_original(token, f"❌ Invalid date {deposit_date!r} — use YYYY-MM-DD")
+            return
+    else:
+        deposit_date = date.today().isoformat()
+
+    try:
+        from app.rh_deposit_log import append_rh_deposit
+        append_rh_deposit(deposit_date, amount)
+    except Exception as exc:
+        await _edit_original(token, f"❌ Failed to save deposit: {exc}")
+        return
+
+    await _edit_original(
+        token,
+        f"✅ RH deposit logged — ${amount:,.2f} on {deposit_date}\n"
+        "The Kimi Portfolio Manager track record chart will now exclude this from gains."
+    )
+
+
 async def dispatch_command(command: str, options: dict, token: str) -> None:
     try:
         if command == "deposit":
@@ -410,6 +437,12 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
                 await _edit_original(token, "❌ Ticker is required")
             else:
                 await handle_close(ticker=ticker, broker=options.get("broker", "both"), token=token)
+        elif command == "rh_deposit":
+            await handle_rh_deposit(
+                amount=float(options["amount"]),
+                deposit_date=options.get("date"),
+                token=token,
+            )
         elif command == "rebalance":
             await handle_rebalance(token=token)
         elif command == "portfolio":
