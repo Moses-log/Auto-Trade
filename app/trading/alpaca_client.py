@@ -31,7 +31,6 @@ from alpaca.trading.requests import (
     GetPortfolioHistoryRequest,
     GetCalendarRequest,
     GetOrdersRequest,
-    GetAccountActivitiesRequest,
 )
 from alpaca.trading.enums import QueryOrderStatus, OrderStatus as AlpacaOrderStatus
 from alpaca.common.enums import Sort
@@ -340,19 +339,20 @@ def get_alpaca_deposit_events() -> list[tuple[str, float]]:
 
     Queries the account activities API for CSD (cash deposit) and JNLC (journal
     cash contribution) activity types — both represent external capital additions.
-    Returns an empty list on any error (failure is non-fatal; charts fall back to
-    showing raw equity with no deposit adjustment).
+    Returns an empty list on any error so charts fall back to raw equity.
     """
     try:
+        # Lazy import — GetAccountActivitiesRequest was added in alpaca-py 0.8+;
+        # if it's missing we gracefully return [] rather than crashing on startup.
+        from alpaca.trading.requests import GetAccountActivitiesRequest  # noqa: PLC0415
         req = GetAccountActivitiesRequest(activity_types=["CSD", "JNLC"])
-        activities = get_client().get_account_activities(req=req)
+        activities = get_client().get_account_activities(activity_filter=req)
         events = []
         for act in activities or []:
             try:
                 net = float(act.net_amount)
                 if net <= 0:
                     continue
-                # NonTradeActivity.date is a datetime.date
                 act_date = act.date if isinstance(act.date, str) else act.date.isoformat()
                 events.append((act_date[:10], net))
             except Exception:
