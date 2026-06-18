@@ -14,6 +14,16 @@ log = logging.getLogger(__name__)
 
 _LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
 
+
+def _load_deposit_events() -> list[tuple[str, float]]:
+    """Load deposit events from investors.json for TWR computation."""
+    try:
+        from app.investors import get_deposit_events
+        return get_deposit_events()
+    except Exception as exc:
+        log.warning("Could not load deposit events for TWR: %s", exc)
+        return []
+
 _ACTION_EMOJI = {
     "BUY":         "🟢",
     "DOUBLE_DOWN": "🔥",
@@ -67,7 +77,12 @@ def get_claude_callouts() -> list:
 
 
 def get_claude_performance() -> dict:
-    """Return portfolio vs SPY performance normalized to 0% at inception."""
+    """Return portfolio vs SPY performance using Time-Weighted Return (TWR).
+
+    TWR chains sub-period returns between rebalances, subtracting any external
+    cash deposits so the chart reflects actual trading performance — not account
+    growth from new capital injections.
+    """
     empty = {"data_points": [], "portfolio_pct": 0.0, "spy_pct": 0.0, "alpha": 0.0, "inception": None}
     if not os.path.exists(_LOG_PATH):
         return empty
@@ -87,29 +102,57 @@ def get_claude_performance() -> dict:
     if not completed:
         return empty
 
-    first_portfolio = completed[0]["portfolio_value"]
+    deposit_events = _load_deposit_events()
     first_spy = completed[0]["spy_price_at_rebalance"]
 
     data_points = []
-    for entry in completed:
+    cumulative_twr = 1.0
+    prev_value: float | None = None
+    prev_date = ""
+
+    for i, entry in enumerate(completed):
         ts = entry.get("timestamp", "")
         try:
             dt = datetime.fromisoformat(ts).astimezone(timezone.utc)
             label = dt.strftime("%b %Y")
+            curr_date = dt.strftime("%Y-%m-%d")
         except Exception:
             label = ts[:7] if ts else "—"
+            curr_date = ts[:10] if ts else ""
 
-        portfolio_pct = (entry["portfolio_value"] / first_portfolio - 1) * 100
-        spy_pct = (entry["spy_price_at_rebalance"] / first_spy - 1) * 100
+        spy_pct = round((entry["spy_price_at_rebalance"] / first_spy - 1) * 100, 2)
+
+        if i == 0:
+            data_points.append({"label": label, "portfolio_pct": 0.0, "spy_pct": 0.0})
+            prev_value = entry["portfolio_value"]
+            prev_date = curr_date
+            continue
+
+        curr_value = entry["portfolio_value"]
+        deposits_in_period = sum(
+            amt for dt, amt in deposit_events
+            if prev_date < dt <= curr_date
+        )
+
+        if prev_value and prev_value > 0:
+            sub_return = (curr_value - deposits_in_period) / prev_value - 1
+        else:
+            sub_return = 0.0
+
+        cumulative_twr *= (1 + sub_return)
+        portfolio_pct = round((cumulative_twr - 1) * 100, 2)
+
         data_points.append({
             "label": label,
-            "portfolio_pct": round(portfolio_pct, 2),
-            "spy_pct": round(spy_pct, 2),
+            "portfolio_pct": portfolio_pct,
+            "spy_pct": spy_pct,
         })
+        prev_value = curr_value
+        prev_date = curr_date
 
     final_port = data_points[-1]["portfolio_pct"]
-    final_spy  = data_points[-1]["spy_pct"]
-    inception  = None
+    final_spy = data_points[-1]["spy_pct"]
+    inception = None
     try:
         dt = datetime.fromisoformat(completed[0]["timestamp"]).astimezone(timezone.utc)
         inception = dt.strftime("%B %Y")

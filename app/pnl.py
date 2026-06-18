@@ -17,7 +17,7 @@ from typing import Optional
 import pytz
 
 from app.chart import generate_equity_chart, generate_investor_pie_chart
-from app.investors import compute_breakdown, format_discord_message, load_investors
+from app.investors import compute_breakdown, format_discord_message, get_deposit_events, load_investors
 from app.notifications import notify, notify_investors, notify_investors_with_chart, notify_with_chart
 import yfinance as yf
 
@@ -72,20 +72,49 @@ def _fund_inception_idx(timestamps, equity) -> int:
     return _first_nonzero_idx(equity)
 
 
-def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
-    """Compute P&L from a PortfolioHistory object.
+def deposit_adjusted_equity(
+    equity: list,
+    timestamps: list,
+    deposit_events: list[tuple[str, float]],
+) -> list:
+    """Return equity series with cumulative post-start deposits subtracted.
 
-    Uses first equity value as open and last as close.
+    Removes step-jumps caused by capital injections so that P&L and charts
+    reflect actual trading performance rather than account funding activity.
+    Each deposit date is counted once even in minute-granularity series.
     """
+    from collections import defaultdict
+    by_date: dict[str, float] = defaultdict(float)
+    for dt, amt in deposit_events:
+        by_date[dt] += amt
+    result = []
+    cumulative = 0.0
+    seen_dates: set[str] = set()
+    for i, (eq, ts) in enumerate(zip(equity, timestamps)):
+        if i > 0:
+            date_str = datetime.fromtimestamp(ts, tz=ET).strftime("%Y-%m-%d")
+            if date_str not in seen_dates:
+                cumulative += by_date.get(date_str, 0.0)
+                seen_dates.add(date_str)
+        result.append((eq - cumulative) if eq is not None else None)
+    return result
+
+
+def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
+    """Compute deposit-adjusted P&L from a PortfolioHistory object."""
     if not history.equity or start_idx >= len(history.equity):
         raise ValueError(f"No equity data available for {period} report")
-    open_eq = history.equity[start_idx]
-    close_eq = next((eq for eq in reversed(history.equity) if eq is not None), None)
-    if close_eq is None:
+    equity = list(history.equity[start_idx:])
+    timestamps = list(history.timestamp[start_idx:])
+    raw_close = next((eq for eq in reversed(equity) if eq is not None), None)
+    if raw_close is None:
         raise ValueError(f"No valid close equity for {period} report")
-    dollar = close_eq - open_eq
-    pct = (dollar / open_eq * 100) if open_eq else 0.0
-    return PnLResult(period=period, close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
+    adj = deposit_adjusted_equity(equity, timestamps, get_deposit_events())
+    open_adj = next((eq for eq in adj if eq), None) or equity[0]
+    close_adj = next((eq for eq in reversed(adj) if eq is not None), None) or raw_close
+    dollar = close_adj - open_adj
+    pct = (dollar / open_adj * 100) if open_adj else 0.0
+    return PnLResult(period=period, close_equity=raw_close, dollar_pnl=dollar, pct_pnl=pct)
 
 
 def compute_spy_pct(period: str) -> Optional[float]:
@@ -230,15 +259,19 @@ async def send_weekly_report() -> None:
             except Exception as exc:
                 log.warning("Could not fetch current equity for weekly report: %s", exc)
 
-        # P&L from the same equity list the chart uses
+        # Deposit-adjusted P&L — strips out capital injections
         open_eq = next((eq for eq in equity if eq), None)
         if open_eq is None:
             raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for weekly report")
-        dollar_pnl = close_eq - open_eq
-        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        _devts = get_deposit_events()
+        _adj = deposit_adjusted_equity(equity, timestamps, _devts)
+        _adj_open = next((eq for eq in _adj if eq), None) or open_eq
+        _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
+        dollar_pnl = _adj_close - _adj_open
+        pct_pnl = (dollar_pnl / _adj_open * 100) if _adj_open else 0.0
         result = PnLResult(period="weekly", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
 
         # SPY from same date range and same Close.iloc[0] baseline as chart
@@ -261,7 +294,7 @@ async def send_weekly_report() -> None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    equity, timestamps, spy_df, chart_title
+                    _adj, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("Weekly chart generation failed: %s", exc)
@@ -302,8 +335,12 @@ async def send_monthly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for monthly report")
-        dollar_pnl = close_eq - open_eq
-        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        _devts = get_deposit_events()
+        _adj = deposit_adjusted_equity(equity, timestamps, _devts)
+        _adj_open = next((eq for eq in _adj if eq), None) or open_eq
+        _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
+        dollar_pnl = _adj_close - _adj_open
+        pct_pnl = (dollar_pnl / _adj_open * 100) if _adj_open else 0.0
         result = PnLResult(period="monthly", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
 
         start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
@@ -325,7 +362,7 @@ async def send_monthly_report() -> None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    equity, timestamps, spy_df, chart_title
+                    _adj, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("Monthly chart generation failed: %s", exc)
@@ -366,8 +403,12 @@ async def send_yearly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for yearly report")
-        dollar_pnl = close_eq - open_eq
-        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        _devts = get_deposit_events()
+        _adj = deposit_adjusted_equity(equity, timestamps, _devts)
+        _adj_open = next((eq for eq in _adj if eq), None) or open_eq
+        _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
+        dollar_pnl = _adj_close - _adj_open
+        pct_pnl = (dollar_pnl / _adj_open * 100) if _adj_open else 0.0
         result = PnLResult(period="yearly", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
 
         start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
@@ -389,7 +430,7 @@ async def send_yearly_report() -> None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    equity, timestamps, spy_df, chart_title
+                    _adj, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("Yearly chart generation failed: %s", exc)
@@ -436,8 +477,12 @@ async def send_ytd_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for YTD report")
-        dollar_pnl = close_eq - open_eq
-        pct_pnl = (dollar_pnl / open_eq * 100) if open_eq else 0.0
+        _devts = get_deposit_events()
+        _adj = deposit_adjusted_equity(equity, timestamps, _devts)
+        _adj_open = next((eq for eq in _adj if eq), None) or open_eq
+        _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
+        dollar_pnl = _adj_close - _adj_open
+        pct_pnl = (dollar_pnl / _adj_open * 100) if _adj_open else 0.0
         result = PnLResult(period="ytd", close_equity=close_eq, dollar_pnl=dollar_pnl, pct_pnl=pct_pnl)
 
         start_date = datetime.fromtimestamp(timestamps[0], tz=ET).date()
@@ -458,7 +503,7 @@ async def send_ytd_report() -> None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    equity, timestamps, spy_df, chart_title
+                    _adj, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("YTD chart generation failed: %s", exc)
@@ -495,15 +540,18 @@ async def send_alltime_report() -> None:
             except Exception as exc:
                 log.warning("Could not fetch current equity for all-time report: %s", exc)
 
-        # P&L from the same equity list the chart uses, with None guard
         open_eq = next((eq for eq in equity if eq), None)
         if open_eq is None:
             raise ValueError("No valid open equity")
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for all-time report")
-        dollar = close_eq - open_eq
-        pct = (dollar / open_eq * 100) if open_eq else 0.0
+        _devts = get_deposit_events()
+        _adj = deposit_adjusted_equity(equity, timestamps, _devts)
+        _adj_open = next((eq for eq in _adj if eq), None) or open_eq
+        _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
+        dollar = _adj_close - _adj_open
+        pct = (dollar / _adj_open * 100) if _adj_open else 0.0
         result = PnLResult(period="alltime", close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
 
         start_dt = datetime.fromtimestamp(timestamps[0], tz=ET)
@@ -529,7 +577,7 @@ async def send_alltime_report() -> None:
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    equity, timestamps, spy_df, chart_title
+                    _adj, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("All-time chart generation failed: %s", exc)
@@ -580,8 +628,12 @@ async def _send_since_date_report(start_date: _date, label: str, period_key: str
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError(f"No valid close equity for {label} report")
-        dollar = close_eq - open_eq
-        pct = (dollar / open_eq * 100) if open_eq else 0.0
+        _devts = get_deposit_events()
+        _adj = deposit_adjusted_equity(equity, timestamps, _devts)
+        _adj_open = next((eq for eq in _adj if eq), None) or open_eq
+        _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
+        dollar = _adj_close - _adj_open
+        pct = (dollar / _adj_open * 100) if _adj_open else 0.0
         result = PnLResult(period=period_key, close_equity=close_eq, dollar_pnl=dollar, pct_pnl=pct)
 
         actual_start = datetime.fromtimestamp(timestamps[0], tz=ET)
@@ -608,7 +660,7 @@ async def _send_since_date_report(start_date: _date, label: str, period_key: str
                 loop = asyncio.get_running_loop()
                 chart_bytes = await loop.run_in_executor(
                     None, generate_equity_chart,
-                    equity, timestamps, spy_df, chart_title
+                    _adj, timestamps, spy_df, chart_title
                 )
         except Exception as exc:
             log.warning("%s chart generation failed: %s", label, exc)

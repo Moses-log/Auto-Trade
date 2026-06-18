@@ -104,6 +104,17 @@ def get_total_deposited(investor: Investor) -> float:
     return sum(d.amount for d in investor.deposits)
 
 
+def get_deposit_events() -> list[tuple[str, float]]:
+    """Return [(iso_date, amount), ...] from all investors, sorted ascending.
+
+    Used by P&L modules to strip out external cash injections when computing
+    deposit-adjusted returns (prevents new capital from inflating P&L charts).
+    """
+    investors = load_investors()
+    events = [(d.date, d.amount) for inv in investors for d in inv.deposits]
+    return sorted(events)
+
+
 def _net_units(investor: Investor) -> float:
     """SPY units the investor currently holds (deposits minus all redemptions)."""
     deposit_units = sum(d.amount / d.entry_spy for d in investor.deposits if d.entry_spy)
