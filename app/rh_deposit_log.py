@@ -43,6 +43,17 @@ def append_rh_deposit(date: str, amount: float) -> None:
     tmp.replace(_LOG_FILE)
 
 
+def clear_rh_deposits() -> int:
+    """Delete all logged deposits. Returns the count that were removed."""
+    deposits = load_rh_deposits()
+    count = len(deposits)
+    _LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = _LOG_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps([], indent=2))
+    tmp.replace(_LOG_FILE)
+    return count
+
+
 def get_rh_deposit_events() -> list[tuple[str, float]]:
     """Return [(iso_date, amount), ...] for all logged RH deposits, sorted ascending."""
     return [(d["date"], d["amount"]) for d in load_rh_deposits()]

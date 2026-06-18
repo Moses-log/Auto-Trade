@@ -156,18 +156,24 @@ COMMANDS: list = [
     },
     {
         "name": "rh_deposit",
-        "description": "Log a cash deposit to the Robinhood trading account (strips it from track record chart)",
+        "description": "Log or clear RH trading account deposits (used to fix the track record chart)",
         "options": [
             {
                 "name": "amount",
                 "description": "Deposit amount in USD",
                 "type": 10,
-                "required": True,
+                "required": False,
             },
             {
                 "name": "date",
                 "description": "Deposit date (YYYY-MM-DD, defaults to today)",
                 "type": 3,
+                "required": False,
+            },
+            {
+                "name": "clear",
+                "description": "Set to True to remove all logged deposits",
+                "type": 5,
                 "required": False,
             },
         ],

@@ -374,9 +374,24 @@ async def handle_tax_robinhood(year: int, token: str) -> None:
     await _edit_original(token, f"✅ Robinhood tax summary for {year} posted to channel.")
 
 
-async def handle_rh_deposit(amount: float, deposit_date: Optional[str], token: str) -> None:
-    if amount <= 0:
-        await _edit_original(token, "❌ Amount must be positive")
+async def handle_rh_deposit(
+    token: str,
+    amount: Optional[float] = None,
+    deposit_date: Optional[str] = None,
+    clear: bool = False,
+) -> None:
+    if clear:
+        try:
+            from app.rh_deposit_log import clear_rh_deposits
+            count = clear_rh_deposits()
+        except Exception as exc:
+            await _edit_original(token, f"❌ Failed to clear deposits: {exc}")
+            return
+        await _edit_original(token, f"🗑️ Cleared {count} logged RH deposit(s). Track record chart reset.")
+        return
+
+    if amount is None or amount <= 0:
+        await _edit_original(token, "❌ Amount must be positive (or use clear: True to remove all)")
         return
     if deposit_date:
         try:
@@ -439,9 +454,10 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
                 await handle_close(ticker=ticker, broker=options.get("broker", "both"), token=token)
         elif command == "rh_deposit":
             await handle_rh_deposit(
-                amount=float(options["amount"]),
-                deposit_date=options.get("date"),
                 token=token,
+                amount=float(options["amount"]) if "amount" in options else None,
+                deposit_date=options.get("date"),
+                clear=bool(options.get("clear", False)),
             )
         elif command == "rebalance":
             await handle_rebalance(token=token)
