@@ -84,8 +84,73 @@ def get_claude_callouts() -> list:
 
 
 def get_claude_performance() -> dict:
-    """Return portfolio vs SPY performance normalized to 0% at inception."""
+    """Return portfolio vs SPY performance normalized to 0% at inception.
+
+    Primary source: rh_equity_history daily snapshots — the first snapshot
+    already includes all prior deposits at current market value, so no deposit
+    adjustment is needed unless a deposit occurs AFTER that first snapshot date.
+
+    Falls back to rebalance-log TWR when no equity history is available.
+    """
     empty = {"data_points": [], "portfolio_pct": 0.0, "spy_pct": 0.0, "alpha": 0.0, "inception": None}
+
+    # ── Primary path: daily equity-history snapshots ──────────────────────────
+    try:
+        from app.rh_equity_history import get_snapshots
+        from app.rh_deposit_log import get_rh_deposit_events
+        snapshots = get_snapshots()
+        if len(snapshots) >= 2:
+            deposit_by_date: dict[str, float] = {}
+            for dt, amt in get_rh_deposit_events():
+                deposit_by_date[dt] = deposit_by_date.get(dt, 0.0) + amt
+
+            first = snapshots[0]
+            first_equity = first["equity"]
+            first_spy = first["spy_close"]
+
+            if first_equity and first_spy and first_equity > 0:
+                data_points = []
+                cumulative_deposit = 0.0
+
+                for snap in snapshots:
+                    date_str = snap["date"]
+                    # Only subtract deposits logged AFTER the first snapshot;
+                    # anything before is already priced into first_equity.
+                    if date_str > first["date"] and date_str in deposit_by_date:
+                        cumulative_deposit += deposit_by_date[date_str]
+
+                    if not snap["equity"] or not snap["spy_close"]:
+                        continue
+
+                    adj_equity = snap["equity"] - cumulative_deposit
+                    portfolio_pct = round((adj_equity / first_equity - 1) * 100, 2)
+                    spy_pct = round((snap["spy_close"] / first_spy - 1) * 100, 2)
+
+                    try:
+                        label = datetime.strptime(date_str, "%Y-%m-%d").strftime("%b %-d")
+                    except Exception:
+                        label = date_str
+
+                    data_points.append({"label": label, "portfolio_pct": portfolio_pct, "spy_pct": spy_pct})
+
+                if data_points:
+                    final = data_points[-1]
+                    inception = None
+                    try:
+                        inception = datetime.strptime(first["date"], "%Y-%m-%d").strftime("%B %Y")
+                    except Exception:
+                        pass
+                    return {
+                        "data_points": data_points,
+                        "portfolio_pct": final["portfolio_pct"],
+                        "spy_pct": final["spy_pct"],
+                        "alpha": round(final["portfolio_pct"] - final["spy_pct"], 2),
+                        "inception": inception,
+                    }
+    except Exception as exc:
+        log.warning("get_claude_performance equity-history path failed: %s", exc)
+
+    # ── Fallback: rebalance-log TWR ───────────────────────────────────────────
     if not os.path.exists(_LOG_PATH):
         return empty
     try:
@@ -105,7 +170,6 @@ def get_claude_performance() -> dict:
         return empty
 
     first_spy = completed[0]["spy_price_at_rebalance"]
-
     data_points = []
     cumulative_twr = 1.0
     prev_value: float | None = None
@@ -135,11 +199,7 @@ def get_claude_performance() -> dict:
         cumulative_twr *= (1 + sub_return)
         portfolio_pct = round((cumulative_twr - 1) * 100, 2)
 
-        data_points.append({
-            "label": label,
-            "portfolio_pct": portfolio_pct,
-            "spy_pct": spy_pct,
-        })
+        data_points.append({"label": label, "portfolio_pct": portfolio_pct, "spy_pct": spy_pct})
         prev_value = curr_value
         prev_date = curr_date
 
