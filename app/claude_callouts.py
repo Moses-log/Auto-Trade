@@ -15,14 +15,35 @@ log = logging.getLogger(__name__)
 _LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
 
 
-def _load_deposit_events() -> list[tuple[str, float]]:
-    """Load deposit events from investors.json for TWR computation."""
+def _detect_rh_deposits_in_period(start_date: str, end_date: str) -> float:
+    """Return estimated deposits to the RH account between start_date (exclusive) and end_date (inclusive).
+
+    Scans rh_equity_history daily snapshots for day-over-day equity jumps that
+    exceed the SPY return by >20 percentage points — too large to be trading
+    gains, so they are treated as external capital injections.
+    """
     try:
-        from app.investors import get_deposit_events
-        return get_deposit_events()
+        from app.rh_equity_history import get_snapshots
+        snapshots = get_snapshots()
+        total = 0.0
+        for i in range(1, len(snapshots)):
+            curr, prev = snapshots[i], snapshots[i - 1]
+            if not (start_date < curr["date"] <= end_date):
+                continue
+            if not prev["equity"] or not curr["equity"] or prev["equity"] <= 0:
+                continue
+            equity_return = (curr["equity"] - prev["equity"]) / prev["equity"]
+            spy_return = 0.0
+            if prev.get("spy_close") and curr.get("spy_close") and prev["spy_close"] > 0:
+                spy_return = (curr["spy_close"] - prev["spy_close"]) / prev["spy_close"]
+            excess = equity_return - spy_return
+            if excess > 0.20:
+                total += prev["equity"] * excess
+        return total
     except Exception as exc:
-        log.warning("Could not load deposit events for TWR: %s", exc)
-        return []
+        log.warning("RH deposit detection failed: %s", exc)
+        return 0.0
+
 
 _ACTION_EMOJI = {
     "BUY":         "🟢",
@@ -97,25 +118,44 @@ def get_claude_performance() -> dict:
     if not completed:
         return empty
 
-    first_portfolio = completed[0]["portfolio_value"]
     first_spy = completed[0]["spy_price_at_rebalance"]
 
     data_points = []
-    for entry in completed:
+    cumulative_twr = 1.0
+    prev_value: float | None = None
+    prev_date: str = ""
+
+    for i, entry in enumerate(completed):
         ts = entry.get("timestamp", "")
         try:
             dt = datetime.fromisoformat(ts).astimezone(timezone.utc)
             label = dt.strftime("%b %Y")
+            curr_date = dt.strftime("%Y-%m-%d")
         except Exception:
             label = ts[:7] if ts else "—"
+            curr_date = ts[:10] if ts else "9999-12-31"
 
-        portfolio_pct = (entry["portfolio_value"] / first_portfolio - 1) * 100
-        spy_pct = (entry["spy_price_at_rebalance"] / first_spy - 1) * 100
+        spy_pct = round((entry["spy_price_at_rebalance"] / first_spy - 1) * 100, 2)
+
+        if i == 0:
+            data_points.append({"label": label, "portfolio_pct": 0.0, "spy_pct": 0.0})
+            prev_value = entry["portfolio_value"]
+            prev_date = curr_date
+            continue
+
+        curr_value = entry["portfolio_value"]
+        deposits = _detect_rh_deposits_in_period(prev_date, curr_date)
+        sub_return = (curr_value - deposits) / prev_value - 1 if prev_value and prev_value > 0 else 0.0
+        cumulative_twr *= (1 + sub_return)
+        portfolio_pct = round((cumulative_twr - 1) * 100, 2)
+
         data_points.append({
             "label": label,
-            "portfolio_pct": round(portfolio_pct, 2),
-            "spy_pct": round(spy_pct, 2),
+            "portfolio_pct": portfolio_pct,
+            "spy_pct": spy_pct,
         })
+        prev_value = curr_value
+        prev_date = curr_date
 
     final_port = data_points[-1]["portfolio_pct"]
     final_spy  = data_points[-1]["spy_pct"]

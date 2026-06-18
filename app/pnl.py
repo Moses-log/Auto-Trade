@@ -82,14 +82,27 @@ def deposit_adjusted_equity(
 ) -> list:
     """Return equity series with cumulative post-start deposits subtracted.
 
-    Removes step-jumps caused by capital injections so that P&L and charts
-    reflect actual trading performance rather than account funding activity.
-    Each deposit date is counted once even in minute-granularity series.
+    Uses explicit deposit_events when available (e.g. from Alpaca activities API).
+    Falls back to auto-detection: any bar-over-bar equity increase >20% is far too
+    large to be a trading gain and is treated as an external capital injection.
+    Each detected deposit date is counted once even in minute-granularity series.
     """
     from collections import defaultdict
     by_date: dict[str, float] = defaultdict(float)
-    for dt, amt in deposit_events:
-        by_date[dt] += amt
+
+    if deposit_events:
+        for dt, amt in deposit_events:
+            by_date[dt] += amt
+    else:
+        # Auto-detect: flag equity jumps too large to be trading gains as deposits
+        for i in range(1, len(equity)):
+            prev_eq, curr_eq = equity[i - 1], equity[i]
+            if prev_eq is None or curr_eq is None or prev_eq <= 0:
+                continue
+            if (curr_eq - prev_eq) / prev_eq > 0.20:
+                date_str = datetime.fromtimestamp(timestamps[i], tz=ET).strftime("%Y-%m-%d")
+                by_date[date_str] += prev_eq * ((curr_eq - prev_eq) / prev_eq)
+
     result = []
     cumulative = 0.0
     seen_dates: set[str] = set()
