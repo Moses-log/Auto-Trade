@@ -71,7 +71,7 @@ def _format_rh_message(
     ]
 
     if dollar_pnl is not None and pct_pnl is not None:
-        if dollar_pnl >= 0:
+        if dollar_pnl > 0:
             pnl_str = f"+${dollar_pnl:,.2f}"
             pct_str = f"+{pct_pnl:.2f}%"
             result_label = "🟢 WIN"
@@ -168,7 +168,7 @@ async def notify_rh_trade(
         if side == "sell" and avg_buy_price and fill_price and qty and avg_buy_price != 0:
             dollar_pnl = (fill_price - avg_buy_price) * qty
             pct_pnl = (fill_price - avg_buy_price) / avg_buy_price * 100
-            wins, losses = await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
+            wins, losses = await record_rh_trade(dollar_pnl > 0, ticker, dollar_pnl)
             record_str = format_rh_record(wins, losses)
 
         message = _format_rh_message(

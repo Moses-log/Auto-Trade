@@ -5,9 +5,16 @@ import os
 import threading
 import time
 from collections import deque
-from datetime import datetime, timezone
+from datetime import date as _date, datetime, timezone
 from pathlib import Path
 from typing import Optional
+
+import pytz
+
+_ET = pytz.timezone("America/New_York")
+# Trades before this date are from before the fund launched and must not
+# pollute the Alpaca FIFO fallback stats.
+_FUND_INCEPTION = _date(2026, 4, 27)
 
 from app.early_access import load_spots
 
@@ -60,7 +67,7 @@ def append_kimi_trade(ticker: str, buy: float, sell: float, qty: float) -> None:
         return
     pct_pnl  = round((sell - buy) / buy * 100, 2)
     dollar_pnl = round((sell - buy) * qty, 2)
-    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    today = datetime.now(_ET).strftime("%Y-%m-%d")
     entry = {
         "date":       datetime.strptime(today, "%Y-%m-%d").strftime("%m/%d"),
         "full_date":  today,
@@ -68,7 +75,7 @@ def append_kimi_trade(ticker: str, buy: float, sell: float, qty: float) -> None:
         "sell":       round(sell, 2),
         "pct_pnl":   pct_pnl,
         "dollar_pnl": dollar_pnl,
-        "won":        dollar_pnl >= 0,
+        "won":        dollar_pnl > 0,
     }
     with _write_lock:
         trades = _load_manual_trades() or []
@@ -179,7 +186,7 @@ def compute_stats(filled_orders: list) -> dict:
                 dollar_pnl = proceeds - cost_basis
                 pct_pnl    = (dollar_pnl / cost_basis) * 100
                 trades.append({
-                    "won":       dollar_pnl >= 0,
+                    "won":       dollar_pnl > 0,
                     "dollar_pnl": dollar_pnl,
                     "pct_pnl":   pct_pnl,
                     "date":      dt.strftime("%m/%d"),
@@ -259,6 +266,9 @@ async def get_public_stats() -> dict:
     try:
         from app.trading.alpaca_client import get_all_spy_orders
         orders = await loop.run_in_executor(None, get_all_spy_orders)
+        # Strip orders before fund inception — same contamination guard as the original FIFO bug fix
+        _inception_dt = datetime.combine(_FUND_INCEPTION, datetime.min.time()).replace(tzinfo=timezone.utc)
+        orders = [o for o in orders if o.filled_at and o.filled_at >= _inception_dt]
     except Exception as exc:
         log.warning("Failed to fetch SPY orders for public stats: %s", exc)
         orders = []

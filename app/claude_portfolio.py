@@ -4,9 +4,13 @@ import json
 import logging
 import os
 import threading
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
+
+import pytz
+
+_ET = pytz.timezone("America/New_York")
 
 log = logging.getLogger(__name__)
 
@@ -62,7 +66,7 @@ def open_position(
             "ticker": ticker,
             "qty": qty,
             "entry_price": entry_price,
-            "entry_date": date.today().isoformat(),
+            "entry_date": datetime.now(_ET).date().isoformat(),
             "tweet_url": tweet_url or "",
         })
         _save(data)
@@ -96,10 +100,10 @@ def close_position(
             "dollar_pnl": dollar_pnl,
             "pct_pnl": pct_pnl,
             "entry_date": pos.get("entry_date", ""),
-            "exit_date": date.today().isoformat(),
+            "exit_date": datetime.now(_ET).date().isoformat(),
             "tweet_url": tweet_url or pos.get("tweet_url", ""),
         })
-        if dollar_pnl >= 0:
+        if dollar_pnl > 0:
             data["wins"] = data.get("wins", 0) + 1
         else:
             data["losses"] = data.get("losses", 0) + 1
@@ -128,7 +132,8 @@ def trim_position(
         pct_pnl = (exit_price - entry_price) / entry_price * 100 if entry_price else 0.0
 
         pos["qty"] -= qty_sold
-        if pos["qty"] < 0.0001:
+        fully_closed = pos["qty"] < 0.0001
+        if fully_closed:
             data["positions"] = [p for p in data["positions"] if p["ticker"] != ticker]
         data["closed"].append({
             "ticker": ticker,
@@ -138,13 +143,15 @@ def trim_position(
             "dollar_pnl": dollar_pnl,
             "pct_pnl": pct_pnl,
             "entry_date": pos.get("entry_date", ""),
-            "exit_date": date.today().isoformat(),
-            "partial": True,
+            "exit_date": datetime.now(_ET).date().isoformat(),
+            "partial": not fully_closed,
         })
-        if dollar_pnl >= 0:
-            data["wins"] = data.get("wins", 0) + 1
-        else:
-            data["losses"] = data.get("losses", 0) + 1
+        # Only count win/loss when the full position is closed, not on partial trims
+        if fully_closed:
+            if dollar_pnl > 0:
+                data["wins"] = data.get("wins", 0) + 1
+            else:
+                data["losses"] = data.get("losses", 0) + 1
         _save(data)
 
     log.info("Claude portfolio: trimmed %s by %.4f shares @ %.2f, P&L=%.2f", ticker, qty_sold, exit_price, dollar_pnl)

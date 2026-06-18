@@ -57,6 +57,21 @@ def _first_nonzero_idx(equity) -> int:
     return next((i for i, eq in enumerate(equity) if eq and eq > 0), 0)
 
 
+def _fund_inception_idx(timestamps, equity) -> int:
+    """Return first index at or after FUND_INCEPTION_DATE with non-zero equity.
+
+    Prevents pre-fund Alpaca account history from contaminating P&L baselines.
+    Falls back to _first_nonzero_idx if no inception-bounded sample exists.
+    """
+    inception_epoch = ET.localize(
+        datetime.combine(FUND_INCEPTION_DATE, datetime.min.time())
+    ).timestamp()
+    for i, (ts, eq) in enumerate(zip(timestamps, equity)):
+        if ts is not None and ts >= inception_epoch and eq and eq > 0:
+            return i
+    return _first_nonzero_idx(equity)
+
+
 def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
     """Compute P&L from a PortfolioHistory object.
 
@@ -394,12 +409,15 @@ async def send_ytd_report() -> None:
     now = datetime.now(ET)
     today = now.date()
     jan1 = today.replace(month=1, day=1)
-    days = max((today - jan1).days, 1)
-    date_str = f"YTD Jan 1–{now.strftime('%b')} {now.day}, {now.year}"
-    chart_title = f"YTD Performance: Jan 1–{now.strftime('%b %d, %Y')}"
+    # If fund started mid-year, anchor YTD to inception so pre-fund history is excluded
+    effective_start = FUND_INCEPTION_DATE if FUND_INCEPTION_DATE > jan1 else jan1
+    days = max((today - effective_start).days, 1)
+    start_label = effective_start.strftime(f"%b {effective_start.day}")
+    date_str = f"YTD {start_label}–{now.strftime('%b')} {now.day}, {now.year}"
+    chart_title = f"YTD Performance: {start_label}–{now.strftime('%b %d, %Y')}"
     try:
         history = get_portfolio_history(period=f"{days}D", timeframe="1D")
-        start_idx = _first_nonzero_idx(history.equity)
+        start_idx = _fund_inception_idx(history.timestamp, history.equity)
 
         equity = list(history.equity[start_idx:])
         timestamps = list(history.timestamp[start_idx:])
@@ -461,7 +479,7 @@ async def send_alltime_report() -> None:
     try:
         history = get_portfolio_history(period="all", timeframe="1D")
 
-        start_idx = _first_nonzero_idx(history.equity)
+        start_idx = _fund_inception_idx(history.timestamp, history.equity)
         if not history.equity or start_idx >= len(history.equity):
             raise ValueError("No equity data available for all-time report")
 
