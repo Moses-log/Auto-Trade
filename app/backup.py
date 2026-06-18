@@ -43,6 +43,8 @@ _BACKUP_FILES: list[tuple[str, Path]] = [
     ("rh_deposits.json",           Path(os.getenv("RH_DEPOSIT_LOG_FILE",    "/data/rh_deposits.json"))),
     ("kimi_trades.json",           Path("/data/kimi_trades.json")),
     ("early_access.json",          Path("/data/early_access.json")),
+    ("visits.json",                Path(os.getenv("VISITS_FILE",            "/data/visits.json"))),
+    ("rh_keep_alive_state.json",   Path(os.getenv("RH_KEEP_ALIVE_FILE",     "/data/rh_keep_alive_state.json"))),
 ]
 
 
