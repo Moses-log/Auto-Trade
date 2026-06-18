@@ -237,7 +237,7 @@ Every Friday at 4:00 PM ET (and via `/portfolio` slash command), the system:
 app/
 ├── main.py               # FastAPI app — all HTTP endpoints, app lifespan
 ├── config.py             # All settings via pydantic-settings (env vars / .env)
-├── models.py             # Pydantic models: AlertPayload, DepositRequest, TradingAction
+├── models.py             # Pydantic models: AlertPayload, DepositRequest, WithdrawRequest, TradingAction
 ├── security.py           # Shared-secret webhook validation (constant-time hmac.compare_digest)
 ├── idempotency.py        # Duplicate-alert suppression — disk-backed TTL store
 ├── logging_config.py     # Structured JSON logging setup
@@ -533,6 +533,57 @@ Record a cash deposit for an investor.
 { "secret": "...", "investor": "Moses", "amount": 500, "spy_price": null }
 ```
 
+Omit `spy_price` to use the live Alpaca quote. Creates the investor if they don't exist yet.
+
+---
+
+### `POST /withdraw`
+Process a cash withdrawal for an investor. Uses FIFO lot matching against the investor's deposit history.
+
+```json
+{ "secret": "...", "investor": "Moses", "amount": 1000, "spy_price": null }
+```
+
+Omit `spy_price` to use the live Alpaca quote. The endpoint:
+1. FIFO-matches the withdrawal amount against the investor's deposit lots (oldest first), respecting all prior withdrawals so no lot is consumed twice
+2. Classifies each lot as **short-term** (held < 365 days) or **long-term** (≥ 365 days)
+3. Records a `Withdrawal` object in `investors.json` — deposits are never modified
+4. Posts a detailed Discord notification to `DISCORD_INVESTORS_WEBHOOK_URL`
+5. Pushes a Gist backup
+
+**Response:**
+```json
+{
+  "investor": "Moses",
+  "proceeds": 1000.00,
+  "cost_basis": 942.18,
+  "realized_gain": 57.82,
+  "units_redeemed": 1.834521,
+  "spy_price": 545.20,
+  "lots": [
+    {
+      "entry_date": "2026-04-27",
+      "entry_spy": 502.10,
+      "holding_days": 51,
+      "short_term": true,
+      "units": 1.834521,
+      "cost": 942.18,
+      "proceeds": 1000.00,
+      "gain": 57.82
+    }
+  ]
+}
+```
+
+**Discord notification includes:**
+- Proceeds, cost basis, realized P&L
+- Per-lot breakdown when multiple lots are consumed (entry date, holding period, term classification)
+- Federal tax estimate: 37% on short-term net gains, 20% on long-term net gains (conservative top bracket)
+- After-tax take-home estimate
+- Investor's remaining position (equity, cost basis, unrealized P&L)
+
+> **Note:** `/withdraw` only does accounting. You must manually sell the corresponding SPY shares on Alpaca to raise the cash. The exact number of shares to sell is `units_redeemed` in the response.
+
 ### `POST /run-report`
 Manually trigger a P&L report.
 ```json
@@ -561,7 +612,7 @@ All commands are ephemeral (only visible to you) and restricted to `DISCORD_YOUR
 | Command | Parameters | What it does |
 |---|---|---|
 | `/deposit` | `investor`, `amount`, `spy_price` (opt.) | Records a cash deposit at current or specified SPY price |
-| `/withdraw` | `investor`, `amount` | Records a cash withdrawal |
+| `/withdraw` | `investor`, `amount` | FIFO-matches withdrawal against deposit lots, records `Withdrawal`, posts P&L + federal tax estimate to Discord |
 | `/report alpaca` | `type` | Fires an Alpaca P&L report (daily/weekly/monthly/ytd/1year/alltime/inception/both/investors) |
 | `/report custom` | `date` | Fires an Alpaca P&L report since the given date (YYYY-MM-DD) |
 | `/report robinhood` | `type` | Fires a Robinhood P&L report (daily/weekly/monthly/ytd/1year/alltime) |
@@ -728,7 +779,7 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | File | Updated by | Purpose |
 |---|---|---|
 | `robinhood.pickle` | Auth endpoints, keep-alive | RH session token |
-| `investors.json` | `/deposit`, `/withdraw` | Investor deposit history |
+| `investors.json` | `/deposit`, `/withdraw` | Investor deposit lots + withdrawal history (immutable deposits, separate withdrawals list) |
 | `trade_record.json` | Every Alpaca sell | Alpaca win/loss record |
 | `rh_trade_record.json` | Every RH sell (all strategies) | Robinhood win/loss + tax record |
 | `leverage_entry.json` | Every `add_leverage` | DCA fill price for accurate P&L |
@@ -775,15 +826,19 @@ The RH tax report captures **all RH sells** — Kimi strategy trades and all Kim
 
 ## Investor Tracking
 
-Each investor's deposit history is stored in `investors.json`. Equity is calculated as:
+Each investor's history is stored in `investors.json` as immutable deposit lots plus a separate withdrawals list. **Deposits are never modified** — withdrawals are recorded separately.
 
+**Equity formula (unit NAV model):**
 ```
-equity = deposit.amount × (current_SPY / deposit.entry_spy)
+deposit_units   = Σ (deposit.amount / deposit.entry_spy)   for each deposit
+withdrawn_units = Σ withdrawal.units                        for each withdrawal
+net_units       = deposit_units - withdrawn_units
+current_equity  = net_units × current_SPY_price
 ```
 
-Multiple deposits at different SPY prices are each tracked independently.
+Each deposit buys a number of SPY "units" at the price paid. Each withdrawal redeems units FIFO. This mirrors how hedge fund NAV accounting works — investors share proportional gains regardless of when they joined.
 
-The investor breakdown report (`/report alpaca type:Investor Breakdown`, daily Mon–Thu, posted to `DISCORD_INVESTORS_WEBHOOK_URL`) includes a cyberpunk-style donut chart showing each investor's equity and share of the total portfolio.
+The investor breakdown report (daily Mon–Thu, `DISCORD_INVESTORS_WEBHOOK_URL`) shows each investor's net cost basis in the fund, current equity, P&L, portfolio share, and cumulative withdrawn proceeds. Includes a cyberpunk-style donut chart.
 
 ```json
 {
@@ -791,12 +846,24 @@ The investor breakdown report (`/report alpaca type:Investor Breakdown`, daily M
     {
       "name": "Moses",
       "deposits": [
-        { "amount": 300, "entry_spy": 707.116, "date": "2026-05-09" }
+        { "amount": 5000, "entry_spy": 502.10, "date": "2026-04-27" },
+        { "amount": 2000, "entry_spy": 530.40, "date": "2026-05-15" }
+      ],
+      "withdrawals": [
+        {
+          "units": 1.834521,
+          "exit_spy": 545.20,
+          "cost_basis": 942.18,
+          "proceeds": 1000.00,
+          "date": "2026-06-17"
+        }
       ]
     }
   ]
 }
 ```
+
+> **Manual sell required on withdrawal:** The system records the accounting and tells you exactly how many SPY shares to sell (`units_redeemed`). The actual Alpaca sale is manual — the system does not auto-sell.
 
 ---
 
@@ -910,6 +977,28 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Investor fund model + `/withdraw` endpoint (June 17, 2026)
+
+| Change | Details |
+|---|---|
+| Unit NAV model | Investor equity now uses a hedge-fund unit model: each deposit buys `amount / entry_spy` SPY "units"; equity = `net_units × current_spy`. All investors are unaffected by each other's withdrawals. |
+| `Withdrawal` dataclass | New dataclass (`units, exit_spy, cost_basis, proceeds, date`) stored as an immutable list on each investor. Deposits are never modified. Backwards-compatible — existing `investors.json` files without a `withdrawals` key load as empty list. |
+| `/withdraw` POST endpoint | FIFO-matches a dollar withdrawal against the investor's deposit lots, respects all prior withdrawals, classifies each lot as short-term (<365d) or long-term (≥365d), records the `Withdrawal`, saves, pushes Gist backup, and posts a detailed Discord notification with per-lot breakdown, federal tax estimate (37% ST / 20% LT), and remaining position. |
+| Discord `/withdraw` slash command | Upgraded from the old negative-deposit hack (which broke unit-based equity calculations) to the same FIFO `Withdrawal` logic as the REST endpoint. The Discord response is the full tax breakdown message. |
+| `compute_time_weighted_capital()` updated | Withdrawals now subtract their cost basis from the investor's time-weighted capital on the withdrawal date, keeping annual gain allocation fair when investors partially exit mid-year. |
+| Manual Alpaca sell required | The system handles accounting only. After recording a withdrawal, sell `units_redeemed` SPY shares on Alpaca manually to fund the cash payout. |
+
+### Data integrity bug fixes (June 2026)
+
+| Severity | Bug | Fix |
+|---|---|---|
+| High | All-time Alpaca P&L report included pre-fund equity history (before Apr 27, 2026 fund inception), inflating the baseline and understating all-time gains | Added `_fund_inception_idx()` in `pnl.py`; all-time and YTD reports now anchor at `FUND_INCEPTION_DATE` instead of first nonzero equity |
+| High | YTD report anchored to Jan 1 even when fund launched after Jan 1 — showed fake losses for the pre-fund period | YTD now uses `max(FUND_INCEPTION_DATE, Jan 1)` as the effective start date |
+| High | Partial position trims in `claude_portfolio.py` incremented the win/loss counter on every trim, not just on full close — a 3-trim exit counted as 3 wins | Win/loss counter only increments when `fully_closed = pos["qty"] < 0.0001` |
+| Medium | Breakeven trades (`dollar_pnl == 0`) were classified as WIN across `claude_portfolio.py`, `public_stats.py`, and `rh_trade_notifier.py` | Changed all `>= 0` WIN checks to `> 0` |
+| Medium | Trade and position dates used UTC (`datetime.now(timezone.utc)`) — trades placed late ET evening appeared with next-day dates | All date stamps now use `datetime.now(_ET).date()` throughout `claude_portfolio.py`, `public_stats.py` |
+| Medium | Alpaca FIFO fallback in `public_stats.py` included orders before fund inception, contaminating cost-basis stacks with pre-fund buy orders | Added inception date filter: orders before `FUND_INCEPTION_DATE` are excluded from the fallback computation |
 
 ### Backend updates (June 17, 2026)
 
