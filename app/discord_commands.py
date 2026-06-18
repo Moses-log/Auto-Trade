@@ -63,19 +63,19 @@ async def handle_deposit(
             return
 
     # Capture result inside lock, await Discord call outside to avoid deadlock
-    match_name = None
+    is_new = False
     async with investors_lock:
         investors = load_investors()
         match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
-        if match is not None:
-            match_name = match.name
-            match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
-            save_investors(investors)
+        if match is None:
+            match = Investor(name=investor_name, deposits=[])
+            investors.append(match)
+            is_new = True
+        match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
+        save_investors(investors)
 
-    if match_name is None:
-        await _edit_original(token, f'❌ Investor "{investor_name}" not found — check spelling')
-        return
-    await _edit_original(token, f"✅ {match_name} — ${amount:,.2f} deposit recorded\nSPY entry: ${spy_price:,.2f}")
+    status = "🆕 New investor added" if is_new else "✅ Deposit recorded"
+    await _edit_original(token, f"{status} — {match.name}\n${amount:,.2f} @ SPY ${spy_price:,.2f}")
 
 
 async def handle_withdraw(investor_name: str, amount: float, token: str) -> None:
