@@ -8,7 +8,15 @@ from typing import Optional
 import pytz
 
 from app.config import settings
-from app.investors import Deposit, get_total_deposited, load_investors, save_investors, investors_lock
+from app.investors import (
+    Deposit,
+    Withdrawal,
+    compute_withdrawal_lots,
+    format_withdrawal_message,
+    load_investors,
+    save_investors,
+    investors_lock,
+)
 from app.notifications import get_http_client
 from app.pnl import (
     send_daily_report,
@@ -80,29 +88,42 @@ async def handle_withdraw(investor_name: str, amount: float, token: str) -> None
         await _edit_original(token, "❌ Could not fetch SPY price — try again")
         return
 
-    # Capture result inside lock, await Discord calls outside to avoid deadlock
     error_msg = None
-    match_name = None
-    remaining = None
+    discord_msg = None
     async with investors_lock:
         investors = load_investors()
-        match = next((inv for inv in investors if inv.name.lower() == investor_name.lower()), None)
-        if match is None:
+        inv = next((i for i in investors if i.name.lower() == investor_name.lower()), None)
+        if inv is None:
             error_msg = f'❌ Investor "{investor_name}" not found — check spelling'
         else:
-            match_name = match.name
-            total = get_total_deposited(match)
-            if amount > total:
-                error_msg = f"❌ Withdrawal ${amount:,.2f} exceeds {match_name} total ${total:,.2f}"
+            try:
+                lots, units_redeemed = compute_withdrawal_lots(inv, amount, spy_price)
+            except ValueError as exc:
+                error_msg = f"❌ {exc}"
             else:
-                match.deposits.append(Deposit(amount=-amount, entry_spy=spy_price, date=date.today().isoformat()))
+                total_cost_basis = sum(lot["cost"] for lot in lots)
+                # Build Discord message before recording (remaining-position math needs pre-withdrawal state)
+                discord_msg = format_withdrawal_message(inv, lots, units_redeemed, spy_price, amount)
+                inv.withdrawals.append(
+                    Withdrawal(
+                        units=units_redeemed,
+                        exit_spy=spy_price,
+                        cost_basis=total_cost_basis,
+                        proceeds=amount,
+                        date=date.today().isoformat(),
+                    )
+                )
                 save_investors(investors)
-                remaining = get_total_deposited(match)
 
     if error_msg:
         await _edit_original(token, error_msg)
         return
-    await _edit_original(token, f"✅ {match_name} — ${amount:,.2f} withdrawal recorded\nSPY @ ${spy_price:,.2f}\nRemaining deposited: ${remaining:,.2f}")
+
+    from app.notifications import notify_investors
+    from app.backup import push_backup
+    asyncio.create_task(notify_investors(discord_msg))
+    asyncio.create_task(push_backup())
+    await _edit_original(token, discord_msg)
 
 
 async def handle_report(broker: str, report_type: str, token: str, custom_date: Optional[str] = None) -> None:

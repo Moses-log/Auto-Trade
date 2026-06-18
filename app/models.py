@@ -110,3 +110,24 @@ class DepositRequest(BaseModel):
         if v is not None and v <= 0:
             raise ValueError("spy_price must be positive")
         return v
+
+
+class WithdrawRequest(BaseModel):
+    secret: str
+    investor: str
+    amount: float
+    spy_price: Optional[float] = None
+
+    @field_validator("amount")
+    @classmethod
+    def amount_must_be_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("amount must be positive")
+        return v
+
+    @field_validator("spy_price")
+    @classmethod
+    def spy_price_must_be_positive(cls, v: Optional[float]) -> Optional[float]:
+        if v is not None and v <= 0:
+            raise ValueError("spy_price must be positive")
+        return v

@@ -33,9 +33,18 @@ from pydantic import BaseModel, ValidationError
 
 from app.config import settings
 from app.idempotency import check_and_mark
-from app.investors import Deposit, Investor, load_investors, save_investors, investors_lock
+from app.investors import (
+    Deposit,
+    Investor,
+    Withdrawal,
+    compute_withdrawal_lots,
+    format_withdrawal_message,
+    load_investors,
+    save_investors,
+    investors_lock,
+)
 from app.logging_config import setup_logging
-from app.models import AlertPayload, DepositRequest, TradingAction
+from app.models import AlertPayload, DepositRequest, WithdrawRequest, TradingAction
 from app.notifications import notify, close_http_client, notify_rh_session
 from app.rh_trade_notifier import notify_rh_trade
 from app.pnl import (
@@ -760,6 +769,128 @@ async def deposit(request: Request) -> dict:
         "deposits": [
             {"amount": d.amount, "entry_spy": d.entry_spy, "date": d.date}
             for d in match.deposits
+        ],
+    }
+
+
+@app.post("/withdraw", tags=["investors"])
+async def withdraw(request: Request) -> dict:
+    """
+    Process a cash withdrawal for an investor.
+
+    Flow:
+      1. Parse and validate request against WithdrawRequest.
+      2. Verify webhook secret.
+      3. Resolve current SPY price (provided or live from Alpaca).
+      4. FIFO-match the withdrawal amount against the investor's deposit lots.
+      5. Record the Withdrawal, persist investors.json, push Gist backup.
+      6. Post a detailed summary (proceeds, FIFO lots, P&L, tax estimate) to Discord.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Request body must be valid JSON."},
+        )
+
+    if not isinstance(body, dict):
+        return JSONResponse(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            content={"error": "Request body must be a JSON object."},
+        )
+
+    verify_webhook_secret(body.get("secret", ""))
+
+    try:
+        req = WithdrawRequest(**body)
+    except ValidationError as exc:
+        def _serialisable(errors):
+            result = []
+            for err in errors:
+                err = dict(err)
+                if "ctx" in err:
+                    err["ctx"] = {k: str(v) for k, v in err["ctx"].items()}
+                err.pop("url", None)
+                result.append(err)
+            return result
+
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"error": "Invalid withdrawal request.", "detail": _serialisable(exc.errors())},
+        )
+
+    spy_price = req.spy_price
+    if spy_price is None:
+        spy_price = get_latest_price("SPY")
+        if spy_price is None:
+            raise HTTPException(status_code=502, detail="Could not fetch current SPY price from Alpaca.")
+
+    from app.notifications import notify_investors
+
+    async with investors_lock:
+        investors = load_investors()
+        inv = next(
+            (i for i in investors if i.name.lower() == req.investor.lower()),
+            None,
+        )
+        if inv is None:
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"error": f"Investor '{req.investor}' not found."},
+            )
+
+        try:
+            lots, units_redeemed = compute_withdrawal_lots(inv, req.amount, spy_price)
+        except ValueError as exc:
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"error": str(exc)},
+            )
+
+        total_cost_basis = sum(lot["cost"] for lot in lots)
+
+        # Generate Discord message BEFORE recording the withdrawal so that
+        # remaining-position math inside format_withdrawal_message uses the
+        # pre-withdrawal investor state.
+        msg = format_withdrawal_message(inv, lots, units_redeemed, spy_price, req.amount)
+
+        inv.withdrawals.append(
+            Withdrawal(
+                units=units_redeemed,
+                exit_spy=spy_price,
+                cost_basis=total_cost_basis,
+                proceeds=req.amount,
+                date=date.today().isoformat(),
+            )
+        )
+        save_investors(investors)
+
+    _fire(notify_investors(msg))
+
+    from app.backup import push_backup
+    _fire(push_backup())
+
+    realized_gain = round(req.amount - total_cost_basis, 2)
+    return {
+        "investor":       inv.name,
+        "proceeds":       req.amount,
+        "cost_basis":     round(total_cost_basis, 2),
+        "realized_gain":  realized_gain,
+        "units_redeemed": round(units_redeemed, 6),
+        "spy_price":      spy_price,
+        "lots": [
+            {
+                "entry_date":   lot["entry_date"],
+                "entry_spy":    lot["entry_spy"],
+                "holding_days": lot["holding_days"],
+                "short_term":   lot["short_term"],
+                "units":        round(lot["units"], 6),
+                "cost":         round(lot["cost"], 2),
+                "proceeds":     round(lot["proceeds"], 2),
+                "gain":         round(lot["gain"], 2),
+            }
+            for lot in lots
         ],
     }
 
