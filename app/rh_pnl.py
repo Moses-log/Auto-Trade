@@ -12,6 +12,7 @@ from app.notifications import notify_rh_pnl, notify_rh_pnl_with_chart
 from app.pnl import fetch_spy_close_price, format_spy_comparison_lines
 from app.rh_equity_history import get_snapshots, record_snapshot
 from app.rh_trade_record import format_rh_record, get_all_trades, get_totals
+from app.trading import alpaca_client
 from app.trading.robinhood_client import rh_client
 
 log = logging.getLogger(__name__)
@@ -138,6 +139,9 @@ async def record_rh_equity_snapshot() -> None:
     numbers captured at the same instant and never drift out of sync.
     """
     try:
+        if not alpaca_client.was_market_open_today():
+            log.info("record_rh_equity_snapshot: market holiday — skipping snapshot")
+            return
         equity = await rh_client.get_portfolio_equity_async()
         if equity is None:
             log.warning("record_rh_equity_snapshot: RH equity unavailable, skipping")

@@ -315,6 +315,23 @@ def is_market_open() -> bool:
         return True
 
 
+def was_market_open_today() -> bool:
+    """Return True if today is an actual trading session (not a holiday).
+
+    is_market_open() checks the live clock — always False at 4 PM ET even on
+    normal days. This checks Alpaca's calendar for today's date instead.
+    Defaults to True on error so snapshots aren't silently dropped.
+    """
+    today = date.today()
+    try:
+        req = GetCalendarRequest(start=today, end=today)
+        calendars = get_client().get_calendar(req)
+        return len(calendars) > 0
+    except Exception as exc:
+        log.warning("Could not check market calendar for today — assuming open: %s", exc)
+        return True
+
+
 def get_next_trading_day() -> date:
     """Return the next trading day using Alpaca's market calendar, with a weekday fallback."""
     today = date.today()
