@@ -17,6 +17,7 @@ from app.config import settings
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
 from app.rh_keep_alive_state import get_last_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
+from app.pending_withdrawals import load_pending_withdrawals
 
 log = logging.getLogger(__name__)
 
@@ -231,3 +232,33 @@ def reschedule_pending_orders() -> None:
                 replace_existing=True,
             )
         log.info("Rescheduled pending %s order %s for %s", broker, order_id, effective_run)
+
+
+def reschedule_pending_withdrawals() -> None:
+    from app.withdrawal_execution import execute_pending_withdrawal
+
+    records = load_pending_withdrawals()
+    if not records:
+        return
+
+    now = datetime.now(ET)
+    for record in records:
+        withdrawal_id = record["id"]
+        try:
+            run_dt = datetime.fromisoformat(record["run_at"])
+            if run_dt.tzinfo is None:
+                run_dt = ET.localize(run_dt)
+        except Exception:
+            run_dt = now
+
+        effective_run = run_dt if run_dt > now else now
+
+        scheduler.add_job(
+            execute_pending_withdrawal,
+            "date",
+            run_date=effective_run,
+            args=[withdrawal_id],
+            id=f"withdrawal_{withdrawal_id}",
+            replace_existing=True,
+        )
+        log.info("Rescheduled pending withdrawal %s for %s", withdrawal_id, effective_run)

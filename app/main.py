@@ -61,7 +61,7 @@ from app.pnl import (
     _yf_executor,
 )
 from app.trade_notifier import notify_trade
-from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders
+from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders, reschedule_pending_withdrawals
 from app.security import verify_webhook_secret
 from app.discord_commands import dispatch_command
 from app.interactions import extract_user_id, parse_options, verify_discord_signature
@@ -118,6 +118,7 @@ async def lifespan(app: FastAPI):
     init_live_trades()
     setup_jobs()
     reschedule_pending_orders()
+    reschedule_pending_withdrawals()
     scheduler.start()
     yield
     scheduler.shutdown(wait=False)
