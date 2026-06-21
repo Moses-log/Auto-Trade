@@ -6,6 +6,8 @@
 
 This spec adds a delay-and-cancel window to `/withdraw` so the legitimate operator has a chance to notice and stop a fraudulent request before the investor ledger is actually changed — even if the attacker is using the operator's own compromised Discord session, since the operator may still have working access elsewhere (another device/session) during the delay window.
 
+**Scope includes a second entry point.** `POST /withdraw` (`main.py:776`) performs the identical synchronous write, gated only by a single static `webhook_secret` shared across ~11 other endpoints (`app/security.py:15`, `app/config.py:22`) — no per-user identity check at all. Protecting only the Discord command would leave this as a complete bypass of the delay. Both entry points must go through the same pending-withdrawal mechanism (Section 7).
+
 ## Non-goals
 
 - `/deposit`, `/close`, `/rebalance`, `/rh_deposit` are untouched. `/close` in particular is the emergency-stop command — delaying it would be actively harmful.
@@ -81,6 +83,12 @@ Lists all currently-pending withdrawals (id, investor, amount, scheduled time) s
 ### 6. Startup rescheduling
 
 Extend the existing `reschedule_pending_orders()`-style startup hook (or add a sibling `reschedule_pending_withdrawals()`, called alongside it in `main.py`) so pending withdrawals survive an app restart during the delay window — same mechanism already proven for `pending_orders.json`.
+
+### 7. Shared validation/scheduling logic, used by both entry points
+
+A single `schedule_withdrawal(investor_name, amount)` function (new module, e.g. `app/withdrawal_execution.py`) contains all the validation and pending-record creation described in Section 2. Both `handle_withdraw()` (Discord) and `POST /withdraw` (HTTP, `main.py:776`) call this same function instead of duplicating the logic — closing the bypass and avoiding two copies of the same validation drifting apart over time.
+
+`POST /withdraw`'s behavior changes from "execute and return the final result" to "schedule and return the pending record" (`{"status": "scheduled", "id": ..., "investor": ..., "amount": ..., "run_at": ...}`), mirroring what the Discord command now does. The endpoint's existing `secret`-based auth is unchanged — this spec does not address the shared-secret-across-endpoints issue itself, only removes its ability to bypass the withdrawal delay.
 
 ## Data Model Summary
 
