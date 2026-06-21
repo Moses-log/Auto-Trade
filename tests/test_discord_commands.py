@@ -405,3 +405,34 @@ async def test_handle_cancel_withdrawal_not_found():
 
     msg = mock_edit.call_args[0][1]
     assert "No pending withdrawal" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_pending_withdrawals_lists_all_pending():
+    records = [
+        {"id": "wd-aaaa1111", "investor": "Moses", "amount": 500.0,
+         "requested_at": "2026-06-21T10:00:00-05:00", "run_at": "2026-06-22T10:00:00-05:00"},
+        {"id": "wd-bbbb2222", "investor": "Gabe", "amount": 200.0,
+         "requested_at": "2026-06-21T11:00:00-05:00", "run_at": "2026-06-22T11:00:00-05:00"},
+    ]
+    with patch("app.discord_commands.load_pending_withdrawals", return_value=records), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_pending_withdrawals
+        await handle_pending_withdrawals("test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "wd-aaaa1111" in msg
+    assert "Moses" in msg
+    assert "wd-bbbb2222" in msg
+    assert "Gabe" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_pending_withdrawals_reports_none_pending():
+    with patch("app.discord_commands.load_pending_withdrawals", return_value=[]), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_pending_withdrawals
+        await handle_pending_withdrawals("test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "No pending withdrawals" in msg

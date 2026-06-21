@@ -18,6 +18,7 @@ from app.investors import (
     save_investors,
     investors_lock,
 )
+from app.pending_withdrawals import load_pending_withdrawals
 from app.notifications import get_http_client
 from app.pnl import (
     send_daily_report,
@@ -114,6 +115,22 @@ async def handle_cancel_withdrawal(withdrawal_id: str, token: str) -> None:
         token,
         f"✅ Canceled withdrawal `{withdrawal_id}` — ${record['amount']:,.2f} for {record['investor']}.",
     )
+
+
+async def handle_pending_withdrawals(token: str) -> None:
+    records = load_pending_withdrawals()
+    if not records:
+        await _edit_original(token, "No pending withdrawals.")
+        return
+
+    lines = ["⏳ **Pending Withdrawals**", ""]
+    for r in records:
+        run_at_local = datetime.fromisoformat(r["run_at"]).astimezone(_CT)
+        lines.append(
+            f"`{r['id']}` — {r['investor']}: ${r['amount']:,.2f}"
+            f" (scheduled {run_at_local.strftime('%b %d, %I:%M %p %Z')})"
+        )
+    await _edit_original(token, "\n".join(lines))
 
 
 async def handle_report(broker: str, report_type: str, token: str, custom_date: Optional[str] = None) -> None:
@@ -422,6 +439,8 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
             )
         elif command == "cancel-withdrawal":
             await handle_cancel_withdrawal(withdrawal_id=options["id"], token=token)
+        elif command == "pending-withdrawals":
+            await handle_pending_withdrawals(token=token)
         elif command == "report":
             broker = options.get("_subcommand", "alpaca")
             if broker == "custom":

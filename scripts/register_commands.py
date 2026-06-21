@@ -71,6 +71,11 @@ COMMANDS: list = [
         ],
     },
     {
+        "name": "pending-withdrawals",
+        "description": "List withdrawals currently waiting out their delay window",
+        "options": [],
+    },
+    {
         "name": "report",
         "description": "Trigger a P&L report to Discord",
         "options": [
