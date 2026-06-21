@@ -106,7 +106,27 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
 
     spy_price = get_latest_price("SPY")
     if spy_price is None:
-        log.error("execute_pending_withdrawal: could not fetch SPY price for %s — leaving pending", withdrawal_id)
+        log.error("execute_pending_withdrawal: could not fetch SPY price for %s — retrying in 15 minutes", withdrawal_id)
+        retry_at = datetime.now(_CT) + timedelta(minutes=15)
+        try:
+            scheduler.add_job(
+                execute_pending_withdrawal,
+                "date",
+                run_date=retry_at,
+                args=[withdrawal_id],
+                id=f"withdrawal_{withdrawal_id}",
+                replace_existing=True,
+            )
+        except Exception:
+            log.exception("execute_pending_withdrawal: failed to schedule retry for %s", withdrawal_id)
+        try:
+            await notify_investors(
+                f"⚠️ Scheduled withdrawal for {record['investor']} (${record['amount']:,.2f}) "
+                f"could not execute — SPY price unavailable. Retrying at "
+                f"{retry_at.strftime('%b %d, %I:%M %p %Z')}."
+            )
+        except Exception:
+            log.exception("execute_pending_withdrawal: failed to send price-unavailable notification for %s", withdrawal_id)
         return
 
     discord_msg = None

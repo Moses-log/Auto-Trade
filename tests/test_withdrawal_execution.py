@@ -122,6 +122,31 @@ async def test_execute_pending_withdrawal_returns_silently_when_record_missing()
 
 
 @pytest.mark.asyncio
+async def test_execute_pending_withdrawal_retries_and_notifies_when_price_unavailable():
+    from app.withdrawal_execution import execute_pending_withdrawal
+    pending_record = {
+        "id": "wd-aaaa1111", "investor": "Moses", "amount": 500.0,
+        "requested_at": "2026-06-21T10:00:00-05:00", "run_at": "2026-06-22T10:00:00-05:00",
+    }
+    with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=pending_record), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=None), \
+         patch("app.withdrawal_execution.scheduler") as mock_scheduler, \
+         patch("app.withdrawal_execution.save_investors") as mock_save, \
+         patch("app.withdrawal_execution.remove_pending_withdrawal") as mock_remove, \
+         patch("app.withdrawal_execution.notify_investors") as mock_notify:
+        mock_notify.return_value = _async_none()
+        await execute_pending_withdrawal("wd-aaaa1111")
+
+    mock_save.assert_not_called()
+    mock_remove.assert_not_called()  # stays pending — this is a retry, not a terminal outcome
+    mock_scheduler.add_job.assert_called_once()
+    _, kwargs = mock_scheduler.add_job.call_args
+    assert kwargs["id"] == "withdrawal_wd-aaaa1111"
+    assert kwargs["replace_existing"] is True
+    mock_notify.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_execute_pending_withdrawal_audits_failed_when_equity_insufficient():
     from app.withdrawal_execution import execute_pending_withdrawal
     inv = _moses(deposits_amount=100.0)  # not enough left for a $500 withdrawal

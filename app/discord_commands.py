@@ -11,9 +11,6 @@ from app.config import settings
 from app.investors import (
     Deposit,
     Investor,
-    Withdrawal,
-    compute_withdrawal_lots,
-    format_withdrawal_message,
     load_investors,
     save_investors,
     investors_lock,
