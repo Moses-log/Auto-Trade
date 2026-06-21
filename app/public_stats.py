@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -99,6 +100,26 @@ def _fmt_full_date(s: str) -> str:
         return s
 
 
+def _compute_ratios(trades: list) -> dict:
+    """Sharpe and Sortino ratios from a list of trade dicts containing pct_pnl.
+
+    Both ratios use MAR=0 and are computed on a per-trade basis (not annualized),
+    since we don't have uniform holding periods.
+    """
+    n = len(trades)
+    if n < 2:
+        return {"sharpe": None, "sortino": None}
+    returns = [t["pct_pnl"] for t in trades]
+    mean_r = sum(returns) / n
+    variance = sum((r - mean_r) ** 2 for r in returns) / (n - 1)
+    std_dev = math.sqrt(variance)
+    sharpe = round(mean_r / std_dev, 2) if std_dev > 0 else None
+    downside_sq = sum(min(r, 0) ** 2 for r in returns)
+    downside_dev = math.sqrt(downside_sq / (n - 1))
+    sortino = round(mean_r / downside_dev, 2) if downside_dev > 0 else None
+    return {"sharpe": sharpe, "sortino": sortino}
+
+
 def compute_stats_from_manual(trades_data: list) -> dict:
     """Build the same stats dict as compute_stats(), but from kimi_trades.json."""
     if not trades_data:
@@ -132,12 +153,15 @@ def compute_stats_from_manual(trades_data: list) -> dict:
     if len(cumulative) > 100:
         cumulative = cumulative[-100:]
 
+    ratios = _compute_ratios(trades_data)
     return {
         "trades":        len(trades_data),
         "wins":          len(wins),
         "losses":        len(losses),
         "win_rate":      round(len(wins) / len(trades_data) * 100, 1),
         "profit_factor": profit_factor,
+        "sharpe":        ratios["sharpe"],
+        "sortino":       ratios["sortino"],
         "date_range": {
             "from": _fmt_full_date(trades_data[0].get("full_date", "")),
             "to":   _fmt_full_date(trades_data[-1].get("full_date", "")),
@@ -233,13 +257,16 @@ def compute_stats(filled_orders: list) -> dict:
     if len(cumulative) > 100:
         cumulative = cumulative[-100:]
 
+    ratios = _compute_ratios(trades)
     return {
-        "trades":       len(trades),
-        "wins":         len(wins),
-        "losses":       len(losses),
-        "win_rate":     round(len(wins) / len(trades) * 100, 1),
+        "trades":        len(trades),
+        "wins":          len(wins),
+        "losses":        len(losses),
+        "win_rate":      round(len(wins) / len(trades) * 100, 1),
         "profit_factor": profit_factor,
-        "date_range":   {"from": _fmt(first_dt), "to": _fmt(last_sell_dt)},
+        "sharpe":        ratios["sharpe"],
+        "sortino":       ratios["sortino"],
+        "date_range":    {"from": _fmt(first_dt), "to": _fmt(last_sell_dt)},
         "cumulative_returns": cumulative,
     }
 
