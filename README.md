@@ -118,6 +118,8 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   rh_trade_record.json      ← RH win/loss record (all strategies)
   leverage_entry.json       ← ADD_LEVERAGE fill prices (accurate DCA P&L)
   pending_orders.json       ← Queued orders (Alpaca + Kimi sells) — survive restarts
+  pending_withdrawals.json  ← Withdrawals awaiting their approval delay window
+  withdrawal_audit.json     ← Append-only log of executed / canceled / failed withdrawals
   idempotency.json          ← Seen alert IDs (duplicate suppression, 5 min TTL)
   claude_portfolio.json     ← Kimi Autopilot + Manager positions + W-L record
   claude_rebalance_log.json ← Monthly rebalance audit log (36 entries max)
@@ -261,6 +263,9 @@ app/
 ├── claude_portfolio.py   # Kimi position tracker — open/close/trim/W-L for both Kimi systems
 │
 ├── investors.py          # Investor data model, equity math, Discord report formatting
+├── pending_withdrawals.py # Persist delayed withdrawals awaiting their approval window
+├── withdrawal_audit.py    # Append-only audit log — every withdrawal's terminal outcome (executed/canceled/failed)
+├── withdrawal_execution.py # schedule_withdrawal / execute_pending_withdrawal / cancel_pending_withdrawal — shared by Discord /withdraw and POST /withdraw
 ├── trade_record.py       # Alpaca win/loss counter
 ├── rh_trade_record.py    # Robinhood win/loss counter (all strategies)
 ├── leverage_state.py     # Stores ADD_LEVERAGE fill price per ticker for P&L accuracy
@@ -358,6 +363,12 @@ scripts/
 | `DISCORD_BOT_TOKEN` | Discord bot token — Developer Portal → Bot → Reset Token |
 | `DISCORD_YOUR_USER_ID` | Your personal Discord user ID — only this user can run slash commands |
 
+### Withdrawal Approval
+
+| Variable | Default | Description |
+|---|---|---|
+| `WITHDRAWAL_DELAY_HOURS` | `24` | Hours a withdrawal (Discord `/withdraw` or `POST /withdraw`) waits before it actually executes. Gives you a window to `/cancel-withdrawal` a request you didn't make — see [Withdrawal Approval Delay](#withdrawal-approval-delay). |
+
 ### Discord Notification Channels
 
 | Variable | Description |
@@ -380,6 +391,8 @@ scripts/
 | `LEVERAGE_STATE_PATH` | `/data/leverage_entry.json` |
 | `CLAUDE_PORTFOLIO_PATH` | `/data/claude_portfolio.json` |
 | `CLAUDE_REBALANCE_LOG_PATH` | `/data/claude_rebalance_log.json` |
+| `PENDING_WITHDRAWALS_PATH` | `/data/pending_withdrawals.json` |
+| `WITHDRAWAL_AUDIT_PATH` | `/data/withdrawal_audit.json` |
 
 ### Other
 
@@ -538,51 +551,30 @@ Omit `spy_price` to use the live Alpaca quote. Creates the investor if they don'
 ---
 
 ### `POST /withdraw`
-Process a cash withdrawal for an investor. Uses FIFO lot matching against the investor's deposit history.
+Schedule a cash withdrawal for an investor. **As of June 2026 this no longer executes immediately** — see [Withdrawal Approval Delay](#withdrawal-approval-delay) for why. It validates the request and FIFO-checks it against the investor's current equity, then schedules the actual ledger write for `WITHDRAWAL_DELAY_HOURS` later (default 24h).
 
 ```json
 { "secret": "...", "investor": "Moses", "amount": 1000, "spy_price": null }
 ```
 
-Omit `spy_price` to use the live Alpaca quote. The endpoint:
-1. FIFO-matches the withdrawal amount against the investor's deposit lots (oldest first), respecting all prior withdrawals so no lot is consumed twice
-2. Classifies each lot as **short-term** (held < 365 days) or **long-term** (≥ 365 days)
-3. Records a `Withdrawal` object in `investors.json` — deposits are never modified
-4. Posts a detailed Discord notification to `DISCORD_INVESTORS_WEBHOOK_URL`
-5. Pushes a Gist backup
+Omit `spy_price` to use the live Alpaca quote (used only for the immediate validation check — the actual withdrawal re-fetches a live price at execution time).
 
 **Response:**
 ```json
 {
+  "status": "scheduled",
+  "id": "wd-70f921b5",
   "investor": "Moses",
-  "proceeds": 1000.00,
-  "cost_basis": 942.18,
-  "realized_gain": 57.82,
-  "units_redeemed": 1.834521,
-  "spy_price": 545.20,
-  "lots": [
-    {
-      "entry_date": "2026-04-27",
-      "entry_spy": 502.10,
-      "holding_days": 51,
-      "short_term": true,
-      "units": 1.834521,
-      "cost": 942.18,
-      "proceeds": 1000.00,
-      "gain": 57.82
-    }
-  ]
+  "amount": 1000.0,
+  "run_at": "2026-06-22T09:15:00-05:00"
 }
 ```
 
-**Discord notification includes:**
-- Proceeds, cost basis, realized P&L
-- Per-lot breakdown when multiple lots are consumed (entry date, holding period, term classification)
-- Federal tax estimate: 37% on short-term net gains, 20% on long-term net gains (conservative top bracket)
-- After-tax take-home estimate
-- Investor's remaining position (equity, cost basis, unrealized P&L)
+A `400` is returned immediately if the investor isn't found, the amount isn't positive, or the amount exceeds available equity — no need to wait for the delay window to find out a withdrawal request was invalid.
 
-> **Note:** `/withdraw` only does accounting. You must manually sell the corresponding SPY shares on Alpaca to raise the cash. The exact number of shares to sell is `units_redeemed` in the response.
+Cancel a scheduled withdrawal via the Discord `/cancel-withdrawal id:<id>` command before it executes (see below) — there is currently no HTTP endpoint for cancellation, only the Discord command.
+
+> **Note:** `/withdraw` only does accounting (once it executes). You must manually sell the corresponding SPY shares on Alpaca to raise the cash. The exact number of shares to sell is `units_redeemed`, available in the Discord notification posted to `DISCORD_INVESTORS_WEBHOOK_URL` once the withdrawal actually executes.
 
 ### `POST /run-report`
 Manually trigger a P&L report.
@@ -612,7 +604,9 @@ All commands are ephemeral (only visible to you) and restricted to `DISCORD_YOUR
 | Command | Parameters | What it does |
 |---|---|---|
 | `/deposit` | `investor`, `amount`, `spy_price` (opt.) | Records a cash deposit at current or specified SPY price |
-| `/withdraw` | `investor`, `amount` | FIFO-matches withdrawal against deposit lots, records `Withdrawal`, posts P&L + federal tax estimate to Discord |
+| `/withdraw` | `investor`, `amount` | Schedules a withdrawal for `WITHDRAWAL_DELAY_HOURS` later (default 24h); validates immediately, executes (FIFO lot match + P&L + tax estimate posted to Discord) only once the delay elapses |
+| `/cancel-withdrawal` | `id` | Cancels a scheduled withdrawal before it executes — `id` comes from the `/withdraw` confirmation message |
+| `/pending-withdrawals` | — | Lists all withdrawals currently waiting out their delay window |
 | `/report alpaca` | `type` | Fires an Alpaca P&L report (daily/weekly/monthly/ytd/1year/alltime/inception/both/investors) |
 | `/report custom` | `date` | Fires an Alpaca P&L report since the given date (YYYY-MM-DD) |
 | `/report robinhood` | `type` | Fires a Robinhood P&L report (daily/weekly/monthly/ytd/1year/alltime) |
@@ -867,6 +861,22 @@ The investor breakdown report (daily Mon–Thu, `DISCORD_INVESTORS_WEBHOOK_URL`)
 
 ---
 
+## Withdrawal Approval Delay
+
+Both the Discord `/withdraw` command and `POST /withdraw` used to write to `investors.json` immediately. As of June 2026, every withdrawal request — from either entry point — is scheduled instead of executed: a pending record is saved to `pending_withdrawals.json` and an APScheduler job is set to run `WITHDRAWAL_DELAY_HOURS` later (default 24h). This closes a real gap: anyone with your Discord session or the shared `WEBHOOK_SECRET` could otherwise drain an investor's recorded balance instantly, with no way for you to notice and stop it.
+
+**Flow:**
+1. **Request** — `/withdraw` or `POST /withdraw` validates the investor and amount (using a live SPY price for the check only) and schedules the withdrawal. Returns immediately with a `wd-` id and the `run_at` time.
+2. **Window** — for the next `WITHDRAWAL_DELAY_HOURS`, the withdrawal sits in `pending_withdrawals.json`. Run `/pending-withdrawals` to see everything currently scheduled. If a request wasn't really you, run `/cancel-withdrawal id:<id>` to stop it before it executes.
+3. **Execution** — when the delay elapses, the scheduled job re-fetches a live SPY price, re-validates the investor's current equity (in case it changed during the window), performs the FIFO lot match, writes the `Withdrawal` to `investors.json`, and posts the full P&L + tax breakdown to Discord — same content the old immediate-execution flow used to post.
+4. **Audit trail** — every withdrawal's outcome (`executed`, `canceled`, or `failed` — e.g. if equity became insufficient during the window) is appended to `withdrawal_audit.json`, so there's a permanent record even for requests that never executed.
+
+Survives restarts: any withdrawal still in its delay window when the app restarts is rescheduled on startup from `pending_withdrawals.json`, the same mechanism already used for `pending_orders.json`.
+
+If the scheduled job can't fetch a live SPY price when it fires, it automatically retries 15 minutes later and posts a Discord alert — it does not silently give up.
+
+---
+
 ## Win/Loss Record
 
 Three separate records updated on every sell:
@@ -968,6 +978,7 @@ No real Alpaca, Robinhood, or Discord calls are made — all external clients ar
 - Slash commands restricted to a single configured user ID (`DISCORD_YOUR_USER_ID`)
 - Robinhood pickle upload validated for file size (≤ 512 KB) and pickle magic bytes
 - Swagger UI (`/docs`, `/redoc`) disabled in production
+- Withdrawals (Discord `/withdraw` and `POST /withdraw`) are delayed `WITHDRAWAL_DELAY_HOURS` (default 24h) before executing, with a `/cancel-withdrawal` escape hatch — see [Withdrawal Approval Delay](#withdrawal-approval-delay). Limits the blast radius of a compromised Discord session or leaked `WEBHOOK_SECRET`: neither can drain an investor's balance instantly through either entry point.
 
 Generate a strong webhook secret:
 ```bash
@@ -977,6 +988,20 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Delayed withdrawal approval (June 21, 2026)
+
+| Change | Details |
+|---|---|
+| Security motivation | Both Discord `/withdraw` and `POST /withdraw` used to write to `investors.json` immediately. A compromised Discord session or a leaked `WEBHOOK_SECRET` (shared across ~11 endpoints, no per-user auth) could previously drain an investor's recorded balance instantly through either entry point with no way to notice or stop it. |
+| `WITHDRAWAL_DELAY_HOURS` setting | New `app/config.py` setting, default `24`. Both withdrawal entry points now schedule the withdrawal instead of executing it. |
+| `app/withdrawal_execution.py` | New shared module: `schedule_withdrawal()` (validates + schedules, used by both entry points), `execute_pending_withdrawal()` (the deferred FIFO write, run by APScheduler when the delay elapses — retries in 15 min with a Discord alert if a live SPY price isn't available), `cancel_pending_withdrawal()`. |
+| `app/pending_withdrawals.py`, `app/withdrawal_audit.py` | New storage modules (mirror `app/pending_orders.py`'s pattern) — `pending_withdrawals.json` holds withdrawals awaiting execution; `withdrawal_audit.json` is an append-only log of every withdrawal's outcome (executed / canceled / failed). |
+| `/cancel-withdrawal`, `/pending-withdrawals` | Two new Discord slash commands — cancel a scheduled withdrawal by id, or list everything currently pending. |
+| `POST /withdraw` response shape changed | Was a synchronous FIFO/tax breakdown; now returns `{"status": "scheduled", "id", "investor", "amount", "run_at"}`. The full breakdown now posts to Discord only once the withdrawal actually executes. |
+| Restart survival | Pending withdrawals are rescheduled on app startup (`reschedule_pending_withdrawals()` in `app/scheduler.py`), same mechanism already used for `pending_orders.json`. |
+
+See [Withdrawal Approval Delay](#withdrawal-approval-delay) for the full flow.
 
 ### Investor fund model + `/withdraw` endpoint (June 17, 2026)
 
