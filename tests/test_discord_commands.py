@@ -42,34 +42,37 @@ async def test_handle_deposit_investor_not_found():
 
 
 @pytest.mark.asyncio
-async def test_handle_withdraw_success():
+async def test_handle_withdraw_schedules_instead_of_writing_immediately():
     from app.investors import Investor, Deposit
     inv = Investor(name="Moses", deposits=[
         Deposit(amount=2000.0, entry_spy=707.0, date="2026-05-09")
     ])
 
-    with patch("app.discord_commands.load_investors", return_value=[inv]), \
-         patch("app.discord_commands.get_latest_price", return_value=741.20), \
-         patch("app.discord_commands.save_investors"), \
+    with patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.save_investors") as mock_save, \
+         patch("app.withdrawal_execution.scheduler"), \
+         patch("app.withdrawal_execution.save_pending_withdrawal"), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_withdraw
         await handle_withdraw("Moses", 500.0, "test-token")
 
+    mock_save.assert_not_called()  # investors.json is NOT written yet
     msg = mock_edit.call_args[0][1]
     assert "500" in msg
     assert "Moses" in msg
-    assert "1,500" in msg
+    assert "cancel-withdrawal" in msg
 
 
 @pytest.mark.asyncio
-async def test_handle_withdraw_exceeds_total():
+async def test_handle_withdraw_exceeds_total_reports_error_without_scheduling():
     from app.investors import Investor, Deposit
     inv = Investor(name="Moses", deposits=[
         Deposit(amount=300.0, entry_spy=707.0, date="2026-05-09")
     ])
 
-    with patch("app.discord_commands.load_investors", return_value=[inv]), \
-         patch("app.discord_commands.get_latest_price", return_value=741.20), \
+    with patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_withdraw
         await handle_withdraw("Moses", 500.0, "test-token")
@@ -80,8 +83,8 @@ async def test_handle_withdraw_exceeds_total():
 
 @pytest.mark.asyncio
 async def test_handle_withdraw_investor_not_found():
-    with patch("app.discord_commands.load_investors", return_value=[]), \
-         patch("app.discord_commands.get_latest_price", return_value=741.20), \
+    with patch("app.withdrawal_execution.load_investors", return_value=[]), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_withdraw
         await handle_withdraw("Ghost", 500.0, "test-token")
@@ -373,3 +376,32 @@ async def test_handle_close_no_position():
 
     msg = mock_edit.call_args[0][1]
     assert "No position to close" in msg or "no position" in msg.lower()
+
+
+@pytest.mark.asyncio
+async def test_handle_cancel_withdrawal_success():
+    record = {"id": "wd-aaaa1111", "investor": "Moses", "amount": 500.0,
+              "requested_at": "t1", "run_at": "t2"}
+    with patch("app.withdrawal_execution.cancel_pending_withdrawal", new_callable=AsyncMock) as mock_cancel, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        mock_cancel.return_value = record
+        from app.discord_commands import handle_cancel_withdrawal
+        await handle_cancel_withdrawal("wd-aaaa1111", "test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "Canceled" in msg
+    assert "500" in msg
+    assert "Moses" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_cancel_withdrawal_not_found():
+    from app.withdrawal_execution import WithdrawalNotFoundError
+    with patch("app.withdrawal_execution.cancel_pending_withdrawal", new_callable=AsyncMock) as mock_cancel, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        mock_cancel.side_effect = WithdrawalNotFoundError("No pending withdrawal with id wd-missing")
+        from app.discord_commands import handle_cancel_withdrawal
+        await handle_cancel_withdrawal("wd-missing", "test-token")
+
+    msg = mock_edit.call_args[0][1]
+    assert "No pending withdrawal" in msg

@@ -80,51 +80,40 @@ async def handle_deposit(
 
 
 async def handle_withdraw(investor_name: str, amount: float, token: str) -> None:
-    if amount <= 0:
-        await _edit_original(token, "❌ Withdrawal amount must be positive")
+    from app.withdrawal_execution import schedule_withdrawal, WithdrawalValidationError
+
+    try:
+        record = await schedule_withdrawal(investor_name, amount)
+    except WithdrawalValidationError as exc:
+        await _edit_original(token, f"❌ {exc}")
         return
 
-    spy_price = get_latest_price("SPY")
-    if spy_price is None:
-        await _edit_original(token, "❌ Could not fetch SPY price — try again")
-        return
-
-    error_msg = None
-    discord_msg = None
-    async with investors_lock:
-        investors = load_investors()
-        inv = next((i for i in investors if i.name.lower() == investor_name.lower()), None)
-        if inv is None:
-            error_msg = f'❌ Investor "{investor_name}" not found — check spelling'
-        else:
-            try:
-                lots, units_redeemed = compute_withdrawal_lots(inv, amount, spy_price)
-            except ValueError as exc:
-                error_msg = f"❌ {exc}"
-            else:
-                total_cost_basis = sum(lot["cost"] for lot in lots)
-                # Build Discord message before recording (remaining-position math needs pre-withdrawal state)
-                discord_msg = format_withdrawal_message(inv, lots, units_redeemed, spy_price, amount)
-                inv.withdrawals.append(
-                    Withdrawal(
-                        units=units_redeemed,
-                        exit_spy=spy_price,
-                        cost_basis=total_cost_basis,
-                        proceeds=amount,
-                        date=date.today().isoformat(),
-                    )
-                )
-                save_investors(investors)
-
-    if error_msg:
-        await _edit_original(token, error_msg)
-        return
+    run_at_local = datetime.fromisoformat(record["run_at"]).astimezone(_CT)
+    msg = (
+        f"⏳ **Withdrawal Scheduled** — {record['investor']}\n"
+        f"${record['amount']:,.2f} will be processed at "
+        f"{run_at_local.strftime('%b %d, %Y %I:%M %p %Z')}.\n"
+        f"Run `/cancel-withdrawal id={record['id']}` to cancel."
+    )
 
     from app.notifications import notify_investors
-    from app.backup import push_backup
-    asyncio.create_task(notify_investors(discord_msg))
-    asyncio.create_task(push_backup())
-    await _edit_original(token, discord_msg)
+    asyncio.create_task(notify_investors(msg))
+    await _edit_original(token, msg)
+
+
+async def handle_cancel_withdrawal(withdrawal_id: str, token: str) -> None:
+    from app.withdrawal_execution import cancel_pending_withdrawal, WithdrawalNotFoundError
+
+    try:
+        record = await cancel_pending_withdrawal(withdrawal_id)
+    except WithdrawalNotFoundError as exc:
+        await _edit_original(token, f"❌ {exc}")
+        return
+
+    await _edit_original(
+        token,
+        f"✅ Canceled withdrawal `{withdrawal_id}` — ${record['amount']:,.2f} for {record['investor']}.",
+    )
 
 
 async def handle_report(broker: str, report_type: str, token: str, custom_date: Optional[str] = None) -> None:
@@ -431,6 +420,8 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
                 amount=float(options["amount"]),
                 token=token,
             )
+        elif command == "cancel-withdrawal":
+            await handle_cancel_withdrawal(withdrawal_id=options["id"], token=token)
         elif command == "report":
             broker = options.get("_subcommand", "alpaca")
             if broker == "custom":

@@ -59,6 +59,18 @@ COMMANDS: list = [
         ],
     },
     {
+        "name": "cancel-withdrawal",
+        "description": "Cancel a pending withdrawal before it executes",
+        "options": [
+            {
+                "name": "id",
+                "description": "Pending withdrawal ID (from the /withdraw confirmation message)",
+                "type": 3,
+                "required": True,
+            },
+        ],
+    },
+    {
         "name": "report",
         "description": "Trigger a P&L report to Discord",
         "options": [
