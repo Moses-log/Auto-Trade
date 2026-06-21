@@ -123,39 +123,70 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
             except ValueError as exc:
                 error_reason = str(exc)
             else:
-                total_cost_basis = sum(lot["cost"] for lot in lots)
-                discord_msg = format_withdrawal_message(inv, lots, units_redeemed, spy_price, record["amount"])
-                inv.withdrawals.append(
-                    Withdrawal(
-                        units=units_redeemed,
-                        exit_spy=spy_price,
-                        cost_basis=total_cost_basis,
-                        proceeds=record["amount"],
-                        date=date.today().isoformat(),
+                try:
+                    total_cost_basis = sum(lot["cost"] for lot in lots)
+                    discord_msg = format_withdrawal_message(inv, lots, units_redeemed, spy_price, record["amount"])
+                    inv.withdrawals.append(
+                        Withdrawal(
+                            units=units_redeemed,
+                            exit_spy=spy_price,
+                            cost_basis=total_cost_basis,
+                            proceeds=record["amount"],
+                            date=date.today().isoformat(),
+                        )
                     )
-                )
-                save_investors(investors)
+                    save_investors(investors)
+                except Exception as exc:
+                    log.exception(
+                        "execute_pending_withdrawal: save_investors failed for %s — no funds moved, marking failed",
+                        withdrawal_id,
+                    )
+                    error_reason = f"Internal error while recording withdrawal: {exc}"
+                    discord_msg = None
 
-    remove_pending_withdrawal(withdrawal_id)
+    try:
+        remove_pending_withdrawal(withdrawal_id)
+    except Exception:
+        log.exception("execute_pending_withdrawal: failed to remove pending record %s after processing", withdrawal_id)
 
     if error_reason:
+        try:
+            append_withdrawal_audit(
+                withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
+                requested_at=record["requested_at"], run_at=record["run_at"],
+                status="failed", reason=error_reason,
+            )
+        except Exception:
+            log.exception("execute_pending_withdrawal: failed to write 'failed' audit entry for %s", withdrawal_id)
+        try:
+            await notify_investors(
+                f"❌ Scheduled withdrawal for {record['investor']} (${record['amount']:,.2f}) failed: {error_reason}"
+            )
+        except Exception:
+            log.exception("execute_pending_withdrawal: failed to send failure notification for %s", withdrawal_id)
+        return
+
+    try:
         append_withdrawal_audit(
             withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
             requested_at=record["requested_at"], run_at=record["run_at"],
-            status="failed", reason=error_reason,
+            status="executed", completed_at=datetime.now(_CT).isoformat(),
         )
-        await notify_investors(
-            f"❌ Scheduled withdrawal for {record['investor']} (${record['amount']:,.2f}) failed: {error_reason}"
+    except Exception:
+        log.exception(
+            "execute_pending_withdrawal: withdrawal %s WAS EXECUTED (funds moved) but audit write failed — manual reconciliation needed",
+            withdrawal_id,
         )
-        return
 
-    append_withdrawal_audit(
-        withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
-        requested_at=record["requested_at"], run_at=record["run_at"],
-        status="executed", completed_at=datetime.now(_CT).isoformat(),
-    )
-    await notify_investors(discord_msg)
-    await push_backup()
+    try:
+        await notify_investors(discord_msg)
+    except Exception:
+        log.exception("execute_pending_withdrawal: notify_investors failed for executed withdrawal %s", withdrawal_id)
+
+    try:
+        await push_backup()
+    except Exception:
+        log.exception("execute_pending_withdrawal: push_backup failed after withdrawal %s", withdrawal_id)
 
 
 async def cancel_pending_withdrawal(withdrawal_id: str) -> dict:

@@ -146,6 +146,29 @@ async def test_execute_pending_withdrawal_audits_failed_when_equity_insufficient
 
 
 @pytest.mark.asyncio
+async def test_execute_pending_withdrawal_audits_failed_when_save_investors_raises():
+    from app.withdrawal_execution import execute_pending_withdrawal
+    inv = _moses()
+    pending_record = {
+        "id": "wd-aaaa1111", "investor": "Moses", "amount": 500.0,
+        "requested_at": "2026-06-21T10:00:00-05:00", "run_at": "2026-06-22T10:00:00-05:00",
+    }
+    with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=pending_record), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
+         patch("app.withdrawal_execution.save_investors", side_effect=OSError("disk full")), \
+         patch("app.withdrawal_execution.remove_pending_withdrawal") as mock_remove, \
+         patch("app.withdrawal_execution.append_withdrawal_audit") as mock_audit, \
+         patch("app.withdrawal_execution.notify_investors") as mock_notify:
+        mock_notify.return_value = _async_none()
+        await execute_pending_withdrawal("wd-aaaa1111")
+
+    mock_remove.assert_called_once_with("wd-aaaa1111")
+    assert mock_audit.call_args.kwargs["status"] == "failed"
+    assert "Internal error" in mock_audit.call_args.kwargs["reason"]
+
+
+@pytest.mark.asyncio
 async def test_cancel_pending_withdrawal_removes_job_and_record_and_audits():
     from app.withdrawal_execution import cancel_pending_withdrawal
     pending_record = {
