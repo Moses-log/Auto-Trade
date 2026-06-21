@@ -1,0 +1,180 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from datetime import date, datetime, timedelta
+from typing import Optional
+
+import pytz
+
+from apscheduler.jobstores.base import JobLookupError
+
+from app.backup import push_backup
+from app.config import settings
+from app.investors import (
+    Withdrawal,
+    compute_withdrawal_lots,
+    format_withdrawal_message,
+    load_investors,
+    save_investors,
+    investors_lock,
+)
+from app.notifications import notify_investors
+from app.pending_withdrawals import (
+    get_pending_withdrawal,
+    remove_pending_withdrawal,
+    save_pending_withdrawal,
+)
+from app.scheduler import scheduler
+from app.trading.alpaca_client import get_latest_price
+from app.withdrawal_audit import append_withdrawal_audit
+
+log = logging.getLogger(__name__)
+
+_CT = pytz.timezone("America/Chicago")
+
+
+class WithdrawalValidationError(Exception):
+    """Raised by schedule_withdrawal when the request can't be scheduled."""
+
+
+class WithdrawalNotFoundError(Exception):
+    """Raised by cancel_pending_withdrawal when the id doesn't match a pending withdrawal."""
+
+
+async def schedule_withdrawal(
+    investor_name: str,
+    amount: float,
+    spy_price: Optional[float] = None,
+) -> dict:
+    if amount <= 0:
+        raise WithdrawalValidationError("Withdrawal amount must be positive")
+
+    if spy_price is None:
+        spy_price = get_latest_price("SPY")
+        if spy_price is None:
+            raise WithdrawalValidationError("Could not fetch SPY price — try again")
+
+    investors = load_investors()
+    inv = next((i for i in investors if i.name.lower() == investor_name.lower()), None)
+    if inv is None:
+        raise WithdrawalValidationError(f'Investor "{investor_name}" not found — check spelling')
+
+    try:
+        # Validation only — the result is discarded. Execution re-runs this with
+        # a live price and the investor's state at execution time, not now.
+        compute_withdrawal_lots(inv, amount, spy_price)
+    except ValueError as exc:
+        raise WithdrawalValidationError(str(exc)) from exc
+
+    now = datetime.now(_CT)
+    run_at = now + timedelta(hours=settings.withdrawal_delay_hours)
+    withdrawal_id = f"wd-{uuid.uuid4().hex[:8]}"
+
+    save_pending_withdrawal(
+        withdrawal_id=withdrawal_id,
+        investor=inv.name,
+        amount=amount,
+        requested_at=now.isoformat(),
+        run_at=run_at.isoformat(),
+    )
+
+    scheduler.add_job(
+        execute_pending_withdrawal,
+        "date",
+        run_date=run_at,
+        args=[withdrawal_id],
+        id=f"withdrawal_{withdrawal_id}",
+        replace_existing=True,
+    )
+
+    log.info("Scheduled withdrawal %s for %s ($%.2f) at %s", withdrawal_id, inv.name, amount, run_at)
+    return {
+        "id": withdrawal_id,
+        "investor": inv.name,
+        "amount": amount,
+        "requested_at": now.isoformat(),
+        "run_at": run_at.isoformat(),
+    }
+
+
+async def execute_pending_withdrawal(withdrawal_id: str) -> None:
+    record = get_pending_withdrawal(withdrawal_id)
+    if record is None:
+        log.warning("execute_pending_withdrawal: %s not found (already canceled?)", withdrawal_id)
+        return
+
+    spy_price = get_latest_price("SPY")
+    if spy_price is None:
+        log.error("execute_pending_withdrawal: could not fetch SPY price for %s — leaving pending", withdrawal_id)
+        return
+
+    discord_msg = None
+    error_reason = None
+
+    async with investors_lock:
+        investors = load_investors()
+        inv = next((i for i in investors if i.name.lower() == record["investor"].lower()), None)
+        if inv is None:
+            error_reason = f'Investor "{record["investor"]}" no longer exists'
+        else:
+            try:
+                lots, units_redeemed = compute_withdrawal_lots(inv, record["amount"], spy_price)
+            except ValueError as exc:
+                error_reason = str(exc)
+            else:
+                total_cost_basis = sum(lot["cost"] for lot in lots)
+                discord_msg = format_withdrawal_message(inv, lots, units_redeemed, spy_price, record["amount"])
+                inv.withdrawals.append(
+                    Withdrawal(
+                        units=units_redeemed,
+                        exit_spy=spy_price,
+                        cost_basis=total_cost_basis,
+                        proceeds=record["amount"],
+                        date=date.today().isoformat(),
+                    )
+                )
+                save_investors(investors)
+
+    remove_pending_withdrawal(withdrawal_id)
+
+    if error_reason:
+        append_withdrawal_audit(
+            withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
+            requested_at=record["requested_at"], run_at=record["run_at"],
+            status="failed", reason=error_reason,
+        )
+        await notify_investors(
+            f"❌ Scheduled withdrawal for {record['investor']} (${record['amount']:,.2f}) failed: {error_reason}"
+        )
+        return
+
+    append_withdrawal_audit(
+        withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
+        requested_at=record["requested_at"], run_at=record["run_at"],
+        status="executed", completed_at=datetime.now(_CT).isoformat(),
+    )
+    await notify_investors(discord_msg)
+    await push_backup()
+
+
+async def cancel_pending_withdrawal(withdrawal_id: str) -> dict:
+    record = get_pending_withdrawal(withdrawal_id)
+    if record is None:
+        raise WithdrawalNotFoundError(
+            f"No pending withdrawal with id {withdrawal_id} (already executed, canceled, or never existed)"
+        )
+
+    try:
+        scheduler.remove_job(f"withdrawal_{withdrawal_id}")
+    except JobLookupError:
+        pass  # job already fired or was already removed; still clean up the record below
+
+    remove_pending_withdrawal(withdrawal_id)
+    append_withdrawal_audit(
+        withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
+        requested_at=record["requested_at"], run_at=record["run_at"],
+        status="canceled", canceled_at=datetime.now(_CT).isoformat(),
+    )
+    log.info("Canceled pending withdrawal %s for %s", withdrawal_id, record["investor"])
+    return record

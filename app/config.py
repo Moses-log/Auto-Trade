@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     discord_app_id: Optional[str] = None
     discord_your_user_id: Optional[str] = None
 
+    # ── Withdrawal approval delay ─────────────────────────────────────────────
+    # Hours a /withdraw request waits before it actually executes. Gives the
+    # operator a window to /cancel-withdrawal a request made by a compromised
+    # credential before investor funds are actually moved in the ledger.
+    withdrawal_delay_hours: int = 24
+
     telegram_bot_token: Optional[str] = None
     telegram_chat_id: Optional[str] = None
 
