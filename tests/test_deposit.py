@@ -1,5 +1,6 @@
 import os
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("ALPACA_API_KEY", "test")
@@ -17,7 +18,7 @@ TEST_SECRET = "MY_SHARED_SECRET"
 
 def _initial_investors():
     return [
-        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=707.116, date="2026-05-09")])
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=600.0, date="2026-05-09")])
     ]
 
 
@@ -43,31 +44,36 @@ def test_deposit_appends_to_existing_investor():
     with patch("app.main.load_investors", return_value=_initial_investors()):
         with patch("app.main.save_investors"):
             with patch("app.main.get_latest_price", return_value=580.0):
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "Moses",
-                    "amount": 500.0,
-                })
+                with patch("app.main.get_account", return_value=SimpleNamespace(equity="350.00")):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 500.0,
+                    })
     assert response.status_code == 200
     data = response.json()
     assert data["investor"] == "Moses"
     assert len(data["deposits"]) == 2
     assert data["deposits"][1]["amount"] == 500.0
-    assert data["deposits"][1]["entry_spy"] == 580.0
+    # Moses already has 300/600 = 0.5 units; nav_per_unit = 350.00/0.5 = 700.0,
+    # not the raw SPY price of 580.0.
+    assert data["deposits"][1]["entry_spy"] == 700.0
 
 
 def test_deposit_uses_provided_spy_price_and_skips_alpaca_call():
     with patch("app.main.load_investors", return_value=_initial_investors()):
         with patch("app.main.save_investors"):
             with patch("app.main.get_latest_price") as mock_price:
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "Moses",
-                    "amount": 500.0,
-                    "spy_price": 595.0,
-                })
+                with patch("app.main.get_account") as mock_account:
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 500.0,
+                        "spy_price": 595.0,
+                    })
     assert response.status_code == 200
     mock_price.assert_not_called()
+    mock_account.assert_not_called()
     assert response.json()["deposits"][1]["entry_spy"] == 595.0
 
 
@@ -75,27 +81,30 @@ def test_deposit_creates_new_investor_when_name_not_found():
     with patch("app.main.load_investors", return_value=_initial_investors()):
         with patch("app.main.save_investors"):
             with patch("app.main.get_latest_price", return_value=580.0):
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "Alice",
-                    "amount": 1000.0,
-                })
+                with patch("app.main.get_account", return_value=SimpleNamespace(equity="350.00")):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Alice",
+                        "amount": 1000.0,
+                    })
     assert response.status_code == 200
     data = response.json()
     assert data["investor"] == "Alice"
     assert len(data["deposits"]) == 1
     assert data["deposits"][0]["amount"] == 1000.0
+    assert data["deposits"][0]["entry_spy"] == 700.0
 
 
 def test_deposit_matches_investor_name_case_insensitively():
     with patch("app.main.load_investors", return_value=_initial_investors()):
         with patch("app.main.save_investors"):
             with patch("app.main.get_latest_price", return_value=580.0):
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "moses",
-                    "amount": 200.0,
-                })
+                with patch("app.main.get_account", return_value=SimpleNamespace(equity="350.00")):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "moses",
+                        "amount": 200.0,
+                    })
     assert response.status_code == 200
     assert response.json()["investor"] == "Moses"
 
@@ -124,10 +133,26 @@ def test_deposit_saves_to_disk():
     with patch("app.main.load_investors", return_value=_initial_investors()):
         with patch("app.main.save_investors") as mock_save:
             with patch("app.main.get_latest_price", return_value=580.0):
-                response = client.post("/deposit", json={
-                    "secret": TEST_SECRET,
-                    "investor": "Moses",
-                    "amount": 500.0,
-                })
+                with patch("app.main.get_account", return_value=SimpleNamespace(equity="350.00")):
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 500.0,
+                    })
     assert response.status_code == 200
     mock_save.assert_called_once()
+
+
+def test_deposit_falls_back_to_spy_price_when_no_units_outstanding():
+    with patch("app.main.load_investors", return_value=[]):
+        with patch("app.main.save_investors"):
+            with patch("app.main.get_latest_price", return_value=580.0):
+                with patch("app.main.get_account") as mock_account:
+                    response = client.post("/deposit", json={
+                        "secret": TEST_SECRET,
+                        "investor": "Moses",
+                        "amount": 300.0,
+                    })
+    assert response.status_code == 200
+    assert response.json()["deposits"][0]["entry_spy"] == 580.0
+    mock_account.assert_not_called()

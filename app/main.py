@@ -37,6 +37,7 @@ from app.investors import (
     Deposit,
     Investor,
     Withdrawal,
+    compute_nav_per_unit,
     compute_withdrawal_lots,
     format_withdrawal_message,
     load_investors,
@@ -741,13 +742,12 @@ async def deposit(request: Request) -> dict:
             content={"error": "Invalid deposit request.", "detail": _serialisable(exc.errors())},
         )
 
+    manual_override = req.spy_price is not None
     spy_price = req.spy_price
-    if spy_price is None:
+    if not manual_override:
         spy_price = get_latest_price("SPY")
         if spy_price is None:
             raise HTTPException(status_code=502, detail="Could not fetch current SPY price from Alpaca.")
-
-    new_deposit = Deposit(amount=req.amount, entry_spy=spy_price, date=date.today().isoformat())
 
     async with investors_lock:
         investors = load_investors()
@@ -756,10 +756,26 @@ async def deposit(request: Request) -> dict:
             None,
         )
         if match is None:
-            match = Investor(name=req.investor, deposits=[new_deposit])
+            match = Investor(name=req.investor, deposits=[])
             investors.append(match)
+
+        if manual_override:
+            entry_price = spy_price
         else:
-            match.deposits.append(new_deposit)
+            # match.deposits has NOT had the new deposit appended yet at this point,
+            # so this sum is exactly "all units outstanding before this deposit" --
+            # including match's own prior deposits if they're an existing investor.
+            total_existing_units = sum(
+                d.amount / d.entry_spy for inv in investors for d in inv.deposits if d.entry_spy
+            )
+            if total_existing_units <= 0:
+                entry_price = spy_price
+            else:
+                account = get_account()
+                real_total_equity = float(account.equity)
+                entry_price = compute_nav_per_unit(investors, real_total_equity)
+
+        match.deposits.append(Deposit(amount=req.amount, entry_spy=entry_price, date=date.today().isoformat()))
         save_investors(investors)
 
     from app.backup import push_backup

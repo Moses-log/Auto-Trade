@@ -31,15 +31,57 @@ async def test_handle_deposit_success():
 
 
 @pytest.mark.asyncio
-async def test_handle_deposit_investor_not_found():
+async def test_handle_deposit_creates_new_investor_when_not_found():
     with patch("app.discord_commands.load_investors", return_value=[]), \
          patch("app.discord_commands.get_latest_price", return_value=741.20), \
+         patch("app.discord_commands.save_investors"), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_deposit
         await handle_deposit("Ghost", 500.0, None, "test-token")
 
     msg = mock_edit.call_args[0][1]
-    assert "not found" in msg
+    assert "New investor" in msg
+    assert "Ghost" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_deposit_prices_at_real_nav_when_units_outstanding():
+    from app.investors import Investor, Deposit
+    from types import SimpleNamespace
+    existing = Investor(name="Moses", deposits=[
+        Deposit(amount=300.0, entry_spy=600.0, date="2026-01-01")  # 0.5 units
+    ])
+
+    with patch("app.discord_commands.load_investors", return_value=[existing]), \
+         patch("app.discord_commands.get_latest_price", return_value=580.0), \
+         patch("app.discord_commands.get_account", return_value=SimpleNamespace(equity="350.00")), \
+         patch("app.discord_commands.save_investors"), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_deposit
+        await handle_deposit("David", 500.0, None, "test-token")
+
+    msg = mock_edit.call_args[0][1]
+    # nav_per_unit = 350.00 / 0.5 = 700.0 -- the new deposit is priced at real
+    # NAV (700.00), not the raw SPY price (580.00) shown alongside it.
+    assert "700.00" in msg
+    assert "580.00" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_deposit_falls_back_to_spy_price_with_no_units_outstanding():
+    from types import SimpleNamespace
+
+    with patch("app.discord_commands.load_investors", return_value=[]), \
+         patch("app.discord_commands.get_latest_price", return_value=741.20), \
+         patch("app.discord_commands.get_account") as mock_account, \
+         patch("app.discord_commands.save_investors"), \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_deposit
+        await handle_deposit("Moses", 2000.0, None, "test-token")
+
+    mock_account.assert_not_called()
+    msg = mock_edit.call_args[0][1]
+    assert "741.20" in msg
 
 
 @pytest.mark.asyncio

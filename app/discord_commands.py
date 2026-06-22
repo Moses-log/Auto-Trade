@@ -11,6 +11,7 @@ from app.config import settings
 from app.investors import (
     Deposit,
     Investor,
+    compute_nav_per_unit,
     load_investors,
     save_investors,
     investors_lock,
@@ -55,7 +56,8 @@ async def handle_deposit(
         await _edit_original(token, "❌ SPY price must be positive")
         return
 
-    if spy_price is None:
+    manual_override = spy_price is not None
+    if not manual_override:
         spy_price = get_latest_price("SPY")
         if spy_price is None:
             await _edit_original(token, "❌ Could not fetch SPY price — provide spy_price manually")
@@ -70,11 +72,32 @@ async def handle_deposit(
             match = Investor(name=investor_name, deposits=[])
             investors.append(match)
             is_new = True
-        match.deposits.append(Deposit(amount=amount, entry_spy=spy_price, date=date.today().isoformat()))
+
+        if manual_override:
+            entry_price = spy_price
+        else:
+            # match.deposits has NOT had the new deposit appended yet at this point,
+            # so this sum is exactly "all units outstanding before this deposit" --
+            # including match's own prior deposits if they're an existing investor.
+            total_existing_units = sum(
+                d.amount / d.entry_spy for inv in investors for d in inv.deposits if d.entry_spy
+            )
+            if total_existing_units <= 0:
+                # Bootstrap case — no real performance to benchmark against yet.
+                entry_price = spy_price
+            else:
+                account = get_account()
+                real_total_equity = float(account.equity)
+                entry_price = compute_nav_per_unit(investors, real_total_equity)
+
+        match.deposits.append(Deposit(amount=amount, entry_spy=entry_price, date=date.today().isoformat()))
         save_investors(investors)
 
     status = "🆕 New investor added" if is_new else "✅ Deposit recorded"
-    await _edit_original(token, f"{status} — {match.name}\n${amount:,.2f} @ SPY ${spy_price:,.2f}")
+    await _edit_original(
+        token,
+        f"{status} — {match.name}\n${amount:,.2f} @ NAV ${entry_price:,.2f}/unit (SPY ${spy_price:,.2f})",
+    )
 
 
 async def handle_withdraw(investor_name: str, amount: float, token: str) -> None:
