@@ -122,6 +122,19 @@ def _net_units(investor: Investor) -> float:
     return deposit_units - withdrawn_units
 
 
+def compute_nav_per_unit(investors: list[Investor], real_total_equity: float) -> float:
+    """Real dollar value of one SPY-unit, grounded in actual Alpaca equity
+    rather than raw SPY market price.
+
+    Returns 0.0 if no units are outstanding (NAV is undefined with zero units;
+    callers must handle this as a bootstrap case, not divide-by-zero).
+    """
+    total_units = sum(_net_units(inv) for inv in investors)
+    if total_units <= 0:
+        return 0.0
+    return real_total_equity / total_units
+
+
 def compute_time_weighted_capital(investor: Investor, year: int) -> float:
     """Average dollar capital `investor` had in the fund during `year`.
 

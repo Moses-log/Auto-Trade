@@ -72,6 +72,30 @@ def test_load_investors_raises_on_malformed_json(tmp_path):
         load_investors(path=bad)
 
 
+def test_compute_nav_per_unit_single_investor():
+    from app.investors import Deposit, Investor, compute_nav_per_unit
+    investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=600.0, date="2026-01-01")])
+    ]
+    # net_units = 300/600 = 0.5; real equity = 350 -> nav_per_unit = 700
+    assert compute_nav_per_unit(investors, real_total_equity=350.0) == pytest.approx(700.0)
+
+
+def test_compute_nav_per_unit_sums_units_across_investors():
+    from app.investors import Deposit, Investor, compute_nav_per_unit
+    investors = [
+        Investor(name="A", deposits=[Deposit(amount=300.0, entry_spy=600.0, date="2026-01-01")]),  # 0.5 units
+        Investor(name="B", deposits=[Deposit(amount=600.0, entry_spy=600.0, date="2026-01-01")]),  # 1.0 units
+    ]
+    # total units = 1.5; real equity = 1500 -> nav_per_unit = 1000
+    assert compute_nav_per_unit(investors, real_total_equity=1500.0) == pytest.approx(1000.0)
+
+
+def test_compute_nav_per_unit_returns_zero_when_no_units_outstanding():
+    from app.investors import compute_nav_per_unit
+    assert compute_nav_per_unit([], real_total_equity=5000.0) == 0.0
+
+
 def test_compute_breakdown_single_deposit():
     from app.investors import Deposit, Investor, compute_breakdown
     investors = [
