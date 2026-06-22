@@ -101,7 +101,8 @@ def test_compute_breakdown_single_deposit():
     investors = [
         Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
     ]
-    result = compute_breakdown(investors, spy_price=600.0)
+    # net_units = 0.6; real_total_equity=360.0 matches the old spy_price=600 synthetic total exactly
+    result = compute_breakdown(investors, spy_price=600.0, real_total_equity=360.0)
     assert result.investors[0].current_equity == pytest.approx(360.0)
     assert result.investors[0].total_deposited == pytest.approx(300.0)
     assert result.investors[0].dollar_pnl == pytest.approx(60.0)
@@ -115,7 +116,7 @@ def test_compute_breakdown_portfolio_share_splits_evenly():
         Investor(name="A", deposits=[Deposit(amount=1000.0, entry_spy=100.0, date="2026-01-01")]),
         Investor(name="B", deposits=[Deposit(amount=1000.0, entry_spy=100.0, date="2026-01-01")]),
     ]
-    result = compute_breakdown(investors, spy_price=110.0)
+    result = compute_breakdown(investors, spy_price=110.0, real_total_equity=2200.0)
     assert result.investors[0].portfolio_share == pytest.approx(50.0)
     assert result.investors[1].portfolio_share == pytest.approx(50.0)
 
@@ -131,9 +132,8 @@ def test_compute_breakdown_multiple_deposits_per_investor():
             ],
         )
     ]
-    # First deposit:  300 * 600/500 = 360.0
-    # Second deposit: 500 * 600/600 = 500.0
-    result = compute_breakdown(investors, spy_price=600.0)
+    # Old synthetic total at spy_price=600: 300*600/500 + 500*600/600 = 860.0
+    result = compute_breakdown(investors, spy_price=600.0, real_total_equity=860.0)
     assert result.investors[0].current_equity == pytest.approx(860.0)
     assert result.investors[0].total_deposited == pytest.approx(800.0)
     assert result.investors[0].dollar_pnl == pytest.approx(60.0)
@@ -145,7 +145,7 @@ def test_compute_breakdown_totals():
         Investor(name="A", deposits=[Deposit(amount=1000.0, entry_spy=100.0, date="2026-01-01")]),
         Investor(name="B", deposits=[Deposit(amount=2000.0, entry_spy=100.0, date="2026-01-01")]),
     ]
-    result = compute_breakdown(investors, spy_price=110.0)
+    result = compute_breakdown(investors, spy_price=110.0, real_total_equity=3300.0)
     assert result.total_deposited == pytest.approx(3000.0)
     assert result.total_portfolio == pytest.approx(3300.0)
     assert result.overall_dollar_pnl == pytest.approx(300.0)
@@ -153,12 +153,41 @@ def test_compute_breakdown_totals():
     assert result.spy_price == 110.0
 
 
+def test_compute_breakdown_total_portfolio_matches_real_equity_not_synthetic_spy_total():
+    """The point of the fix: Total Portfolio must equal the real Alpaca account
+    equity, even when that differs from what raw-SPY-price valuation of the
+    same units would imply."""
+    from app.investors import Deposit, Investor, compute_breakdown
+    investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    # Old synthetic model would value this at (300/500)*600 = 360.0.
+    # The fund's real equity is actually 420.0 -- it outperformed raw SPY.
+    result = compute_breakdown(investors, spy_price=600.0, real_total_equity=420.0)
+    assert result.total_portfolio == pytest.approx(420.0)
+    assert result.investors[0].current_equity == pytest.approx(420.0)
+    assert result.investors[0].dollar_pnl == pytest.approx(120.0)  # 420 - 300 cost basis
+
+
+def test_compute_breakdown_portfolio_share_independent_of_nav_value():
+    """Ownership proportions are driven by unit counts, not by what
+    real_total_equity happens to be -- changing it must not change the split."""
+    from app.investors import Deposit, Investor, compute_breakdown
+    investors = [
+        Investor(name="A", deposits=[Deposit(amount=1000.0, entry_spy=100.0, date="2026-01-01")]),  # 10 units
+        Investor(name="B", deposits=[Deposit(amount=3000.0, entry_spy=100.0, date="2026-01-01")]),  # 30 units
+    ]
+    result = compute_breakdown(investors, spy_price=110.0, real_total_equity=8000.0)
+    assert result.investors[0].portfolio_share == pytest.approx(25.0)
+    assert result.investors[1].portfolio_share == pytest.approx(75.0)
+
+
 def test_format_discord_message_contains_investor_name_and_date():
     from app.investors import Deposit, Investor, compute_breakdown, format_discord_message
     investors = [
         Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
     ]
-    breakdown = compute_breakdown(investors, spy_price=600.0)
+    breakdown = compute_breakdown(investors, spy_price=600.0, real_total_equity=360.0)
     msg = format_discord_message(breakdown, "May 9, 2026")
     assert "Moses" in msg
     assert "May 9, 2026" in msg
@@ -169,9 +198,9 @@ def test_format_discord_message_shows_current_equity():
     investors = [
         Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
     ]
-    breakdown = compute_breakdown(investors, spy_price=600.0)
+    breakdown = compute_breakdown(investors, spy_price=600.0, real_total_equity=360.0)
     msg = format_discord_message(breakdown, "May 9, 2026")
-    assert "360.00" in msg  # current_equity = 300 * 600/500
+    assert "360.00" in msg  # current_equity = real_total_equity for this single investor
 
 
 def test_format_discord_message_prefixes_positive_pnl_with_plus():
@@ -179,7 +208,7 @@ def test_format_discord_message_prefixes_positive_pnl_with_plus():
     investors = [
         Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
     ]
-    breakdown = compute_breakdown(investors, spy_price=600.0)
+    breakdown = compute_breakdown(investors, spy_price=600.0, real_total_equity=360.0)
     msg = format_discord_message(breakdown, "May 9, 2026")
     assert "+$60.00" in msg
 
@@ -190,7 +219,7 @@ def test_format_discord_message_shows_totals():
         Investor(name="A", deposits=[Deposit(amount=1000.0, entry_spy=100.0, date="2026-01-01")]),
         Investor(name="B", deposits=[Deposit(amount=2000.0, entry_spy=100.0, date="2026-01-01")]),
     ]
-    breakdown = compute_breakdown(investors, spy_price=110.0)
+    breakdown = compute_breakdown(investors, spy_price=110.0, real_total_equity=3300.0)
     msg = format_discord_message(breakdown, "May 9, 2026")
     assert "3,300.00" in msg  # total portfolio
     assert "3,000.00" in msg  # total deposited
@@ -368,28 +397,55 @@ async def test_send_investor_report_skips_when_spy_price_unavailable():
 
 @pytest.mark.asyncio
 async def test_send_investor_report_sends_chart_with_investor_name():
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import AsyncMock, MagicMock, patch
     from app.investors import Deposit, Investor
     mock_investors = [
         Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
     ]
+    mock_account = MagicMock()
+    mock_account.equity = "360.00"  # matches old spy_price=600 synthetic total (300/500*600)
     with patch("app.pnl.load_investors", return_value=mock_investors):
         with patch("app.pnl.get_latest_price", return_value=600.0):
-            with patch("app.pnl.generate_investor_pie_chart", return_value=b"\x89PNG_fake"):
-                with patch("app.pnl.notify_investors_with_chart", new_callable=AsyncMock) as mock_notify_chart:
-                    with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
-                        from app.pnl import send_investor_report
-                        await send_investor_report()
+            with patch("app.pnl.get_account", return_value=mock_account):
+                with patch("app.pnl.generate_investor_pie_chart", return_value=b"\x89PNG_fake"):
+                    with patch("app.pnl.notify_investors_with_chart", new_callable=AsyncMock) as mock_notify_chart:
+                        with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+                            from app.pnl import send_investor_report
+                            await send_investor_report()
     mock_notify_chart.assert_called_once()
     mock_notify.assert_not_called()
     message, chart_bytes = mock_notify_chart.call_args[0]
     assert "Moses" in message
-    assert "360.00" in message  # 300 * 600/500
+    assert "360.00" in message
     assert chart_bytes == b"\x89PNG_fake"
 
 
 @pytest.mark.asyncio
 async def test_send_investor_report_falls_back_to_text_when_no_chart():
+    from unittest.mock import AsyncMock, MagicMock, patch
+    from app.investors import Deposit, Investor
+    mock_investors = [
+        Investor(name="Moses", deposits=[Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")])
+    ]
+    mock_account = MagicMock()
+    mock_account.equity = "360.00"
+    with patch("app.pnl.load_investors", return_value=mock_investors):
+        with patch("app.pnl.get_latest_price", return_value=600.0):
+            with patch("app.pnl.get_account", return_value=mock_account):
+                with patch("app.pnl.generate_investor_pie_chart", return_value=b""):
+                    with patch("app.pnl.notify_investors_with_chart", new_callable=AsyncMock) as mock_notify_chart:
+                        with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+                            from app.pnl import send_investor_report
+                            await send_investor_report()
+    mock_notify_chart.assert_not_called()
+    mock_notify.assert_called_once()
+    message = mock_notify.call_args[0][0]
+    assert "Moses" in message
+    assert "360.00" in message
+
+
+@pytest.mark.asyncio
+async def test_send_investor_report_skips_when_account_equity_unavailable():
     from unittest.mock import AsyncMock, patch
     from app.investors import Deposit, Investor
     mock_investors = [
@@ -397,16 +453,11 @@ async def test_send_investor_report_falls_back_to_text_when_no_chart():
     ]
     with patch("app.pnl.load_investors", return_value=mock_investors):
         with patch("app.pnl.get_latest_price", return_value=600.0):
-            with patch("app.pnl.generate_investor_pie_chart", return_value=b""):
-                with patch("app.pnl.notify_investors_with_chart", new_callable=AsyncMock) as mock_notify_chart:
-                    with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
-                        from app.pnl import send_investor_report
-                        await send_investor_report()
-    mock_notify_chart.assert_not_called()
-    mock_notify.assert_called_once()
-    message = mock_notify.call_args[0][0]
-    assert "Moses" in message
-    assert "360.00" in message  # 300 * 600/500
+            with patch("app.pnl.get_account", side_effect=RuntimeError("API down")):
+                with patch("app.pnl.notify_investors", new_callable=AsyncMock) as mock_notify:
+                    from app.pnl import send_investor_report
+                    await send_investor_report()
+    mock_notify.assert_not_called()
 
 
 def test_setup_jobs_registers_parallel_bundles():

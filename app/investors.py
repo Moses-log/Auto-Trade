@@ -200,10 +200,15 @@ class InvestorBreakdown:
     overall_pct_pnl: float
 
 
-def compute_breakdown(investors: list[Investor], spy_price: float) -> InvestorBreakdown:
+def compute_breakdown(
+    investors: list[Investor],
+    spy_price: float,
+    real_total_equity: float,
+) -> InvestorBreakdown:
+    nav_per_unit = compute_nav_per_unit(investors, real_total_equity)
     results: list[InvestorResult] = []
     for inv in investors:
-        current_equity = _net_units(inv) * spy_price
+        current_equity = _net_units(inv) * nav_per_unit
 
         gross_deposited = sum(d.amount for d in inv.deposits)
         withdrawn_basis = sum(w.cost_basis for w in inv.withdrawals)

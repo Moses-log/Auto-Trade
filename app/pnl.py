@@ -730,10 +730,17 @@ async def send_investor_report() -> None:
         log.warning("Could not fetch SPY price; skipping investor report")
         return
 
+    try:
+        account = get_account()
+        real_total_equity = float(account.equity)
+    except Exception as exc:
+        log.warning("Could not fetch account equity; skipping investor report: %s", exc)
+        return
+
     now = datetime.now(ET)
     date_str = now.strftime(f"%B {now.day}, %Y")
     try:
-        breakdown = compute_breakdown(investors, spy_price)
+        breakdown = compute_breakdown(investors, spy_price, real_total_equity)
         message = format_discord_message(breakdown, date_str)
         chart_bytes = None
         try:
