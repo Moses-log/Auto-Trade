@@ -13,6 +13,7 @@ from app.backup import push_backup
 from app.config import settings
 from app.investors import (
     Withdrawal,
+    compute_nav_per_unit,
     compute_withdrawal_lots,
     format_withdrawal_message,
     load_investors,
@@ -26,7 +27,7 @@ from app.pending_withdrawals import (
     save_pending_withdrawal,
 )
 from app.scheduler import scheduler
-from app.trading.alpaca_client import get_latest_price
+from app.trading.alpaca_client import get_account, get_latest_price
 from app.withdrawal_audit import append_withdrawal_audit
 
 log = logging.getLogger(__name__)
@@ -61,9 +62,16 @@ async def schedule_withdrawal(
         raise WithdrawalValidationError(f'Investor "{investor_name}" not found — check spelling')
 
     try:
+        account = get_account()
+        real_total_equity = float(account.equity)
+    except Exception as exc:
+        raise WithdrawalValidationError("Could not fetch account equity — try again") from exc
+    nav_per_unit = compute_nav_per_unit(investors, real_total_equity)
+
+    try:
         # Validation only — the result is discarded. Execution re-runs this with
-        # a live price and the investor's state at execution time, not now.
-        compute_withdrawal_lots(inv, amount, spy_price)
+        # a live price/equity reading and the investor's state at execution time, not now.
+        compute_withdrawal_lots(inv, amount, nav_per_unit)
     except ValueError as exc:
         raise WithdrawalValidationError(str(exc)) from exc
 
@@ -105,8 +113,23 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
         return
 
     spy_price = get_latest_price("SPY")
-    if spy_price is None:
-        log.error("execute_pending_withdrawal: could not fetch SPY price for %s — retrying in 15 minutes", withdrawal_id)
+    real_total_equity = None
+    if spy_price is not None:
+        try:
+            account = get_account()
+            real_total_equity = float(account.equity)
+        except Exception as exc:
+            log.warning(
+                "execute_pending_withdrawal: could not fetch account equity for %s: %s",
+                withdrawal_id, exc,
+            )
+            real_total_equity = None
+
+    if spy_price is None or real_total_equity is None:
+        log.error(
+            "execute_pending_withdrawal: market/account data unavailable for %s — retrying in 15 minutes",
+            withdrawal_id,
+        )
         retry_at = datetime.now(_CT) + timedelta(minutes=15)
         try:
             scheduler.add_job(
@@ -122,7 +145,7 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
         try:
             await notify_investors(
                 f"⚠️ Scheduled withdrawal for {record['investor']} (${record['amount']:,.2f}) "
-                f"could not execute — SPY price unavailable. Retrying at "
+                f"could not execute — market data unavailable. Retrying at "
                 f"{retry_at.strftime('%b %d, %I:%M %p %Z')}."
             )
         except Exception:
@@ -138,14 +161,17 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
         if inv is None:
             error_reason = f'Investor "{record["investor"]}" no longer exists'
         else:
+            nav_per_unit = compute_nav_per_unit(investors, real_total_equity)
             try:
-                lots, units_redeemed = compute_withdrawal_lots(inv, record["amount"], spy_price)
+                lots, units_redeemed = compute_withdrawal_lots(inv, record["amount"], nav_per_unit)
             except ValueError as exc:
                 error_reason = str(exc)
             else:
                 try:
                     total_cost_basis = sum(lot["cost"] for lot in lots)
-                    discord_msg = format_withdrawal_message(inv, lots, units_redeemed, spy_price, record["amount"])
+                    discord_msg = format_withdrawal_message(
+                        inv, lots, units_redeemed, spy_price, nav_per_unit, record["amount"]
+                    )
                     inv.withdrawals.append(
                         Withdrawal(
                             units=units_redeemed,

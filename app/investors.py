@@ -250,7 +250,7 @@ def compute_breakdown(
 def compute_withdrawal_lots(
     investor: Investor,
     withdraw_amount: float,
-    current_spy: float,
+    nav_per_unit: float,
 ) -> tuple[list[dict], float]:
     """FIFO-match a dollar withdrawal against the investor's deposit lots.
 
@@ -259,9 +259,13 @@ def compute_withdrawal_lots(
 
     Prior withdrawals are respected — their consumed units are skipped FIFO-style
     so each lot is only redeemed once across the investor's full withdrawal history.
+
+    `nav_per_unit` is the fund's real NAV per unit (see compute_nav_per_unit),
+    not the raw SPY market price — this determines both the withdrawal cap and
+    the real dollar proceeds per lot. `entry_spy` (cost basis) is unaffected.
     """
     today = datetime.now(_ET).date()
-    available_equity = _net_units(investor) * current_spy
+    available_equity = _net_units(investor) * nav_per_unit
 
     if withdraw_amount > available_equity + 0.005:
         raise ValueError(
@@ -269,7 +273,7 @@ def compute_withdrawal_lots(
             f"${available_equity:,.2f}"
         )
 
-    units_to_redeem = withdraw_amount / current_spy
+    units_to_redeem = withdraw_amount / nav_per_unit
     lots: list[dict] = []
     remaining = units_to_redeem
 
@@ -292,7 +296,7 @@ def compute_withdrawal_lots(
 
         consume = min(remaining, available_from_lot)
         lot_cost = consume * d.entry_spy
-        lot_proceeds = consume * current_spy
+        lot_proceeds = consume * nav_per_unit
 
         try:
             entry_date = _date.fromisoformat(d.date)
@@ -320,6 +324,7 @@ def format_withdrawal_message(
     lots: list[dict],
     units_redeemed: float,
     current_spy: float,
+    nav_per_unit: float,
     withdraw_amount: float,
 ) -> str:
     """Build the Discord notification for a completed withdrawal.
@@ -349,7 +354,7 @@ def format_withdrawal_message(
 
     # Remaining position (pre-withdrawal state minus units_redeemed)
     remaining_units   = _net_units(investor) - units_redeemed
-    remaining_equity  = remaining_units * current_spy
+    remaining_equity  = remaining_units * nav_per_unit
     gross_deposited   = sum(d.amount for d in investor.deposits)
     prior_basis       = sum(w.cost_basis for w in investor.withdrawals)
     remaining_basis   = gross_deposited - prior_basis - total_cost

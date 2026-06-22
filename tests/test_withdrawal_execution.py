@@ -20,6 +20,13 @@ def _moses(deposits_amount=2000.0, entry_spy=707.0):
     ])
 
 
+def _mock_account(equity: float):
+    from unittest.mock import MagicMock
+    account = MagicMock()
+    account.equity = str(equity)
+    return account
+
+
 @pytest.mark.asyncio
 async def test_schedule_withdrawal_rejects_non_positive_amount():
     from app.withdrawal_execution import schedule_withdrawal, WithdrawalValidationError
@@ -41,7 +48,8 @@ async def test_schedule_withdrawal_rejects_amount_exceeding_equity():
     from app.withdrawal_execution import schedule_withdrawal, WithdrawalValidationError
     inv = _moses(deposits_amount=300.0)
     with patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
-         patch("app.withdrawal_execution.get_latest_price", return_value=741.20):
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(300.0)):
         with pytest.raises(WithdrawalValidationError, match="exceeds"):
             await schedule_withdrawal("Moses", 5000.0)
 
@@ -52,6 +60,7 @@ async def test_schedule_withdrawal_saves_pending_and_adds_scheduler_job():
     inv = _moses()
     with patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(2000.0)), \
          patch("app.withdrawal_execution.save_pending_withdrawal") as mock_save, \
          patch("app.withdrawal_execution.scheduler") as mock_scheduler:
         record = await schedule_withdrawal("moses", 500.0)
@@ -72,6 +81,7 @@ async def test_schedule_withdrawal_run_at_respects_delay_setting():
     inv = _moses()
     with patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(2000.0)), \
          patch("app.withdrawal_execution.save_pending_withdrawal"), \
          patch("app.withdrawal_execution.scheduler"), \
          patch("app.withdrawal_execution.settings") as mock_settings:
@@ -94,6 +104,7 @@ async def test_execute_pending_withdrawal_writes_to_investors_and_audits_execute
     }
     with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=pending_record), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(2000.0)), \
          patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
          patch("app.withdrawal_execution.save_investors") as mock_save, \
          patch("app.withdrawal_execution.remove_pending_withdrawal") as mock_remove, \
@@ -147,6 +158,29 @@ async def test_execute_pending_withdrawal_retries_and_notifies_when_price_unavai
 
 
 @pytest.mark.asyncio
+async def test_execute_pending_withdrawal_retries_when_account_equity_unavailable():
+    from app.withdrawal_execution import execute_pending_withdrawal
+    pending_record = {
+        "id": "wd-aaaa1111", "investor": "Moses", "amount": 500.0,
+        "requested_at": "2026-06-21T10:00:00-05:00", "run_at": "2026-06-22T10:00:00-05:00",
+    }
+    with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=pending_record), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", side_effect=RuntimeError("API down")), \
+         patch("app.withdrawal_execution.scheduler") as mock_scheduler, \
+         patch("app.withdrawal_execution.save_investors") as mock_save, \
+         patch("app.withdrawal_execution.remove_pending_withdrawal") as mock_remove, \
+         patch("app.withdrawal_execution.notify_investors") as mock_notify:
+        mock_notify.return_value = _async_none()
+        await execute_pending_withdrawal("wd-aaaa1111")
+
+    mock_save.assert_not_called()
+    mock_remove.assert_not_called()  # stays pending — this is a retry, not a terminal outcome
+    mock_scheduler.add_job.assert_called_once()
+    mock_notify.assert_called_once()
+
+
+@pytest.mark.asyncio
 async def test_execute_pending_withdrawal_audits_failed_when_equity_insufficient():
     from app.withdrawal_execution import execute_pending_withdrawal
     inv = _moses(deposits_amount=100.0)  # not enough left for a $500 withdrawal
@@ -156,6 +190,7 @@ async def test_execute_pending_withdrawal_audits_failed_when_equity_insufficient
     }
     with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=pending_record), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(100.0)), \
          patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
          patch("app.withdrawal_execution.save_investors") as mock_save, \
          patch("app.withdrawal_execution.remove_pending_withdrawal") as mock_remove, \
@@ -180,6 +215,7 @@ async def test_execute_pending_withdrawal_audits_failed_when_save_investors_rais
     }
     with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=pending_record), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(2000.0)), \
          patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
          patch("app.withdrawal_execution.save_investors", side_effect=OSError("disk full")), \
          patch("app.withdrawal_execution.remove_pending_withdrawal") as mock_remove, \

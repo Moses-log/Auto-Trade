@@ -1,5 +1,6 @@
 import os
 import pytest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("ALPACA_API_KEY", "test")
@@ -42,6 +43,7 @@ def test_withdraw_rejects_malformed_json():
 def test_withdraw_schedules_instead_of_writing_immediately():
     with patch("app.withdrawal_execution.load_investors", return_value=_initial_investors()), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=SimpleNamespace(equity="2000.00")), \
          patch("app.withdrawal_execution.save_pending_withdrawal") as mock_save_pending, \
          patch("app.withdrawal_execution.scheduler") as mock_scheduler:
         response = client.post("/withdraw", json={
@@ -63,7 +65,8 @@ def test_withdraw_schedules_instead_of_writing_immediately():
 
 def test_withdraw_returns_400_when_amount_exceeds_equity():
     with patch("app.withdrawal_execution.load_investors", return_value=_initial_investors()), \
-         patch("app.withdrawal_execution.get_latest_price", return_value=741.20):
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=SimpleNamespace(equity="2000.00")):
         response = client.post("/withdraw", json={
             "secret": TEST_SECRET,
             "investor": "Moses",

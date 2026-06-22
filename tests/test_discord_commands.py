@@ -1,6 +1,7 @@
 import os
 import pytest
 from datetime import date
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("ALPACA_API_KEY", "test")
@@ -50,6 +51,7 @@ async def test_handle_withdraw_schedules_instead_of_writing_immediately():
 
     with patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=SimpleNamespace(equity="2000.00")), \
          patch("app.withdrawal_execution.save_investors") as mock_save, \
          patch("app.withdrawal_execution.scheduler"), \
          patch("app.withdrawal_execution.save_pending_withdrawal"), \
@@ -73,6 +75,7 @@ async def test_handle_withdraw_exceeds_total_reports_error_without_scheduling():
 
     with patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
          patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=SimpleNamespace(equity="300.00")), \
          patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
         from app.discord_commands import handle_withdraw
         await handle_withdraw("Moses", 500.0, "test-token")

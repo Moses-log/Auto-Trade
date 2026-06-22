@@ -182,6 +182,82 @@ def test_compute_breakdown_portfolio_share_independent_of_nav_value():
     assert result.investors[1].portfolio_share == pytest.approx(75.0)
 
 
+def test_compute_withdrawal_lots_single_lot_full_math():
+    from app.investors import Deposit, Investor, compute_withdrawal_lots
+    investor = Investor(name="Moses", deposits=[
+        Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")
+    ])
+    # net_units = 0.6; nav_per_unit = 700 -> available_equity = 420.0
+    lots, units_redeemed = compute_withdrawal_lots(investor, 210.0, nav_per_unit=700.0)
+    assert units_redeemed == pytest.approx(0.3)  # 210 / 700
+    assert len(lots) == 1
+    lot = lots[0]
+    assert lot["units"] == pytest.approx(0.3)
+    assert lot["cost"] == pytest.approx(150.0)      # 0.3 * 500 entry_spy (unchanged cost basis)
+    assert lot["proceeds"] == pytest.approx(210.0)  # 0.3 * 700 nav_per_unit (real proceeds)
+    assert lot["gain"] == pytest.approx(60.0)
+    assert lot["entry_spy"] == 500.0
+
+
+def test_compute_withdrawal_lots_raises_when_amount_exceeds_real_equity():
+    from app.investors import Deposit, Investor, compute_withdrawal_lots
+    investor = Investor(name="Moses", deposits=[
+        Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01")
+    ])
+    with pytest.raises(ValueError):
+        compute_withdrawal_lots(investor, 500.0, nav_per_unit=700.0)  # available = 420
+
+
+def test_compute_withdrawal_lots_fifo_across_multiple_deposits():
+    from app.investors import Deposit, Investor, compute_withdrawal_lots
+    investor = Investor(name="Moses", deposits=[
+        Deposit(amount=300.0, entry_spy=500.0, date="2026-01-01"),  # 0.6 units
+        Deposit(amount=400.0, entry_spy=800.0, date="2026-02-01"),  # 0.5 units
+    ])
+    # total units = 1.1; nav_per_unit = 1000 -> available_equity = 1100.0
+    # withdraw 1000 -> units_to_redeem = 1.0 -> consumes all of lot 1 (0.6) + 0.4 of lot 2
+    lots, units_redeemed = compute_withdrawal_lots(investor, 1000.0, nav_per_unit=1000.0)
+    assert units_redeemed == pytest.approx(1.0)
+    assert len(lots) == 2
+    assert lots[0]["units"] == pytest.approx(0.6)
+    assert lots[0]["cost"] == pytest.approx(300.0)
+    assert lots[1]["units"] == pytest.approx(0.4)
+    assert lots[1]["cost"] == pytest.approx(320.0)  # 0.4 * 800
+
+
+def test_compute_withdrawal_lots_rejects_amount_old_model_would_have_allowed():
+    """The actual financial-safety fix: under the old raw-SPY-price model, a
+    $2,200 withdrawal here would have been allowed (synthetic equity at
+    SPY=$800 is $2,285.71), but the fund's real equity is only $1,500 -- the
+    new nav_per_unit-based cap correctly rejects it."""
+    from app.investors import Deposit, Investor, compute_withdrawal_lots
+    investor = Investor(name="Moses", deposits=[
+        Deposit(amount=2000.0, entry_spy=700.0, date="2026-01-01")
+    ])
+    nav_per_unit = 525.0  # real equity $1,500 / 2.857142857 units
+    with pytest.raises(ValueError) as exc_info:
+        compute_withdrawal_lots(investor, 2200.0, nav_per_unit)
+    assert "exceeds available equity $1,500.00" in str(exc_info.value)
+
+
+def test_format_withdrawal_message_shows_real_remaining_equity():
+    from app.investors import Deposit, Investor, compute_withdrawal_lots, format_withdrawal_message
+    investor = Investor(name="Moses", deposits=[
+        Deposit(amount=1000.0, entry_spy=500.0, date="2026-01-01")  # 2.0 units
+    ])
+    # nav_per_unit = 600 -> available_equity = 1200; withdraw 600 -> units_redeemed=1.0
+    lots, units_redeemed = compute_withdrawal_lots(investor, 600.0, nav_per_unit=600.0)
+    msg = format_withdrawal_message(
+        investor, lots, units_redeemed,
+        current_spy=550.0, nav_per_unit=600.0, withdraw_amount=600.0,
+    )
+    assert "Moses" in msg
+    # remaining_units = 2.0 - 1.0 = 1.0; remaining_equity must use nav_per_unit (600),
+    # not current_spy (550) -- proves the math uses real NAV, not raw SPY price.
+    assert "600.00" in msg
+    assert "550.00" in msg  # SPY header still shown for market context
+
+
 def test_format_discord_message_contains_investor_name_and_date():
     from app.investors import Deposit, Investor, compute_breakdown, format_discord_message
     investors = [
