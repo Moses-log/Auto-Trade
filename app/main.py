@@ -104,23 +104,38 @@ _SELL_ACTIONS = {
 async def lifespan(app: FastAPI):
     log.info(
         "TradingView → Alpaca webhook server starting",
-        extra={"paper_trading": "paper" in settings.alpaca_base_url},
+        extra={"paper_trading": "paper" in settings.alpaca_base_url, "rh_enabled": settings.rh_enabled},
     )
     if settings.rh_enabled:
+        log.info("Startup checkpoint: attempting Robinhood login")
         loop = asyncio.get_running_loop()
-        ok = await loop.run_in_executor(None, rh_client.login_from_pickle)
+        try:
+            ok = await asyncio.wait_for(
+                loop.run_in_executor(None, rh_client.login_from_pickle),
+                timeout=30,
+            )
+        except asyncio.TimeoutError:
+            log.warning("Robinhood login timed out after 30s — continuing startup without RH")
+            ok = False
+        log.info("Startup checkpoint: Robinhood login finished (ok=%s)", ok)
         if not ok:
             await notify_rh_session(
                 "🚨 **ROBINHOOD SESSION OFFLINE**\n"
                 "Session unavailable on startup — trading is paused.\n"
                 "POST `/robinhood-auth` with your SMS code to activate."
             )
+    log.info("Startup checkpoint: before init_live_trades")
     from app.public_stats import init_live_trades
     init_live_trades()
+    log.info("Startup checkpoint: before setup_jobs")
     setup_jobs()
+    log.info("Startup checkpoint: before reschedule_pending_orders")
     reschedule_pending_orders()
+    log.info("Startup checkpoint: before reschedule_pending_withdrawals")
     reschedule_pending_withdrawals()
+    log.info("Startup checkpoint: before scheduler.start()")
     scheduler.start()
+    log.info("Startup checkpoint: reached yield — startup complete")
     yield
     scheduler.shutdown(wait=False)
     _yf_executor.shutdown(wait=False)
