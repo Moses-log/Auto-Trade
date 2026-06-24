@@ -15,9 +15,11 @@ from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
+from app.rh_equity_history import get_snapshots
 from app.rh_keep_alive_state import get_last_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 from app.pending_withdrawals import load_pending_withdrawals
+from app.trading.alpaca_client import was_market_open_today
 
 log = logging.getLogger(__name__)
 
@@ -175,6 +177,30 @@ def setup_jobs() -> None:
         "claude_monthly_rebalance (1st of each month 9:35 AM ET), "
         "nightly_backup (daily midnight ET)"
     )
+
+
+async def catch_up_equity_snapshot() -> None:
+    """Backfill today's RH equity snapshot if a restart caused the 4 PM ET
+    scheduler tick to be missed.
+
+    record_rh_equity_snapshot() only normally fires via the weekday_jobs/
+    friday_jobs CronTrigger at 16:00 ET. APScheduler computes each trigger's
+    next fire time strictly forward from scheduler start — if the process
+    restarts (e.g. a Render auto-deploy) spanning that tick, that day's
+    snapshot is silently and permanently skipped, with nothing left to retry.
+    Called once at startup: if it's already past 4 PM ET on a trading day
+    and today isn't recorded yet, record it now.
+    """
+    now = datetime.now(ET)
+    if now.hour < 16:
+        return
+    if not was_market_open_today():
+        return
+    today_str = now.date().isoformat()
+    if any(s["date"] == today_str for s in get_snapshots()):
+        return
+    log.info("Backfilling missed RH equity snapshot for %s", today_str)
+    await record_rh_equity_snapshot()
 
 
 def reschedule_pending_orders() -> None:

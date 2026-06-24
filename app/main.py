@@ -62,7 +62,13 @@ from app.pnl import (
     _yf_executor,
 )
 from app.trade_notifier import notify_trade
-from app.scheduler import scheduler, setup_jobs, reschedule_pending_orders, reschedule_pending_withdrawals
+from app.scheduler import (
+    scheduler,
+    setup_jobs,
+    reschedule_pending_orders,
+    reschedule_pending_withdrawals,
+    catch_up_equity_snapshot,
+)
 from app.security import verify_webhook_secret
 from app.discord_commands import dispatch_command
 from app.interactions import extract_user_id, parse_options, verify_discord_signature
@@ -133,6 +139,8 @@ async def lifespan(app: FastAPI):
     reschedule_pending_orders()
     log.info("Startup checkpoint: before reschedule_pending_withdrawals")
     reschedule_pending_withdrawals()
+    log.info("Startup checkpoint: before catch_up_equity_snapshot")
+    await catch_up_equity_snapshot()
     log.info("Startup checkpoint: before scheduler.start()")
     scheduler.start()
     log.info("Startup checkpoint: reached yield — startup complete")
