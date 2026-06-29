@@ -166,6 +166,48 @@ ULTIMATE OBJECTIVE
 
 Build a concentrated portfolio of exceptional businesses with the highest probability of significantly outperforming the S&P 500 over long periods. Only own companies with a credible path toward becoming dominant forces in the future global economy. The goal is not to find good companies — the goal is to find the future winners of the next decade.
 
+========================
+RESEARCH RIGOR REQUIREMENTS
+========================
+
+For every stock under consideration — whether a current holding or a new candidate — apply this structured research framework before sizing or recommending it.
+
+SECTION 1 — FOUNDATION
+- What is the exact business model? How does it make money? Core product in plain English.
+- Moat and competition: top 3 competitors. Does the company have a unique technological advantage or patent competitors lack?
+- Top 3 upcoming catalysts (product launches, regulatory approvals, partnerships) in the next 12 months. Rate each Critical, High, or Strategic.
+- Asymmetry check: low valuation floor vs high growth ceiling?
+
+SECTION 2 — VALUATION RIGOR
+- Rule of 40: Revenue Growth % + EBITDA Margin %. Companies trending above 40 are quality growth businesses.
+- Value/Growth Score: P/S TTM ÷ YoY Revenue Growth %. Lower score = more growth per valuation dollar.
+- Forward P/S: Compare to TTM P/S. If forward P/S is dramatically lower than TTM, verify whether management guidance is credible before relying on it.
+- Historical P/S range: Where does current valuation sit relative to the 3-year min, max, and average?
+- Insider ownership and SBC: Is management significantly aligned with shareholders? Is stock-based compensation excessive relative to revenue?
+
+SECTION 3 — MANDATORY BEAR CASE (Red-Team Every Position)
+Confirmation bias is the biggest risk in investing. Before sizing any position above 10%, write an explicit 3-point short thesis and answer each point.
+- Customer concentration: What % of revenue comes from the top 3 clients? Has it been rising or falling? Flag if any single customer exceeds 30% of revenue.
+- Dilution risk: Are there any active ATM (at-the-market) equity programs or secondary offerings in the last 24 months? Continuous ATM = continuous dilution.
+- Last earnings miss: When did the company last miss earnings? What was the reason and the stock's reaction?
+- 10-K specific risks: Flag company-specific (not boilerplate) risk factors from the most recent SEC filing.
+- Bull case critique: Why might the market be discounting this stock even if the thesis sounds compelling?
+
+A position must survive the bear case to be sized above 10%. If the bear case is compelling and unresolved, limit to a starter position (≤7%) or avoid entirely.
+
+SECTION 4 — TECHNICAL OVERLAY
+Fundamentals tell you what to buy. Technicals help with price and timing.
+- 200-day Moving Average: Is the stock above or below? Is the slope rising (bullish) or falling (bearish)? A stock well below a falling 200-day MA is in structural downtrend — size cautiously.
+- Relative Strength vs SPY (3 months): Has the stock outperformed SPY? Is the RS line accelerating or breaking down on market pullbacks? An RS breakdown while the index rallies is a bearish divergence signal.
+- Short interest: High short interest + a positive upcoming catalyst = potential short squeeze (opportunity). High short interest + deteriorating fundamentals = dangerous.
+
+SECTION 5 — VERDICT
+After running the full framework, state explicitly:
+- Bull case (3 points)
+- Bear case (3 points)
+- Net view and conviction level (High / Medium / Low)
+- What would change your mind in either direction?
+
 POSITION SIZING ACTIONS:
 - BUY: Open a new position or add to an existing one. The system uses delta-buy logic — it only invests the additional dollars needed to reach your target weight, not the full amount.
 - DOUBLE_DOWN: Explicitly increase conviction in an existing position beyond its current weight. Executes identically to BUY (same delta-buy logic). Use when you want to signal elevated conviction.
@@ -579,11 +621,20 @@ async def run_monthly_rebalance() -> None:
             f"{macro_text}\n\n"
             f"{history_text}\n\n"
             f"Current Holdings:\n{json.dumps(enriched, indent=2)}\n\n"
-            f"Please:\n"
-            f"1. Score each current holding using the full framework.\n"
-            f"2. Identify any superior opportunities not currently held.\n"
-            f"3. Determine the optimal portfolio for the next month.\n"
-            f"4. Provide your full analysis with scores, then end with the required JSON trade block."
+            f"Please run the full research framework for each stock:\n\n"
+            f"1. SCORE CURRENT HOLDINGS — For each position, apply the full 5-section research "
+            f"framework: foundation (moat, catalysts), valuation rigor (Rule of 40, Value/Growth "
+            f"Score, Forward P/S vs TTM, historical range), mandatory bear case (customer "
+            f"concentration, dilution risk, last earnings miss, 10-K risks), technical overlay "
+            f"(200-day MA status and slope, RS vs SPY, short interest), and a final verdict "
+            f"(bull case, bear case, net view).\n\n"
+            f"2. IDENTIFY NEW CANDIDATES — Screen for superior opportunities not currently held. "
+            f"For each serious candidate, run all 5 research sections. A new position must survive "
+            f"the full bear case before being sized above 10%.\n\n"
+            f"3. DETERMINE OPTIMAL PORTFOLIO — Build the best portfolio for the next month. "
+            f"Any position sized above 10% must have a resolved bear case documented above.\n\n"
+            f"4. OUTPUT — Provide your complete research and analysis, then end with the required "
+            f"JSON trade block."
         )
 
         try:
