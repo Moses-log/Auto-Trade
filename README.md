@@ -217,6 +217,22 @@ AI & infrastructure · Robotics & automation · Space economy · Energy transfor
 **Self-awareness (last 3 months of history injected into the prompt):**
 - The system sees its own prior analyses, proposed trades, and portfolio performance vs SPY each month — prevents momentum-chasing and enables course correction.
 
+#### Research Framework
+
+Before taking or sizing any position, the system runs a structured 5-section research process defined in `app/claude_manager.py` (`_SYSTEM_PROMPT`) and documented in `docs/AI_Prompt_Guide.pdf`.
+
+| Section | What it covers |
+|---|---|
+| **1 — Foundation** | Business model, moat, top 3 competitors, unique technological advantage; top 3 upcoming catalysts (Critical / High / Strategic); asymmetry check (valuation floor vs. growth ceiling) |
+| **2 — Valuation Rigor** | Rule of 40 (revenue growth % + EBITDA margin %); Value/Growth Score (P/S TTM ÷ YoY revenue growth %); forward P/S vs. TTM P/S (guidance credibility check); 3-year historical P/S range; insider ownership; SBC as % of revenue |
+| **3 — Mandatory Bear Case** | Customer concentration (flag if single customer >30% revenue); dilution risk (ATM programs or secondaries in last 24 months); last earnings miss (reason + stock reaction); 10-K specific risks (no boilerplate); bull case critique |
+| **4 — Technical Overlay** | 200-day MA position and slope (rising / falling); RS vs. SPY over 3 months (accelerating or breaking down); short interest (days to cover, rising or falling) |
+| **5 — Verdict** | Three-point bull case, three-point bear case, net view, conviction (High / Medium / Low), and what would change the thesis |
+
+**Bear case rule:** Any position sized above 10% must have a fully resolved bear case documented in Section 3. If the bear case is unresolved, the position is capped at ≤7% or avoided entirely.
+
+The reference guide is saved at `docs/AI_Prompt_Guide.pdf`.
+
 ---
 
 ### 4 — Portfolio Snapshot (Fridays + on-demand)
@@ -988,6 +1004,15 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### AI research framework + deposit timing fix (June 29, 2026)
+
+| Change | Details |
+|---|---|
+| 5-section research framework | Added `RESEARCH RIGOR REQUIREMENTS` block to `_SYSTEM_PROMPT` in `app/claude_manager.py`. Every rebalance now runs all 5 sections for each holding and any new candidate: Foundation, Valuation Rigor, Mandatory Bear Case, Technical Overlay, and Verdict. |
+| Bear case rule | Positions above 10% target weight must have a fully resolved bear case; otherwise capped at ≤7% or avoided. |
+| Reference guide | `docs/AI_Prompt_Guide.pdf` added to repo — source document behind the framework. |
+| Deposit timing fix | Fixed false -49.91% crash on deposit day in `get_claude_performance()` (`app/claude_callouts.py`). Root cause: `cumulative_deposit` was accumulated before `adj_equity` was computed on the same snapshot. Robinhood ACH deposits are often "pending" on the initiation date — the equity API still returns the pre-deposit value — so subtracting the deposit from that figure produced a large false negative. Fix: moved deposit accumulation to after the data point is appended so it takes effect from the next snapshot (T+1). |
 
 ### Delayed withdrawal approval (June 21, 2026)
 
