@@ -702,50 +702,114 @@ Kimi Record: 5W - 1L
 ```
 
 ### Kimi Manager (`CLAUDE_MANAGER_WEBHOOK_URL`)
-The rebalance posts several messages in sequence:
+The rebalance sends a sequence of **Discord embeds** (colored bordered cards). An `asyncio.sleep` delay between each send keeps messages in order — Discord's rate limit can reorder rapid-fire messages. Research text uses plain-text chunks with 0.6 s gaps.
 
+**Color key:** yellow = header/accent/double-down, green = buy/win/complete, red = sell/loss, orange = trim
+
+**1 — Kick-off embed** *(yellow border)*
 ```
-🤖 KIMI PORTFOLIO MANAGER — MONTHLY REBALANCE
-Fetching portfolio and running analysis... 🕐 9:35 AM CT — June 1, 2026
+┃ 🤖 KIMI PORTFOLIO MANAGER — MONTHLY REBALANCE
+┃ Fetching portfolio data and running 5-section research analysis…
+┃                                    🕐 9:35 AM CT — July 1, 2026
+```
 
-📊 KIMI MONTHLY PORTFOLIO ANALYSIS
-[Full written analysis — chunked across multiple Discord messages if >2000 chars]
+**2 — Analysis header embed** *(yellow border, fires after Claude responds)*
+```
+┃ 📊 KIMI MONTHLY PORTFOLIO ANALYSIS
+┃ Full 5-section research completed for 6 position(s) + new candidates.
+┃ Portfolio Value   Cash               SPY       Holdings
+┃ $12,450.83        $842.00 (6.8%)    $580.00   6
+┃                                    🕐 9:36 AM CT — July 1, 2026
+```
 
-⚡ EXECUTING 4 TRADE(S) — 🕐 9:36 AM CT
+**3–N — Research text** *(plain-text chunks, 0.6 s apart)*
+```
+══════════════════════════════
+**NVDA — NVIDIA Corp** (18% → 15%)
 
-🔥 KIMI DOUBLE_DOWN — META
-Qty: 0.834 shares @ $601.00
-Target: 22% weight — Invested: $501.23
-🕐 9:36 AM CT
+**§1 FOUNDATION**
+Business: GPU / accelerated computing dominance in AI training & inference
+Moat: CUDA ecosystem lock-in, H100/B200 supply allocation advantage
+Catalysts: (1) Blackwell ramp `Critical` (2) NIM software `High` (3) sovereign AI `High`
 
-✂️ KIMI TRIM — NVDA
-Sold 2.000 shares @ $127.50 → reduced to 8% target
-P&L: +$84.20 🟢
-Kimi Record: 7W - 2L
-🕐 9:36 AM CT
+**§2 VALUATION RIGOR**
+Rule of 40: `+122% rev growth + 55% EBITDA margin = 177` ✓
+Value/Growth Score: `P/S 30x ÷ 122% YoY = 0.25` (excellent)
+3-yr P/S range: `min 8x / avg 22x / max 42x`
 
-🔴 KIMI SELL — NOW
-Qty: 5.5 shares @ $210.00
-P&L: +$312.00 (+18.42%) 🟢 WIN
-Kimi Record: 8W - 2L
-🕐 9:36 AM CT
+**§3 BEAR CASE**
+Customer concentration: `Microsoft + Meta + Google ≈ 35%` ⚠️ concentrated
+Export controls: China/Russia ceiling could cut ~25% of datacenter TAM
+Bull critique: Blackwell delays ← resolved: already in guidance
 
-🟢 KIMI BUY — FICO
-Qty: 1.234 shares @ $1,842.00
-Target: 15% weight — Invested: $2,271.73
-🕐 9:36 AM CT
+**§4 TECHNICAL OVERLAY**
+200-day MA: `Above` · Slope: `Rising` ✓   RS vs SPY (3M): `+12%` ✓
+Short interest: `0.8% float` — minimal, falling
 
-✅ KIMI PORTFOLIO REBALANCE COMPLETE — 🕐 9:37 AM CT — June 1, 2026
+**§5 VERDICT**
+Bull: (1) AI capex supercycle early (2) software monetization inflecting (3) no credible alt
+Bear: (1) customer concentration (2) China export ceiling (3) valuation priced for perfection
+**Conviction: HIGH**
+══════════════════════════════
+[next ticker follows…]
+```
 
-🟢 This month:   Portfolio +3.21%  |  SPY +1.84%  |  Alpha +1.37%
-🟢 Since 2026-01-01:  Portfolio +18.50%  |  SPY +12.30%  |  Alpha +6.20%
+**N+1 — Trade execution header embed** *(yellow border)*
+```
+┃ ⚡ EXECUTING 4 TRADE(S)
+┃ Sells and trims execute first to fund buys.
+┃                                    🕐 9:36 AM CT — July 1, 2026
+```
+
+**Per-trade embeds** *(one per trade, color coded by action)*
+```
+┃ green  🟢 KIMI BUY — FICO
+┃        Qty                Target Weight    Invested
+┃        1.234 shares @     15%              $2,271.73
+┃        $1,842.00
+┃                                    🕐 9:36 AM CT — July 1, 2026
+
+┃ orange ✂️ KIMI TRIM — NVDA
+┃        Sold               Target Weight
+┃        2.000 shares @     8%
+┃        $127.50
+┃        P&L                Record
+┃        +$84.20 (+8.5%) 🟢 WIN     9W — 2L
+┃                                    🕐 9:36 AM CT — July 1, 2026
+
+┃ yellow 🔥 KIMI DOUBLE DOWN — META
+┃        Qty                Target Weight    Invested
+┃        0.834 shares @     22%              $501.23
+┃        $601.00
+┃                                    🕐 9:36 AM CT — July 1, 2026
+
+┃ red    🔴 KIMI SELL — NOW
+┃        Qty                P&L
+┃        5.5 shares @       +$312.00 (+18.42%) 🟢 WIN
+┃        $210.00
+┃        Record
+┃        8W — 2L
+┃                                    🕐 9:36 AM CT — July 1, 2026
+```
+
+**Final — Completion embed** *(green border)*
+```
+┃ ✅ KIMI PORTFOLIO REBALANCE COMPLETE
+┃ 🟢 This month:        Portfolio +3.21%  |  SPY +1.84%  |  Alpha +1.37%
+┃ 🟢 Since 2026-01-01:  Portfolio +18.50% |  SPY +12.30% |  Alpha +6.20%
+┃ Trades Executed   Trades Skipped
+┃ 4                 0
+┃                                    🕐 9:37 AM CT — July 1, 2026
+```
 
 — or when no trades needed —
 
-✅ NO CHANGES THIS MONTH
-Kimi Portfolio Manager determined the current portfolio requires no rebalancing.
-
-🟢 This month:   Portfolio +1.10%  |  SPY +0.82%  |  Alpha +0.28%
+**Final — No changes embed** *(green border)*
+```
+┃ ✅ NO CHANGES THIS MONTH
+┃ Kimi Portfolio Manager determined the current portfolio requires no rebalancing.
+┃ 🟢 This month:        Portfolio +1.10%  |  SPY +0.82%  |  Alpha +0.28%
+┃                                    🕐 9:37 AM CT — July 1, 2026
 ```
 
 ### Paid Signal Subscribers (`SIGNAL_SUBSCRIBERS_WEBHOOK_URL`)
