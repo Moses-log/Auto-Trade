@@ -9,6 +9,7 @@ Both functions are fire-and-forget — they log errors but never raise so
 that a notification failure never blocks order execution.
 """
 
+import asyncio
 import json as _json
 import logging
 import httpx
@@ -111,7 +112,10 @@ async def notify_claude_signal_feed(message: str) -> None:
     url = settings.claude_subscribers_webhook_url
     if not url:
         return
-    for chunk in _chunk(message, 1990):
+    chunks = _chunk(message, 1990)
+    for i, chunk in enumerate(chunks):
+        if i > 0:
+            await asyncio.sleep(0.6)
         try:
             await _client.post(url, json={"content": chunk}, timeout=5)
         except Exception as exc:
@@ -241,11 +245,29 @@ async def notify_claude_manager(message: str) -> None:
     )
     if not url:
         return
-    for chunk in _chunk(message, 1990):
+    chunks = _chunk(message, 1990)
+    for i, chunk in enumerate(chunks):
+        if i > 0:
+            await asyncio.sleep(0.6)  # stay under Discord's 5 msg/2 s rate limit
         try:
             await _client.post(url, json={"content": chunk}, timeout=5)
         except Exception as exc:
             log.warning("Claude manager notification failed: %s", exc)
+
+
+async def notify_claude_manager_embed(embed: dict) -> None:
+    """Send a Discord embed to CLAUDE_MANAGER_WEBHOOK_URL."""
+    url = (
+        settings.claude_manager_webhook_url
+        or settings.rh_discord_webhook_url
+        or settings.discord_webhook_url
+    )
+    if not url:
+        return
+    try:
+        await _client.post(url, json={"embeds": [embed]}, timeout=5)
+    except Exception as exc:
+        log.warning("Claude manager embed notification failed: %s", exc)
 
 
 async def notify_claude_manager_with_chart(message: str, chart_bytes: bytes) -> None:

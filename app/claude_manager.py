@@ -28,6 +28,13 @@ from app.config import settings
 _CT = pytz.timezone("America/Chicago")
 _LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
 
+# Discord embed color palette (decimal integers)
+_CLR_YELLOW = 0xF5E642   # accent / header / double-down
+_CLR_GREEN  = 0x00C853   # buy / win / complete
+_CLR_RED    = 0xFF4D4D   # sell / loss
+_CLR_ORANGE = 0xFFA032   # trim
+_CLR_GRAY   = 0x6B6B6B   # neutral / hold / info
+
 # Keeps strong references to fire-and-forget tasks so GC cannot cancel them mid-execution.
 _bg_tasks: set = set()
 
@@ -45,6 +52,48 @@ def _timestamp() -> str:
     return f"🕐 {hour}:{now.strftime('%M %p')} {now.strftime('%Z')} — {now.strftime('%B')} {now.day}, {now.year}"
 
 log = logging.getLogger(__name__)
+
+
+def _embed(
+    title: str,
+    color: int,
+    *,
+    description: str = "",
+    fields: list[dict] | None = None,
+    footer: str = "",
+) -> dict:
+    """Build a Discord embed payload dict."""
+    e: dict = {"title": title[:256], "color": color}
+    if description:
+        e["description"] = description[:4096]
+    if fields:
+        e["fields"] = fields
+    if footer:
+        e["footer"] = {"text": footer[:2048]}
+    return e
+
+
+def _field(name: str, value: str, inline: bool = True) -> dict:
+    return {"name": name[:256], "value": value[:1024], "inline": inline}
+
+
+def _trade_embed(action: str, ticker: str, fields: list[dict], footer: str) -> dict:
+    """Color-coded embed for a single trade."""
+    colors = {
+        "BUY": _CLR_GREEN, "DOUBLE_DOWN": _CLR_YELLOW,
+        "SELL": _CLR_RED,  "TRIM": _CLR_ORANGE, "HOLD": _CLR_GRAY,
+    }
+    emojis = {
+        "BUY": "🟢", "DOUBLE_DOWN": "🔥",
+        "SELL": "🔴", "TRIM": "✂️",  "HOLD": "⏸",
+    }
+    label = "DOUBLE DOWN" if action == "DOUBLE_DOWN" else action
+    return _embed(
+        f"{emojis.get(action, '📌')} KIMI {label} — {ticker}",
+        colors.get(action, _CLR_GRAY),
+        fields=fields,
+        footer=footer,
+    )
 
 _SYSTEM_PROMPT = """You are an institutional-grade portfolio manager whose objective is to outperform the S&P 500 over rolling 3-, 5-, and 10-year periods by identifying the companies most likely to dominate the future economy.
 
@@ -302,7 +351,7 @@ def _call_claude_sync(user_message: str) -> str:
         },
         json={
             "model": "claude-opus-4-8",
-            "max_tokens": 4096,
+            "max_tokens": 8192,
             "system": _SYSTEM_PROMPT,
             "messages": [{"role": "user", "content": user_message}],
         },
@@ -495,7 +544,10 @@ async def run_monthly_rebalance() -> None:
     """
     import asyncio
     from app.trading.robinhood_client import rh_client
-    from app.notifications import notify_claude_manager, notify_claude_manager_with_chart
+    from app.notifications import (
+        notify_claude_manager, notify_claude_manager_embed,
+        notify_claude_manager_with_chart,
+    )
 
     async def _post_financials_chart(tkr: str) -> None:
         """Fetch quarterly financials and post chart to manager + subscriber channels."""
@@ -523,24 +575,26 @@ async def run_monthly_rebalance() -> None:
 
     if not settings.anthropic_api_key:
         log.error("ANTHROPIC_API_KEY not set — skipping monthly rebalance")
-        await notify_claude_manager(
-            "⚠️ **KIMI PORTFOLIO REBALANCE SKIPPED**\n"
-            "ANTHROPIC_API_KEY is not configured in environment."
-        )
+        await notify_claude_manager_embed(_embed(
+            "⚠️ REBALANCE SKIPPED — ANTHROPIC_API_KEY not configured",
+            _CLR_ORANGE, footer=_timestamp(),
+        ))
         return
 
     if not rh_client.available:
         log.warning("RH session unavailable — skipping monthly rebalance")
-        await notify_claude_manager(
-            "⚠️ **KIMI PORTFOLIO REBALANCE SKIPPED**\n"
-            "Robinhood session is offline."
-        )
+        await notify_claude_manager_embed(_embed(
+            "⚠️ REBALANCE SKIPPED — Robinhood session is offline",
+            _CLR_ORANGE, footer=_timestamp(),
+        ))
         return
 
-    await notify_claude_manager(
-        f"🤖 **KIMI PORTFOLIO MANAGER — MONTHLY REBALANCE**\n"
-        f"Fetching portfolio and running analysis... {_timestamp()}"
-    )
+    await notify_claude_manager_embed(_embed(
+        "🤖 KIMI PORTFOLIO MANAGER — MONTHLY REBALANCE",
+        _CLR_YELLOW,
+        description="Fetching portfolio data and running 5-section research analysis…",
+        footer=_timestamp(),
+    ))
 
     loop = asyncio.get_running_loop()
 
@@ -565,7 +619,10 @@ async def run_monthly_rebalance() -> None:
         except Exception as exc:
             log.error("Failed to fetch RH portfolio data: %s", exc)
             log_entry["status"] = "failed_fetch"
-            await notify_claude_manager(f"❌ **REBALANCE FAILED** — could not fetch portfolio: {exc}")
+            await notify_claude_manager_embed(_embed(
+                "❌ REBALANCE FAILED — could not fetch portfolio",
+                _CLR_RED, description=str(exc), footer=_timestamp(),
+            ))
             return
 
         holdings_value = sum(p["qty"] * p.get("current_price", 0) for p in positions)
@@ -573,7 +630,10 @@ async def run_monthly_rebalance() -> None:
 
         if portfolio_value < 1:
             log_entry["status"] = "skipped_zero_value"
-            await notify_claude_manager("⚠️ **REBALANCE SKIPPED** — portfolio value is zero")
+            await notify_claude_manager_embed(_embed(
+                "⚠️ REBALANCE SKIPPED — portfolio value is zero",
+                _CLR_ORANGE, footer=_timestamp(),
+            ))
             return
 
 
@@ -633,8 +693,13 @@ async def run_monthly_rebalance() -> None:
             f"the full bear case before being sized above 10%.\n\n"
             f"3. DETERMINE OPTIMAL PORTFOLIO — Build the best portfolio for the next month. "
             f"Any position sized above 10% must have a resolved bear case documented above.\n\n"
-            f"4. OUTPUT — Provide your complete research and analysis, then end with the required "
-            f"JSON trade block."
+            f"4. OUTPUT FORMAT — Write for Discord (markdown supported):\n"
+            f"   • Separate each stock with: `══════════════════════════════`\n"
+            f"   • Header: **TICKER — Company Name** (current weight → target weight)\n"
+            f"   • Section labels: **§1 FOUNDATION** | **§2 VALUATION RIGOR** | **§3 BEAR CASE** | **§4 TECHNICAL** | **§5 VERDICT**\n"
+            f"   • Use inline code for numbers: `Rule of 40: 68` `P/S: 8.2x` `+23% YoY`\n"
+            f"   • Verdict line: **Conviction: HIGH** or **MEDIUM** or **LOW** — one line, nothing else\n"
+            f"   • After all analysis, end with the required JSON block."
         )
 
         try:
@@ -643,7 +708,10 @@ async def run_monthly_rebalance() -> None:
         except Exception as exc:
             log.error("Claude API call failed: %s", exc)
             log_entry["status"] = "failed_claude_api"
-            await notify_claude_manager(f"❌ **REBALANCE FAILED** — Anthropic API error: {exc}")
+            await notify_claude_manager_embed(_embed(
+                "❌ REBALANCE FAILED — Anthropic API error",
+                _CLR_RED, description=str(exc), footer=_timestamp(),
+            ))
             return
 
         log_entry["claude_response"] = response_text
@@ -652,28 +720,56 @@ async def run_monthly_rebalance() -> None:
         trade_block = _parse_trade_block(response_text)
         log_entry["trade_block"] = trade_block
 
-        # Full analysis → main Discord + subscriber feed
+        # Full analysis → main Discord + subscriber feed (chunked with rate-limit delays)
         analysis_body = re.sub(r"```json.*?```", "", response_text, flags=re.DOTALL).strip()
-        analysis_msg = f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}"
-        await notify_claude_manager(analysis_msg)
+        spy_str = f"${spy_price:,.2f}" if spy_price else "—"
+        cash_pct = buying_power / portfolio_value * 100 if portfolio_value > 0 else 0
+        analysis_header = _embed(
+            "📊 KIMI MONTHLY PORTFOLIO ANALYSIS",
+            _CLR_YELLOW,
+            description=f"Full 5-section research completed for {len(positions)} position(s) + new candidates.",
+            fields=[
+                _field("Portfolio Value", f"${portfolio_value:,.2f}"),
+                _field("Cash",            f"${buying_power:,.2f} ({cash_pct:.1f}%)"),
+                _field("SPY",             spy_str),
+                _field("Holdings",        str(len(positions))),
+            ],
+            footer=_timestamp(),
+        )
+        await asyncio.sleep(0.8)
+        await notify_claude_manager_embed(analysis_header)
+        await asyncio.sleep(0.8)
+        await notify_claude_manager(analysis_body)
+
         from app.notifications import notify_claude_signal_feed
-        _fire(notify_claude_signal_feed(analysis_msg))
+        _fire(notify_claude_signal_feed(
+            f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}"
+        ))
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
-            await notify_claude_manager(
-                "⚠️ Could not parse trade instructions from Claude's response. "
-                "No trades executed — review the analysis above manually."
-            )
+            await asyncio.sleep(0.8)
+            await notify_claude_manager_embed(_embed(
+                "⚠️ Could not parse trade instructions",
+                _CLR_ORANGE,
+                description="No trades executed — review the analysis above manually.",
+                footer=_timestamp(),
+            ))
             return
 
         if trade_block.get("no_changes"):
             log_entry["status"] = "no_changes"
-            no_changes_msg = "✅ **NO CHANGES THIS MONTH**\nKimi Portfolio Manager determined the current portfolio requires no rebalancing."
             benchmark_str = _format_benchmark(log_entry, all_history_records)
-            if benchmark_str:
-                no_changes_msg += f"\n\n{benchmark_str}"
-            await notify_claude_manager(no_changes_msg)
+            await asyncio.sleep(0.8)
+            await notify_claude_manager_embed(_embed(
+                "✅ NO CHANGES THIS MONTH",
+                _CLR_GREEN,
+                description=(
+                    "Kimi Portfolio Manager determined the current portfolio requires no rebalancing."
+                    + (f"\n\n{benchmark_str}" if benchmark_str else "")
+                ),
+                footer=_timestamp(),
+            ))
             return
 
         _EXCLUDED = {"SPY"}  # managed by Kimi — Claude must never touch these
@@ -681,11 +777,22 @@ async def run_monthly_rebalance() -> None:
         trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
         if not trades:
             log_entry["status"] = "no_trades"
-            await notify_claude_manager("✅ No trades to execute this month.")
+            await asyncio.sleep(0.8)
+            await notify_claude_manager_embed(_embed(
+                "✅ No trades to execute this month",
+                _CLR_GREEN,
+                footer=_timestamp(),
+            ))
             return
 
         action_count = len([t for t in trades if t["action"] != "HOLD"])
-        await notify_claude_manager(f"⚡ **EXECUTING {action_count} TRADE(S)** — {_timestamp()}")
+        await asyncio.sleep(1.0)   # clear pause after analysis wall-of-text
+        await notify_claude_manager_embed(_embed(
+            f"⚡ EXECUTING {action_count} TRADE(S)",
+            _CLR_YELLOW,
+            description=f"Sells and trims execute first to fund buys.",
+            footer=_timestamp(),
+        ))
 
         from app.claude_portfolio import open_position, close_position, trim_position, get_record
         from app.trading.alpaca_client import get_next_trading_day
@@ -730,13 +837,25 @@ async def run_monthly_rebalance() -> None:
             result = await rh_client.close_ticker_async(ticker)
 
             if result.get("note"):
-                await notify_claude_manager(f"ℹ️ KIMI SELL {ticker}: {result['note']}")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"ℹ️ KIMI SELL — {ticker} skipped",
+                    _CLR_GRAY,
+                    description=result["note"],
+                    footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": result["note"]})
                 continue
 
             if result.get("status") != "ok" or not result.get("qty"):
                 reason = result.get("reason", "unknown")
-                await notify_claude_manager(f"❌ **KIMI SELL — {ticker}** FAILED: {reason}")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"❌ KIMI SELL — {ticker} FAILED",
+                    _CLR_RED,
+                    description=reason,
+                    footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": reason})
                 continue
 
@@ -760,24 +879,39 @@ async def run_monthly_rebalance() -> None:
                 "dollar_pnl": dollar_pnl, "pct_pnl": pct_pnl,
             })
 
+            await asyncio.sleep(0.8)
             if queued:
-                lines = [f"⏳ **KIMI SELL — {ticker}** (queued for open)",
-                         f"Qty: {qty:g} shares ≈ ${result.get('price_est', 0):,.2f}", _timestamp()]
+                await notify_claude_manager_embed(_trade_embed(
+                    "SELL", ticker,
+                    [
+                        _field("Status", "⏳ Queued for market open"),
+                        _field("Est. Qty", f"{qty:g} shares"),
+                        _field("Est. Price", f"${result.get('price_est', 0):,.2f}"),
+                    ],
+                    _timestamp(),
+                ))
             else:
-                pnl_line = (f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN" if dollar_pnl >= 0
-                            else f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS") if dollar_pnl is not None else ""
-                lines = [f"🔴 **KIMI SELL — {ticker}**", f"Qty: {qty:g} shares @ ${fill or 0:,.2f}"]
-                if pnl_line:
-                    lines.append(pnl_line)
-                lines += [f"Kimi Record: {wins}W - {losses}L", _timestamp()]
-            await notify_claude_manager("\n".join(lines))
-            if not queued:
+                pnl_str = (
+                    f"+${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
+                    if dollar_pnl >= 0
+                    else f"-${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
+                ) if dollar_pnl is not None else "—"
+                await notify_claude_manager_embed(_trade_embed(
+                    "SELL", ticker,
+                    [
+                        _field("Qty",    f"{qty:g} shares @ ${fill or 0:,.2f}"),
+                        _field("P&L",    pnl_str, inline=False),
+                        _field("Record", f"{wins}W — {losses}L"),
+                    ],
+                    _timestamp(),
+                ))
                 from app.notifications import notify_claude_signal_feed
-                sub_sig = [f"🔴 **KIMI SELL — {ticker}**", f"@ ${fill or 0:,.2f}"]
-                if dollar_pnl is not None:
-                    sub_sig.append("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS")
-                sub_sig.append(_timestamp())
-                _fire(notify_claude_signal_feed("\n".join(sub_sig)))
+                _fire(notify_claude_signal_feed(
+                    f"🔴 **KIMI SELL — {ticker}**\n"
+                    f"@ ${fill or 0:,.2f}\n"
+                    + ("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS") + "\n"
+                    + _timestamp()
+                ))
 
         # ── 5b. Execute TRIMs ─────────────────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "TRIM"):
@@ -787,7 +921,11 @@ async def run_monthly_rebalance() -> None:
 
             pos = next((p for p in positions if p["symbol"] == ticker), None)
             if pos is None:
-                await notify_claude_manager(f"⚠️ TRIM {ticker}: no open position found")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"⚠️ TRIM {ticker} skipped — no open position",
+                    _CLR_GRAY, footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "no position"})
                 continue
 
@@ -796,15 +934,27 @@ async def run_monthly_rebalance() -> None:
             current_value = current_qty * current_price
 
             if current_qty < 1.0:
-                await notify_claude_manager(
-                    f"⚠️ **TRIM {ticker} SKIPPED** — {current_qty:.4f} shares (< 1 whole share)\n"
-                    f"Robinhood cannot partially sell fractional positions. Use SELL to close entirely."
-                )
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"⚠️ TRIM {ticker} skipped — fractional position",
+                    _CLR_GRAY,
+                    description=(
+                        f"Position is {current_qty:.4f} shares (< 1 whole share). "
+                        "Robinhood cannot partially sell fractional positions. Use SELL to close entirely."
+                    ),
+                    footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": f"fractional ({current_qty:.4f} shares)"})
                 continue
 
             if target_value >= current_value * 0.95:
-                await notify_claude_manager(f"⚠️ TRIM {ticker}: already at or below {target_wt}% target")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"⚠️ TRIM {ticker} skipped — already at target",
+                    _CLR_GRAY,
+                    description=f"Position already at or below {target_wt}% target weight.",
+                    footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "already at target"})
                 continue
 
@@ -817,7 +967,11 @@ async def run_monthly_rebalance() -> None:
 
             if result.get("status") != "ok":
                 reason = result.get("reason", "unknown")
-                await notify_claude_manager(f"❌ **KIMI TRIM — {ticker}** FAILED: {reason}")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"❌ KIMI TRIM — {ticker} FAILED",
+                    _CLR_RED, description=reason, footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": reason})
                 continue
 
@@ -841,26 +995,40 @@ async def run_monthly_rebalance() -> None:
                 "dollar_pnl": dollar_pnl, "target_weight_pct": target_wt,
             })
 
+            await asyncio.sleep(0.8)
             if queued:
-                lines = [f"⏳ **KIMI TRIM — {ticker}** (queued for open)",
-                         f"Selling {qty_sold:g} shares ≈ ${result.get('price_est', 0):,.2f} → target {target_wt}%",
-                         _timestamp()]
+                await notify_claude_manager_embed(_trade_embed(
+                    "TRIM", ticker,
+                    [
+                        _field("Status",        "⏳ Queued for market open"),
+                        _field("Selling",       f"{qty_sold:g} shares"),
+                        _field("Target Weight", f"{target_wt}%"),
+                    ],
+                    _timestamp(),
+                ))
             else:
-                pnl_line = (f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN" if dollar_pnl >= 0
-                            else f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS") if dollar_pnl is not None else ""
-                lines = [f"✂️ **KIMI TRIM — {ticker}**",
-                         f"Sold {qty_sold:g} shares @ ${fill or 0:,.2f} → reduced to {target_wt}% target"]
-                if pnl_line:
-                    lines.append(pnl_line)
-                lines += [f"Kimi Record: {wins}W - {losses}L", _timestamp()]
-            await notify_claude_manager("\n".join(lines))
-            if not queued:
+                pnl_str = (
+                    f"+${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
+                    if dollar_pnl >= 0
+                    else f"-${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
+                ) if dollar_pnl is not None else "—"
+                await notify_claude_manager_embed(_trade_embed(
+                    "TRIM", ticker,
+                    [
+                        _field("Sold",          f"{qty_sold:g} shares @ ${fill or 0:,.2f}"),
+                        _field("Target Weight", f"{target_wt}%"),
+                        _field("P&L",           pnl_str, inline=False),
+                        _field("Record",        f"{wins}W — {losses}L"),
+                    ],
+                    _timestamp(),
+                ))
                 from app.notifications import notify_claude_signal_feed
-                sub_sig = [f"✂️ **KIMI TRIM — {ticker}**", f"@ ${fill or 0:,.2f} → target {target_wt}% weight"]
-                if dollar_pnl is not None:
-                    sub_sig.append(f"P&L: +{pct_pnl:.2f}% 🟢 WIN" if dollar_pnl >= 0 else f"P&L: -{abs(pct_pnl):.2f}% 🔴 LOSS")
-                sub_sig.append(_timestamp())
-                _fire(notify_claude_signal_feed("\n".join(sub_sig)))
+                _fire(notify_claude_signal_feed(
+                    f"✂️ **KIMI TRIM — {ticker}**\n"
+                    f"@ ${fill or 0:,.2f} → target {target_wt}% weight\n"
+                    + (f"+{pct_pnl:.2f}% 🟢 WIN" if dollar_pnl >= 0 else f"-{abs(pct_pnl):.2f}% 🔴 LOSS") + "\n"
+                    + _timestamp()
+                ))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
         available_budget = buying_power + expected_sell_proceeds
@@ -884,9 +1052,11 @@ async def run_monthly_rebalance() -> None:
                     reason = f"already at target ({current_val/portfolio_value*100:.1f}% vs {target_wt}% target)"
                 else:
                     reason = f"needed ${delta_dollars:,.0f} more, only ${available_budget:,.0f} available"
-                await notify_claude_manager(
-                    f"⚠️ **KIMI {action_label} — {ticker}** skipped\n{reason}\n{_timestamp()}"
-                )
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"⚠️ KIMI {action_label} — {ticker} skipped",
+                    _CLR_GRAY, description=reason, footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": action_label, "ticker": ticker, "reason": reason})
                 continue
 
@@ -894,7 +1064,11 @@ async def run_monthly_rebalance() -> None:
 
             if result.get("status") != "ok":
                 reason = result.get("reason", "unknown")
-                await notify_claude_manager(f"❌ **KIMI {action_label} — {ticker}** FAILED: {reason}")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"❌ KIMI {action_label} — {ticker} FAILED",
+                    _CLR_RED, description=reason, footer=_timestamp(),
+                ))
                 log_entry["trades_skipped"].append({"action": action_label, "ticker": ticker, "reason": reason})
                 continue
 
@@ -910,38 +1084,61 @@ async def run_monthly_rebalance() -> None:
                 "dollars_invested": invest_dollars, "target_weight_pct": target_wt,
             })
 
-            buy_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
+            await asyncio.sleep(0.8)
             if queued:
-                lines = [f"⏳ **KIMI {action_label} — {ticker}** (queued for open)",
-                         f"Qty: {qty:g} shares ≈ ${est:,.2f}",
-                         f"Target: {target_wt}% weight — Investing: ${invest_dollars:,.2f}", _timestamp()]
+                await notify_claude_manager_embed(_trade_embed(
+                    action_label, ticker,
+                    [
+                        _field("Status",        "⏳ Queued for market open"),
+                        _field("Est. Qty",      f"{qty:g} shares ≈ ${est:,.2f}"),
+                        _field("Target Weight", f"{target_wt}%"),
+                        _field("Investing",     f"${invest_dollars:,.2f}"),
+                    ],
+                    _timestamp(),
+                ))
             else:
-                lines = [f"{buy_emoji} **KIMI {action_label} — {ticker}**",
-                         f"Qty: {qty:g} shares @ ${fill or 0:,.2f}",
-                         f"Target: {target_wt}% weight — Invested: ${invest_dollars:,.2f}", _timestamp()]
-
-            await notify_claude_manager("\n".join(lines))
-            if not queued:
+                await notify_claude_manager_embed(_trade_embed(
+                    action_label, ticker,
+                    [
+                        _field("Qty",           f"{qty:g} shares @ ${fill or 0:,.2f}"),
+                        _field("Target Weight", f"{target_wt}%"),
+                        _field("Invested",      f"${invest_dollars:,.2f}"),
+                    ],
+                    _timestamp(),
+                ))
                 from app.notifications import notify_claude_signal_feed
                 sig_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
-                sub_sig = [
-                    f"{sig_emoji} **KIMI {action_label} — {ticker}**",
-                    f"@ ${fill or 0:,.2f}",
-                    f"Target: {target_wt}% weight",
-                    _timestamp(),
-                ]
-                _fire(notify_claude_signal_feed("\n".join(sub_sig)))
+                _fire(notify_claude_signal_feed(
+                    f"{sig_emoji} **KIMI {action_label} — {ticker}**\n"
+                    f"@ ${fill or 0:,.2f}\n"
+                    f"Target: {target_wt}% weight\n"
+                    + _timestamp()
+                ))
             _fire(_post_financials_chart(ticker))
             available_budget = max(0.0, available_budget - invest_dollars)
 
         log_entry["status"] = "completed"
 
-        # ── 7. Benchmark comparison ───────────────────────────────────────────
+        # ── 7. Completion embed with benchmark ────────────────────────────────
         benchmark_str = _format_benchmark(log_entry, all_history_records)
-        completion_msg = f"✅ **KIMI PORTFOLIO REBALANCE COMPLETE** — {_timestamp()}"
+        executed_count = len(log_entry["trades_executed"])
+        skipped_count  = len(log_entry["trades_skipped"])
+        desc_lines = []
         if benchmark_str:
-            completion_msg += f"\n\n{benchmark_str}"
-        await notify_claude_manager(completion_msg)
+            desc_lines.append(benchmark_str)
+        if skipped_count:
+            desc_lines.append(f"\n⚠️ {skipped_count} trade(s) skipped — see messages above.")
+        await asyncio.sleep(0.8)
+        await notify_claude_manager_embed(_embed(
+            "✅ KIMI PORTFOLIO REBALANCE COMPLETE",
+            _CLR_GREEN,
+            description="\n".join(desc_lines) if desc_lines else "Portfolio rebalanced successfully.",
+            fields=[
+                _field("Trades Executed", str(executed_count)),
+                _field("Trades Skipped",  str(skipped_count)),
+            ],
+            footer=_timestamp(),
+        ))
 
     finally:
         _append_rebalance_log(log_entry)
