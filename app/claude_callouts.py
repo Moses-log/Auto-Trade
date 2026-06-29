@@ -114,12 +114,12 @@ def get_claude_performance() -> dict:
 
                 for snap in snapshots:
                     date_str = snap["date"]
-                    # Only subtract deposits logged AFTER the first snapshot;
-                    # anything before is already priced into first_equity.
-                    if date_str > first["date"] and date_str in deposit_by_date:
-                        cumulative_deposit += deposit_by_date[date_str]
 
                     if not snap["equity"] or not snap["spy_close"]:
+                        # Still accumulate deposits for holiday/skipped snapshots so
+                        # the next valid snapshot sees the correct cumulative total.
+                        if date_str > first["date"] and date_str in deposit_by_date:
+                            cumulative_deposit += deposit_by_date[date_str]
                         continue
 
                     adj_equity = snap["equity"] - cumulative_deposit
@@ -132,6 +132,14 @@ def get_claude_performance() -> dict:
                         label = date_str
 
                     data_points.append({"label": label, "portfolio_pct": portfolio_pct, "spy_pct": spy_pct})
+
+                    # Apply this day's deposit AFTER recording the data point so it
+                    # takes effect from the next snapshot. Robinhood ACH deposits are
+                    # often "pending" on the initiation date and don't appear in the
+                    # equity figure until T+1, so subtracting on the same day produces
+                    # a false large negative return.
+                    if date_str > first["date"] and date_str in deposit_by_date:
+                        cumulative_deposit += deposit_by_date[date_str]
 
                 if data_points:
                     final = data_points[-1]
