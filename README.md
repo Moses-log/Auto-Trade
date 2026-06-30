@@ -165,7 +165,7 @@ On the **1st of each month at 9:35 AM ET**, the system:
 1. Fetches all RH positions + buying power
 2. Enriches each holding with yfinance fundamentals (Forward P/E, ROE, margins, growth, earnings date) — **all tickers in parallel**
 3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
-4. Loads **last 3 rebalance log entries** to give the system its own performance history
+4. Loads **last 3 rebalance log entries** (date, portfolio value, SPY price, trade counts) + the **full 5-section research from the most recent entry** so Claude can track thesis evolution month-over-month
 5. Calls **claude-opus-4-8** via the Anthropic API with a full Ackman-style scoring framework
 6. The system scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage — using macro conditions and upcoming earnings dates to inform timing
 7. The system proposes an optimal portfolio using five trade actions:
@@ -1068,6 +1068,14 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Prior research history lookback (June 30, 2026)
+
+| Change | Details |
+|---|---|
+| `analysis_body` saved to log | After each rebalance, the full 5-section research text (JSON block stripped) is stored as `analysis_body` in `claude_rebalance_log.json`. |
+| Fed back into next rebalance | `_load_recent_history()` now appends the most recent `analysis_body` to the history context under `--- Prior 5-Section Research ---`. Claude sees its own prior reasoning and can track thesis evolution, flag broken theses, or build on prior conviction without repeating the same analysis from scratch. |
+| Lag | Takes effect from the second rebalance after deploy — first run saves the data, second run reads it. |
 
 ### AI research framework + deposit timing fix (June 29, 2026)
 
