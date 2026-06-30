@@ -51,9 +51,13 @@ async def schedule_withdrawal(
     if amount <= 0:
         raise WithdrawalValidationError("Withdrawal amount must be positive")
 
-    if spy_price is None:
-        spy_price = get_latest_price("SPY")
-        if spy_price is None:
+    # Track whether the caller explicitly provided a price (lock-in) vs we fetch for validation only
+    locked_spy_price = spy_price
+
+    validation_spy = spy_price
+    if validation_spy is None:
+        validation_spy = get_latest_price("SPY")
+        if validation_spy is None:
             raise WithdrawalValidationError("Could not fetch SPY price — try again")
 
     investors = load_investors()
@@ -85,6 +89,7 @@ async def schedule_withdrawal(
         amount=amount,
         requested_at=now.isoformat(),
         run_at=run_at.isoformat(),
+        spy_price=locked_spy_price,  # only stored if user explicitly provided it
     )
 
     scheduler.add_job(
@@ -112,18 +117,18 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
         log.warning("execute_pending_withdrawal: %s not found (already canceled?)", withdrawal_id)
         return
 
-    spy_price = get_latest_price("SPY")
+    # Use the fill price locked in at schedule time if provided; otherwise fetch live
+    spy_price: Optional[float] = record.get("spy_price") or get_latest_price("SPY")
+
     real_total_equity = None
-    if spy_price is not None:
-        try:
-            account = get_account()
-            real_total_equity = float(account.equity)
-        except Exception as exc:
-            log.warning(
-                "execute_pending_withdrawal: could not fetch account equity for %s: %s",
-                withdrawal_id, exc,
-            )
-            real_total_equity = None
+    try:
+        account = get_account()
+        real_total_equity = float(account.equity)
+    except Exception as exc:
+        log.warning(
+            "execute_pending_withdrawal: could not fetch account equity for %s: %s",
+            withdrawal_id, exc,
+        )
 
     if spy_price is None or real_total_equity is None:
         log.error(

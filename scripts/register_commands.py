@@ -56,6 +56,12 @@ COMMANDS: list = [
                 "type": 10,
                 "required": True,
             },
+            {
+                "name": "spy_price",
+                "description": "Actual SPY fill price when you sold (optional — defaults to live price at execution)",
+                "type": 10,
+                "required": False,
+            },
         ],
     },
     {

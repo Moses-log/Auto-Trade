@@ -34,16 +34,20 @@ def save_pending_withdrawal(
     amount: float,
     requested_at: str,
     run_at: str,
+    spy_price: Optional[float] = None,
 ) -> None:
     with _lock:
         records = _load()
-        records.append({
+        record: dict = {
             "id": withdrawal_id,
             "investor": investor,
             "amount": amount,
             "requested_at": requested_at,
             "run_at": run_at,
-        })
+        }
+        if spy_price is not None:
+            record["spy_price"] = spy_price
+        records.append(record)
         _save(records)
     log.info("Saved pending withdrawal %s for %s ($%.2f)", withdrawal_id, investor, amount)
 

@@ -100,19 +100,24 @@ async def handle_deposit(
     )
 
 
-async def handle_withdraw(investor_name: str, amount: float, token: str) -> None:
+async def handle_withdraw(investor_name: str, amount: float, token: str, spy_price: Optional[float] = None) -> None:
     from app.withdrawal_execution import schedule_withdrawal, WithdrawalValidationError
 
+    if spy_price is not None and spy_price <= 0:
+        await _edit_original(token, "❌ SPY price must be positive")
+        return
+
     try:
-        record = await schedule_withdrawal(investor_name, amount)
+        record = await schedule_withdrawal(investor_name, amount, spy_price=spy_price)
     except WithdrawalValidationError as exc:
         await _edit_original(token, f"❌ {exc}")
         return
 
     run_at_local = datetime.fromisoformat(record["run_at"]).astimezone(_CT)
+    spy_note = f" (SPY locked at ${spy_price:,.2f})" if spy_price else ""
     msg = (
         f"⏳ **Withdrawal Scheduled** — {record['investor']}\n"
-        f"${record['amount']:,.2f} will be processed at "
+        f"${record['amount']:,.2f}{spy_note} will be processed at "
         f"{run_at_local.strftime('%b %d, %Y %I:%M %p %Z')}.\n"
         f"Run `/cancel-withdrawal id={record['id']}` to cancel."
     )
@@ -455,6 +460,7 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
             await handle_withdraw(
                 investor_name=options["investor"],
                 amount=float(options["amount"]),
+                spy_price=float(options["spy_price"]) if "spy_price" in options else None,
                 token=token,
             )
         elif command == "cancel-withdrawal":
