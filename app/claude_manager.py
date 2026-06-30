@@ -423,6 +423,18 @@ def _load_recent_history() -> tuple[list, str]:
         spy_str = f", SPY=${spy:.2f}" if spy else ""
         lines.append(f"  {ts}: {status}, portfolio={pv_str}{spy_str}, trades={trade_str}")
 
+    # Attach the most recent full 5-section research so Claude can see its prior reasoning
+    last_analysis = recent[-1].get("analysis_body") or ""
+    if last_analysis:
+        last_ts = recent[-1].get("timestamp", "unknown")[:10]
+        lines.append(
+            f"\n--- Prior 5-Section Research ({last_ts}) ---\n"
+            f"Use this to track thesis evolution, flag broken theses, and avoid "
+            f"repeating the same reasoning without new evidence.\n\n"
+            f"{last_analysis}\n"
+            f"--- End Prior Research ---"
+        )
+
     return records, "\n".join(lines)
 
 
@@ -722,6 +734,7 @@ async def run_monthly_rebalance() -> None:
 
         # Full analysis → main Discord + subscriber feed (chunked with rate-limit delays)
         analysis_body = re.sub(r"```json.*?```", "", response_text, flags=re.DOTALL).strip()
+        log_entry["analysis_body"] = analysis_body  # persisted for next month's history lookback
         spy_str = f"${spy_price:,.2f}" if spy_price else "—"
         cash_pct = buying_power / portfolio_value * 100 if portfolio_value > 0 else 0
         analysis_header = _embed(
