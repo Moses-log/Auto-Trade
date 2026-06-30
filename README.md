@@ -573,7 +573,7 @@ Schedule a cash withdrawal for an investor. **As of June 2026 this no longer exe
 { "secret": "...", "investor": "Moses", "amount": 1000, "spy_price": null }
 ```
 
-Omit `spy_price` to use the live Alpaca quote (used only for the immediate validation check — the actual withdrawal re-fetches a live price at execution time).
+Pass your actual Alpaca SPY fill price as `spy_price` to lock it in — this is the price recorded as `exit_spy` in the investor's ledger. If omitted, the bot fetches live SPY price at execution time (24h later), which may differ from your actual fill.
 
 **Response:**
 ```json
@@ -620,7 +620,7 @@ All commands are ephemeral (only visible to you) and restricted to `DISCORD_YOUR
 | Command | Parameters | What it does |
 |---|---|---|
 | `/deposit` | `investor`, `amount`, `spy_price` (opt.) | Records a cash deposit at current or specified SPY price |
-| `/withdraw` | `investor`, `amount` | Schedules a withdrawal for `WITHDRAWAL_DELAY_HOURS` later (default 24h); validates immediately, executes (FIFO lot match + P&L + tax estimate posted to Discord) only once the delay elapses |
+| `/withdraw` | `investor`, `amount`, `spy_price` (opt.) | Schedules a withdrawal for `WITHDRAWAL_DELAY_HOURS` later (default 24h); validates immediately, executes (FIFO lot match + P&L + tax estimate posted to Discord) only once the delay elapses. Pass your actual Alpaca SPY fill price as `spy_price` to lock it in — omit to use live price at execution time |
 | `/cancel-withdrawal` | `id` | Cancels a scheduled withdrawal before it executes — `id` comes from the `/withdraw` confirmation message |
 | `/pending-withdrawals` | — | Lists all withdrawals currently waiting out their delay window |
 | `/report alpaca` | `type` | Fires an Alpaca P&L report (daily/weekly/monthly/ytd/1year/alltime/inception/both/investors) |
@@ -1068,6 +1068,13 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### `/withdraw` spy_price option (June 30, 2026)
+
+| Change | Details |
+|---|---|
+| `spy_price` added to `/withdraw` | Optional Discord slash command parameter. Pass your actual Alpaca SPY fill price (e.g. `spy_price:582.10`) to lock it in as `exit_spy` in the investor ledger. If omitted, behavior is unchanged — live SPY price is fetched at execution time (24h later). |
+| `POST /withdraw` unchanged | Already accepted `spy_price`; behavior now consistent with Discord command. |
 
 ### Prior research history lookback (June 30, 2026)
 
