@@ -590,7 +590,15 @@ A `400` is returned immediately if the investor isn't found, the amount isn't po
 
 Cancel a scheduled withdrawal via the Discord `/cancel-withdrawal id:<id>` command before it executes (see below) — there is currently no HTTP endpoint for cancellation, only the Discord command.
 
-> **Note:** `/withdraw` only does accounting (once it executes). You must manually sell the corresponding SPY shares on Alpaca to raise the cash. The exact number of shares to sell is `units_redeemed`, available in the Discord notification posted to `DISCORD_INVESTORS_WEBHOOK_URL` once the withdrawal actually executes.
+> **Withdrawal process (manual steps + command):**
+> 1. **Sell SPY shares** on Alpaca to raise the cash — note your fill price (e.g. $582.10)
+> 2. **Transfer the cash out** of Alpaca to the investor
+> 3. **Run `/withdraw`** on Discord with that fill price:
+>    ```
+>    /withdraw investor:Name amount:5000 spy_price:582.10
+>    ```
+>
+> The command is purely bookkeeping — it records the transaction in the fund ledger using the exact SPY price you sold at. The bot does not initiate any transfers or trades.
 
 ### `POST /run-report`
 Manually trigger a P&L report.
