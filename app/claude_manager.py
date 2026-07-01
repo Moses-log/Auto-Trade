@@ -342,7 +342,7 @@ _FUNDAMENTAL_KEYS: frozenset[str] = frozenset({
     "forward_pe", "peg_ratio", "ev_ebitda", "roe", "profit_margin",
     "gross_margin", "operating_margin", "debt_to_equity", "52w_change",
 })
-_TECHNICAL_KEYS: frozenset[str] = frozenset({"sma200_pct", "short_pct_float", "perf_3m", "rsi"})
+_TECHNICAL_KEYS: frozenset[str] = frozenset({"sma200_pct", "short_pct_float", "perf_qtd", "rsi"})
 
 
 def _fetch_finviz_data(ticker: str) -> dict:
@@ -363,7 +363,8 @@ def _fetch_finviz_data(ticker: str) -> dict:
             if not v or v == "-":
                 return None
             try:
-                return float(str(v).replace(",", "").strip())
+                result = float(str(v).replace(",", "").strip())
+                return None if result != result else result  # reject NaN
             except (ValueError, AttributeError):
                 return None
 
@@ -376,6 +377,9 @@ def _fetch_finviz_data(ticker: str) -> dict:
             except (ValueError, AttributeError):
                 return None
 
+        _sf_raw = f.get("Short Float / Ratio")
+        _sf_val = _sf_raw if (_sf_raw and _sf_raw != "-") else f.get("Short Float")
+
         out = {
             "forward_pe":       _num(f.get("Forward P/E")),
             "peg_ratio":        _num(f.get("PEG")),
@@ -387,8 +391,8 @@ def _fetch_finviz_data(ticker: str) -> dict:
             "debt_to_equity":   _num(f.get("Debt/Eq")),
             "52w_change":       _pct(f.get("Perf Year")),
             "sma200_pct":       _pct(f.get("SMA200")),
-            "short_pct_float":  _short(f.get("Short Float / Ratio") or f.get("Short Float")),
-            "perf_3m":          _pct(f.get("Perf Quarter")),
+            "short_pct_float":  _short(_sf_val),
+            "perf_qtd":         _pct(f.get("Perf Quarter")),  # calendar-quarter-to-date, not rolling 90d
             "rsi":              _num(f.get("RSI (14)")),
         }
         return {k: v for k, v in out.items() if v is not None}
@@ -726,7 +730,20 @@ async def run_monthly_rebalance() -> None:
         spy_price   = all_results[2 * n] if not isinstance(all_results[2 * n], Exception) else None
         spy_fv      = all_results[2 * n + 1] if not isinstance(all_results[2 * n + 1], Exception) else {}
         macro_text  = all_results[2 * n + 2] if not isinstance(all_results[2 * n + 2], Exception) else "Macro context unavailable."
-        spy_perf_3m = spy_fv.get("perf_3m") if isinstance(spy_fv, dict) else None
+        spy_perf_qtd = spy_fv.get("perf_qtd")
+
+        if fv_results and all(r == {} for r in fv_results):
+            log.warning("All Finviz requests returned empty — Section 4 technical data absent")
+            await notify_claude_manager_embed(_embed(
+                "⚠️ FINVIZ DATA UNAVAILABLE",
+                _CLR_ORANGE,
+                description=(
+                    "All Finviz requests failed — Section 4 technical data "
+                    "(200-day MA, RSI, short interest, relative strength) will be absent "
+                    "from this rebalance. Claude will analyze fundamentals only."
+                ),
+                footer=_timestamp(),
+            ))
 
         all_history_records, history_text = _load_recent_history()
 
@@ -734,8 +751,6 @@ async def run_monthly_rebalance() -> None:
         for pos, yf_data, fv_data in zip(positions, yf_results, fv_results):
             if isinstance(yf_data, Exception):
                 yf_data = {"ticker": pos["symbol"]}
-            if isinstance(fv_data, Exception):
-                fv_data = {}
             data = dict(yf_data)
             for k in _FUNDAMENTAL_KEYS:
                 if data.get(k) is None and fv_data.get(k) is not None:
@@ -743,8 +758,8 @@ async def run_monthly_rebalance() -> None:
             for k in _TECHNICAL_KEYS:
                 if fv_data.get(k) is not None:
                     data[k] = fv_data[k]
-            if data.get("perf_3m") is not None and spy_perf_3m is not None:
-                data["rs_vs_spy_3m"] = round(data["perf_3m"] - spy_perf_3m, 4)
+            if data.get("perf_qtd") is not None and spy_perf_qtd is not None:
+                data["rs_vs_spy_qtd"] = round(data["perf_qtd"] - spy_perf_qtd, 4)
             weight_pct = round(
                 pos["qty"] * pos.get("current_price", 0) / portfolio_value * 100, 1
             )

@@ -163,7 +163,7 @@ Positions tracked in `/data/claude_portfolio.json` with entry price, qty, W-L re
 On the **1st of each month at 9:35 AM ET**, the system:
 
 1. Fetches all RH positions + buying power
-2. Enriches each holding with yfinance fundamentals (Forward P/E, ROE, margins, growth, earnings date) — **all tickers in parallel**
+2. Enriches each holding with **yfinance fundamentals** (Forward P/E, PEG, EV/EBITDA, ROE, margins, earnings date) and **Finviz technical data** (200-day MA position, RSI, short interest, quarter-to-date performance vs SPY) — all tickers fetched in parallel via both sources simultaneously
 3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
 4. Loads **last 3 rebalance log entries** (date, portfolio value, SPY price, trade counts) + the **full 5-section research from the most recent entry** so Claude can track thesis evolution month-over-month
 5. Calls **claude-opus-4-8** via the Anthropic API with a full Ackman-style scoring framework
@@ -226,7 +226,7 @@ Before taking or sizing any position, the system runs a structured 5-section res
 | **1 — Foundation** | Business model, moat, top 3 competitors, unique technological advantage; top 3 upcoming catalysts (Critical / High / Strategic); asymmetry check (valuation floor vs. growth ceiling) |
 | **2 — Valuation Rigor** | Rule of 40 (revenue growth % + EBITDA margin %); Value/Growth Score (P/S TTM ÷ YoY revenue growth %); forward P/S vs. TTM P/S (guidance credibility check); 3-year historical P/S range; insider ownership; SBC as % of revenue |
 | **3 — Mandatory Bear Case** | Customer concentration (flag if single customer >30% revenue); dilution risk (ATM programs or secondaries in last 24 months); last earnings miss (reason + stock reaction); 10-K specific risks (no boilerplate); bull case critique |
-| **4 — Technical Overlay** | 200-day MA position and slope (rising / falling); RS vs. SPY over 3 months (accelerating or breaking down); short interest (days to cover, rising or falling) |
+| **4 — Technical Overlay** | 200-day MA position and slope (rising / falling); RS vs. SPY (calendar-QTD, relative to SPY QTD); short interest (days to cover, rising or falling); RSI (14) |
 | **5 — Verdict** | Three-point bull case, three-point bear case, net view, conviction (High / Medium / Low), and what would change the thesis |
 
 **Bear case rule:** Any position sized above 10% must have a fully resolved bear case documented in Section 3. If the bear case is unresolved, the position is capped at ≤7% or avoided entirely.
@@ -1076,6 +1076,18 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Finviz technical data integration (June 30, 2026)
+
+| Change | Details |
+|---|---|
+| Finviz as data source | `_fetch_finviz_data()` in `app/claude_manager.py` fetches data from Finviz via `finvizfinance` for every position ticker and SPY. Runs in parallel with yfinance — no latency increase. |
+| Fundamental gap-fill | If yfinance is missing Forward P/E, PEG, EV/EBITDA, ROE, gross/operating/profit margins, or debt/equity, the Finviz value fills the gap automatically. |
+| Section 4 Technical Overlay | Four fields now provided to Claude for every holding: `sma200_pct` (% above/below 200-day MA), `rsi` (14-day RSI), `short_pct_float` (short interest as % of float), and `perf_qtd` (Finviz "Perf Quarter" — calendar-quarter-to-date return). |
+| `rs_vs_spy_qtd` computed | After fetching, each ticker's `perf_qtd` is compared to SPY's `perf_qtd` to produce `rs_vs_spy_qtd` — relative strength vs the S&P 500 over the current calendar quarter. |
+| `perf_qtd` naming | Field is named `perf_qtd` (not `perf_3m`) to accurately reflect that Finviz "Perf Quarter" resets at Jan 1 / Apr 1 / Jul 1 / Oct 1 — it is calendar-quarter-to-date, not a rolling 90-day window. |
+| Silent failure alert | If all Finviz requests return empty (e.g. scraping blocked), a Discord warning embed fires to `CLAUDE_MANAGER_WEBHOOK_URL` before the rebalance continues on fundamentals only. |
+| Dependency added | `finvizfinance>=0.14.6` added to `requirements.txt`. No new environment variables required — Finviz is scraped without an API key. |
 
 ### `/withdraw` spy_price option (June 30, 2026)
 
