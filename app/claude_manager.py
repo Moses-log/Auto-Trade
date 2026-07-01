@@ -799,12 +799,18 @@ async def run_monthly_rebalance() -> None:
             f"the full bear case before being sized above 10%.\n\n"
             f"3. DETERMINE OPTIMAL PORTFOLIO — Build the best portfolio for the next month. "
             f"Any position sized above 10% must have a resolved bear case documented above.\n\n"
-            f"4. OUTPUT FORMAT — Write for Discord (markdown supported):\n"
-            f"   • Separate each stock with: `══════════════════════════════`\n"
-            f"   • Header: **TICKER — Company Name** (current weight → target weight)\n"
-            f"   • Section labels: **§1 FOUNDATION** | **§2 VALUATION RIGOR** | **§3 BEAR CASE** | **§4 TECHNICAL** | **§5 VERDICT**\n"
+            f"4. OUTPUT FORMAT — Write for Discord (markdown + native headers supported):\n"
+            f"   • Before each stock, place a blank line then the divider: `══════════════════════════════`\n"
+            f"   • Stock header (line immediately after divider): `## TICKER — Company Name`\n"
+            f"   • Weight line (next line): `Current: X%  →  Target: Y%  |  Action: HOLD/BUY/SELL/TRIM`\n"
+            f"   • Each section — blank line, then emoji + bold label, then content on next lines:\n"
+            f"       🔬 **§1 FOUNDATION**\n"
+            f"       📊 **§2 VALUATION RIGOR**\n"
+            f"       🐻 **§3 BEAR CASE**\n"
+            f"       📈 **§4 TECHNICAL OVERLAY**\n"
+            f"       ⚖️ **§5 VERDICT**\n"
             f"   • Use inline code for numbers: `Rule of 40: 68` `P/S: 8.2x` `+23% YoY`\n"
-            f"   • Verdict line: **Conviction: HIGH** or **MEDIUM** or **LOW** — one line, nothing else\n"
+            f"   • Conviction line (last line of §5): **Conviction: HIGH** | **MEDIUM** | **LOW**\n"
             f"   • After all analysis, end with the required JSON block."
         )
 
@@ -834,13 +840,13 @@ async def run_monthly_rebalance() -> None:
         analysis_header = _embed(
             "📊 KIMI MONTHLY PORTFOLIO ANALYSIS",
             _CLR_YELLOW,
-            description=f"Full 5-section research completed for {len(positions)} position(s) + new candidates.",
-            fields=[
-                _field("Portfolio Value", f"${portfolio_value:,.2f}"),
-                _field("Cash",            f"${buying_power:,.2f} ({cash_pct:.1f}%)"),
-                _field("SPY",             spy_str),
-                _field("Holdings",        str(len(positions))),
-            ],
+            description=(
+                f"Full 5-section research completed for **{len(positions)} position(s)** + new candidates.\n\n"
+                f"**Portfolio Value** `${portfolio_value:,.2f}`  ·  "
+                f"**Cash** `${buying_power:,.2f} ({cash_pct:.1f}%)`  ·  "
+                f"**SPY** `{spy_str}`  ·  "
+                f"**Holdings** `{len(positions)}`"
+            ),
             footer=_timestamp(),
         )
         await asyncio.sleep(0.8)
@@ -1007,8 +1013,8 @@ async def run_monthly_rebalance() -> None:
                     "SELL", ticker,
                     [
                         _field("Qty",    f"{qty:g} shares @ ${fill or 0:,.2f}"),
-                        _field("P&L",    pnl_str, inline=False),
                         _field("Record", f"{wins}W — {losses}L"),
+                        _field("P&L",    pnl_str, inline=False),
                     ],
                     _timestamp(),
                 ))
@@ -1123,9 +1129,9 @@ async def run_monthly_rebalance() -> None:
                     "TRIM", ticker,
                     [
                         _field("Sold",          f"{qty_sold:g} shares @ ${fill or 0:,.2f}"),
-                        _field("Target Weight", f"{target_wt}%"),
-                        _field("P&L",           pnl_str, inline=False),
+                        _field("→ Target",      f"{target_wt}%"),
                         _field("Record",        f"{wins}W — {losses}L"),
+                        _field("P&L",           pnl_str, inline=False),
                     ],
                     _timestamp(),
                 ))
@@ -1230,20 +1236,26 @@ async def run_monthly_rebalance() -> None:
         benchmark_str = _format_benchmark(log_entry, all_history_records)
         executed_count = len(log_entry["trades_executed"])
         skipped_count  = len(log_entry["trades_skipped"])
-        desc_lines = []
+
+        _action_order = ("SELL", "TRIM", "DOUBLE_DOWN", "BUY", "HOLD")
+        _action_emoji = {"SELL": "🔴", "TRIM": "✂️", "DOUBLE_DOWN": "🔥", "BUY": "🟢", "HOLD": "⏸"}
+        trade_parts = [
+            f"{_action_emoji.get(a, '')} {sum(1 for t in log_entry['trades_executed'] if t['action'] == a)}× {a}"
+            for a in _action_order
+            if any(t["action"] == a for t in log_entry["trades_executed"])
+        ]
+        trade_summary = "  ·  ".join(trade_parts) if trade_parts else "No trades"
+
+        desc_lines = [f"**{trade_summary}**"]
         if benchmark_str:
-            desc_lines.append(benchmark_str)
+            desc_lines.append(f"\n{benchmark_str}")
         if skipped_count:
             desc_lines.append(f"\n⚠️ {skipped_count} trade(s) skipped — see messages above.")
         await asyncio.sleep(0.8)
         await notify_claude_manager_embed(_embed(
             "✅ KIMI PORTFOLIO REBALANCE COMPLETE",
             _CLR_GREEN,
-            description="\n".join(desc_lines) if desc_lines else "Portfolio rebalanced successfully.",
-            fields=[
-                _field("Trades Executed", str(executed_count)),
-                _field("Trades Skipped",  str(skipped_count)),
-            ],
+            description="\n".join(desc_lines),
             footer=_timestamp(),
         ))
 
