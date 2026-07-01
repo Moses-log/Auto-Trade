@@ -330,7 +330,8 @@ def _fetch_yf_data(ticker: str) -> dict:
             "debt_to_equity": info.get("debtToEquity"),
             "revenue_growth_yoy": info.get("revenueGrowth"),
             "earnings_growth_yoy": info.get("earningsGrowth"),
-            "52w_change": info.get("52WeekChange"),
+            "52w_change":      info.get("52WeekChange"),
+            "short_pct_float": info.get("shortPercentOfFloat"),  # decimal (0.008 = 0.8%)
             "days_to_earnings": days_to_earnings,
         }
     except Exception as exc:
@@ -345,59 +346,56 @@ _FUNDAMENTAL_KEYS: frozenset[str] = frozenset({
 _TECHNICAL_KEYS: frozenset[str] = frozenset({"sma200_pct", "short_pct_float", "perf_qtd", "rsi"})
 
 
-def _fetch_finviz_data(ticker: str) -> dict:
-    """Fetch fundamental gap-fill + Section 4 technical fields from Finviz."""
+def _fetch_technical_data(ticker: str) -> dict:
+    """Compute Section 4 technical indicators from yfinance price history.
+
+    Returns sma200_pct, rsi, and perf_qtd.  short_pct_float is already
+    fetched in _fetch_yf_data (info["shortPercentOfFloat"]) so it is not
+    duplicated here.
+    """
     try:
-        from finvizfinance.quote import finvizfinance
-        f = finvizfinance(ticker).ticker_fundament()
+        hist = yf.Ticker(ticker).history(period="1y")
+        if hist.empty or len(hist) < 15:
+            return {}
 
-        def _pct(v):
-            if not v or v == "-":
-                return None
-            try:
-                return float(v.replace("%", "").replace(",", "").strip()) / 100
-            except (ValueError, AttributeError):
-                return None
+        closes = hist["Close"].astype(float)
 
-        def _num(v):
-            if not v or v == "-":
-                return None
-            try:
-                result = float(str(v).replace(",", "").strip())
-                return None if result != result else result  # reject NaN
-            except (ValueError, AttributeError):
-                return None
+        # ── SMA 200 (% above/below) ───────────────────────────────────────────
+        sma200_pct = None
+        if len(closes) >= 200:
+            sma200 = closes.iloc[-200:].mean()
+            if sma200 > 0:
+                sma200_pct = round(closes.iloc[-1] / sma200 - 1, 4)
 
-        def _short(v):
-            """Parse 'X.XX% / Y.YY' or 'X.XX%' short float value."""
-            if not v or v == "-":
-                return None
-            try:
-                return float(v.split("/")[0].replace("%", "").strip()) / 100
-            except (ValueError, AttributeError):
-                return None
+        # ── RSI (14) — Wilder smoothing ───────────────────────────────────────
+        rsi = None
+        if len(closes) >= 15:
+            delta = closes.diff().dropna()
+            gain  = delta.clip(lower=0)
+            loss  = (-delta).clip(lower=0)
+            avg_g = gain.ewm(com=13, min_periods=14).mean().iloc[-1]
+            avg_l = loss.ewm(com=13, min_periods=14).mean().iloc[-1]
+            if avg_l > 0:
+                rsi = round(100 - 100 / (1 + avg_g / avg_l), 1)
+            elif avg_g > 0:
+                rsi = 100.0
 
-        _sf_raw = f.get("Short Float / Ratio")
-        _sf_val = _sf_raw if (_sf_raw and _sf_raw != "-") else f.get("Short Float")
+        # ── Calendar-QTD performance ──────────────────────────────────────────
+        perf_qtd = None
+        today = date.today()
+        q_month = ((today.month - 1) // 3) * 3 + 1
+        quarter_start = date(today.year, q_month, 1)
+        idx_dates = hist.index.date
+        qtd_mask  = idx_dates >= quarter_start
+        if qtd_mask.any():
+            qtd_open = float(hist["Close"].iloc[int(qtd_mask.argmax())])
+            if qtd_open > 0:
+                perf_qtd = round(float(closes.iloc[-1]) / qtd_open - 1, 4)
 
-        out = {
-            "forward_pe":       _num(f.get("Forward P/E")),
-            "peg_ratio":        _num(f.get("PEG")),
-            "ev_ebitda":        _num(f.get("EV/EBITDA")),
-            "roe":              _pct(f.get("ROE")),
-            "profit_margin":    _pct(f.get("Profit Margin")),
-            "gross_margin":     _pct(f.get("Gross Margin")),
-            "operating_margin": _pct(f.get("Oper. Margin")),
-            "debt_to_equity":   _num(f.get("Debt/Eq")),
-            "52w_change":       _pct(f.get("Perf Year")),
-            "sma200_pct":       _pct(f.get("SMA200")),
-            "short_pct_float":  _short(_sf_val),
-            "perf_qtd":         _pct(f.get("Perf Quarter")),  # calendar-quarter-to-date, not rolling 90d
-            "rsi":              _num(f.get("RSI (14)")),
-        }
+        out = {"sma200_pct": sma200_pct, "rsi": rsi, "perf_qtd": perf_qtd}
         return {k: v for k, v in out.items() if v is not None}
     except Exception as exc:
-        log.warning("finviz error for %s: %s", ticker, exc)
+        log.warning("technical data error for %s: %s", ticker, exc)
         return {}
 
 
@@ -716,9 +714,9 @@ async def run_monthly_rebalance() -> None:
         from app.macro_context import fetch_macro_context
 
         yf_tasks    = [loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
-        fv_tasks    = [loop.run_in_executor(None, _fetch_finviz_data, pos["symbol"]) for pos in positions]
+        fv_tasks    = [loop.run_in_executor(None, _fetch_technical_data, pos["symbol"]) for pos in positions]
         spy_task    = loop.run_in_executor(None, _fetch_spy_price)
-        spy_fv_task = loop.run_in_executor(None, _fetch_finviz_data, "SPY")
+        spy_fv_task = loop.run_in_executor(None, _fetch_technical_data, "SPY")
 
         all_results = await asyncio.gather(
             *yf_tasks, *fv_tasks, spy_task, spy_fv_task, fetch_macro_context(),
@@ -733,14 +731,13 @@ async def run_monthly_rebalance() -> None:
         spy_perf_qtd = spy_fv.get("perf_qtd")
 
         if fv_results and all(r == {} for r in fv_results):
-            log.warning("All Finviz requests returned empty — Section 4 technical data absent")
+            log.warning("All technical data fetches returned empty — Section 4 data absent")
             await notify_claude_manager_embed(_embed(
-                "⚠️ FINVIZ DATA UNAVAILABLE",
+                "⚠️ TECHNICAL DATA UNAVAILABLE",
                 _CLR_ORANGE,
                 description=(
-                    "All Finviz requests failed — Section 4 technical data "
-                    "(200-day MA, RSI, short interest, relative strength) will be absent "
-                    "from this rebalance. Claude will analyze fundamentals only."
+                    "Could not compute technical indicators (200-day MA, RSI, QTD performance) "
+                    "for any holding. Claude will analyze fundamentals only."
                 ),
                 footer=_timestamp(),
             ))
