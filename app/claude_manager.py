@@ -848,10 +848,29 @@ async def run_monthly_rebalance() -> None:
         )
         await asyncio.sleep(0.8)
         await notify_claude_manager_embed(analysis_header)
-        await asyncio.sleep(0.8)
-        await notify_claude_manager(analysis_body)
 
+        # Send each ticker's thesis as its own message, immediately followed by
+        # its financials chart. Sequential awaits guarantee ordering — no racing.
         from app.notifications import notify_claude_signal_feed
+        _DIVIDER = "══════════════════════════════"
+
+        def _section_ticker(section: str) -> str:
+            """Extract the ticker symbol from a '## TICKER — Name' header line."""
+            for line in section.splitlines():
+                line = line.strip()
+                if line.startswith("## "):
+                    first_word = line[3:].split("—")[0].split("–")[0].strip().split()[0]
+                    return first_word.upper()
+            return ""
+
+        ticker_sections = [s.strip() for s in analysis_body.split(_DIVIDER) if s.strip()]
+        for section in ticker_sections:
+            await asyncio.sleep(0.8)
+            await notify_claude_manager(section)
+            section_tkr = _section_ticker(section)
+            if section_tkr:
+                await _post_financials_chart(section_tkr)
+
         _fire(notify_claude_signal_feed(
             f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}"
         ))
@@ -896,7 +915,7 @@ async def run_monthly_rebalance() -> None:
             return
 
         action_count = len([t for t in trades if t["action"] != "HOLD"])
-        await asyncio.sleep(1.0)   # clear pause after analysis wall-of-text
+        await asyncio.sleep(1.5)   # clear gap after all thesis+chart messages settle
         await notify_claude_manager_embed(_embed(
             f"⚡ EXECUTING {action_count} TRADE(S)",
             _CLR_YELLOW,
@@ -1224,7 +1243,6 @@ async def run_monthly_rebalance() -> None:
                     f"Target: {target_wt}% weight\n"
                     + _timestamp()
                 ))
-            _fire(_post_financials_chart(ticker))
             available_budget = max(0.0, available_budget - invest_dollars)
 
         log_entry["status"] = "completed"
