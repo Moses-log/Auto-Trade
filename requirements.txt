@@ -33,6 +33,7 @@ pytz>=2024.1
 
 # Market data (free, no subscription required)
 yfinance>=0.2.40
+finvizfinance>=0.14.6
 # ── Dev / test (not needed in production) ────────────────────────────────────
 pytest>=8.2.0
 pytest-asyncio>=0.23.0

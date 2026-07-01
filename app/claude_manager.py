@@ -338,6 +338,65 @@ def _fetch_yf_data(ticker: str) -> dict:
         return {"ticker": ticker}
 
 
+_FUNDAMENTAL_KEYS: frozenset[str] = frozenset({
+    "forward_pe", "peg_ratio", "ev_ebitda", "roe", "profit_margin",
+    "gross_margin", "operating_margin", "debt_to_equity", "52w_change",
+})
+_TECHNICAL_KEYS: frozenset[str] = frozenset({"sma200_pct", "short_pct_float", "perf_3m", "rsi"})
+
+
+def _fetch_finviz_data(ticker: str) -> dict:
+    """Fetch fundamental gap-fill + Section 4 technical fields from Finviz."""
+    try:
+        from finvizfinance.quote import finvizfinance
+        f = finvizfinance(ticker).ticker_fundament()
+
+        def _pct(v):
+            if not v or v == "-":
+                return None
+            try:
+                return float(v.replace("%", "").replace(",", "").strip()) / 100
+            except (ValueError, AttributeError):
+                return None
+
+        def _num(v):
+            if not v or v == "-":
+                return None
+            try:
+                return float(str(v).replace(",", "").strip())
+            except (ValueError, AttributeError):
+                return None
+
+        def _short(v):
+            """Parse 'X.XX% / Y.YY' or 'X.XX%' short float value."""
+            if not v or v == "-":
+                return None
+            try:
+                return float(v.split("/")[0].replace("%", "").strip()) / 100
+            except (ValueError, AttributeError):
+                return None
+
+        out = {
+            "forward_pe":       _num(f.get("Forward P/E")),
+            "peg_ratio":        _num(f.get("PEG")),
+            "ev_ebitda":        _num(f.get("EV/EBITDA")),
+            "roe":              _pct(f.get("ROE")),
+            "profit_margin":    _pct(f.get("Profit Margin")),
+            "gross_margin":     _pct(f.get("Gross Margin")),
+            "operating_margin": _pct(f.get("Oper. Margin")),
+            "debt_to_equity":   _num(f.get("Debt/Eq")),
+            "52w_change":       _pct(f.get("Perf Year")),
+            "sma200_pct":       _pct(f.get("SMA200")),
+            "short_pct_float":  _short(f.get("Short Float / Ratio") or f.get("Short Float")),
+            "perf_3m":          _pct(f.get("Perf Quarter")),
+            "rsi":              _num(f.get("RSI (14)")),
+        }
+        return {k: v for k, v in out.items() if v is not None}
+    except Exception as exc:
+        log.warning("finviz error for %s: %s", ticker, exc)
+        return {}
+
+
 def _call_claude_sync(user_message: str) -> str:
     """Synchronous Anthropic API call. Run via executor to avoid blocking."""
     if not settings.anthropic_api_key:
@@ -652,25 +711,45 @@ async def run_monthly_rebalance() -> None:
         # ── 2. Enrich holdings + fetch SPY, macro context, history in parallel ──
         from app.macro_context import fetch_macro_context
 
-        yf_tasks = [loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
-        spy_task = loop.run_in_executor(None, _fetch_spy_price)
+        yf_tasks    = [loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
+        fv_tasks    = [loop.run_in_executor(None, _fetch_finviz_data, pos["symbol"]) for pos in positions]
+        spy_task    = loop.run_in_executor(None, _fetch_spy_price)
+        spy_fv_task = loop.run_in_executor(None, _fetch_finviz_data, "SPY")
 
-        all_results = await asyncio.gather(*yf_tasks, spy_task, fetch_macro_context(), return_exceptions=True)
-        yf_results = all_results[:len(positions)]
-        spy_price = all_results[len(positions)] if not isinstance(all_results[len(positions)], Exception) else None
-        macro_text = all_results[len(positions) + 1] if not isinstance(all_results[len(positions) + 1], Exception) else "Macro context unavailable."
+        all_results = await asyncio.gather(
+            *yf_tasks, *fv_tasks, spy_task, spy_fv_task, fetch_macro_context(),
+            return_exceptions=True,
+        )
+        n           = len(positions)
+        yf_results  = all_results[:n]
+        fv_results  = all_results[n:2 * n]
+        spy_price   = all_results[2 * n] if not isinstance(all_results[2 * n], Exception) else None
+        spy_fv      = all_results[2 * n + 1] if not isinstance(all_results[2 * n + 1], Exception) else {}
+        macro_text  = all_results[2 * n + 2] if not isinstance(all_results[2 * n + 2], Exception) else "Macro context unavailable."
+        spy_perf_3m = spy_fv.get("perf_3m") if isinstance(spy_fv, dict) else None
 
         all_history_records, history_text = _load_recent_history()
 
         enriched = []
-        for pos, yf_data in zip(positions, yf_results):
+        for pos, yf_data, fv_data in zip(positions, yf_results, fv_results):
             if isinstance(yf_data, Exception):
                 yf_data = {"ticker": pos["symbol"]}
+            if isinstance(fv_data, Exception):
+                fv_data = {}
+            data = dict(yf_data)
+            for k in _FUNDAMENTAL_KEYS:
+                if data.get(k) is None and fv_data.get(k) is not None:
+                    data[k] = fv_data[k]
+            for k in _TECHNICAL_KEYS:
+                if fv_data.get(k) is not None:
+                    data[k] = fv_data[k]
+            if data.get("perf_3m") is not None and spy_perf_3m is not None:
+                data["rs_vs_spy_3m"] = round(data["perf_3m"] - spy_perf_3m, 4)
             weight_pct = round(
                 pos["qty"] * pos.get("current_price", 0) / portfolio_value * 100, 1
             )
             enriched.append({
-                **yf_data,
+                **data,
                 "qty": pos["qty"],
                 "avg_entry_price": pos["avg_entry_price"],
                 "current_price": pos.get("current_price"),
