@@ -163,7 +163,7 @@ Positions tracked in `/data/claude_portfolio.json` with entry price, qty, W-L re
 On the **1st of each month at 9:35 AM ET**, the system:
 
 1. Fetches all RH positions + buying power
-2. Enriches each holding with **yfinance fundamentals** (Forward P/E, PEG, EV/EBITDA, ROE, margins, earnings date) and **Finviz technical data** (200-day MA position, RSI, short interest, quarter-to-date performance vs SPY) — all tickers fetched in parallel via both sources simultaneously
+2. Enriches each holding with **yfinance fundamentals** (Forward P/E, PEG, EV/EBITDA, ROE, margins, short interest, earnings date) and **yfinance-computed technical indicators** (200-day MA position, RSI(14), calendar-QTD performance, RS vs SPY) — fundamentals and technicals fetched in parallel for all tickers
 3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
 4. Loads **last 3 rebalance log entries** (date, portfolio value, SPY price, trade counts) + the **full 5-section research from the most recent entry** so Claude can track thesis evolution month-over-month
 5. Calls **claude-opus-4-8** via the Anthropic API with a full Ackman-style scoring framework
@@ -1077,17 +1077,43 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Recent Changes
 
+### Discord message ordering + per-ticker thesis + chart placement (July 1, 2026)
+
+| Change | Details |
+|---|---|
+| Per-ticker thesis messages | The full research analysis is now split on the `══════` divider and sent as one message per ticker instead of one large blob. Each stock's thesis is a standalone Discord message, making it easy to navigate and reference individual holdings. |
+| Financials chart with thesis | The quarterly financials chart for each ticker is now posted immediately after that ticker's thesis message, not after the trade embeds. Chart and analysis are always adjacent. |
+| Ordering guaranteed | All thesis + chart sends are sequential `await` calls. The 1.5 s gap before the trade execution header only starts after every thesis and chart has fully posted — no more last-thesis/first-trade race condition. |
+
+### yfinance-computed Section 4 technicals — Finviz removed (July 1, 2026)
+
+| Change | Details |
+|---|---|
+| Root cause | Render's datacenter IP range is blocked by Finviz's scraper protection, causing every `_fetch_finviz_data()` call to silently return `{}` in production. |
+| Replacement | `_fetch_finviz_data()` replaced by `_fetch_technical_data()` which computes all Section 4 indicators from yfinance price history — the same source already used for fundamentals and already proven to work on Render. |
+| `sma200_pct` | 200-day simple moving average computed from 1-year daily close history; result is `(current_price / sma200) - 1`. |
+| `rsi` | RSI(14) computed via Wilder's exponential smoothing on daily price changes (`ewm(com=13, min_periods=14)`). |
+| `perf_qtd` | Calendar-QTD return computed as `(current_close / first_close_on_or_after_quarter_start) - 1`. |
+| `short_pct_float` | Moved into `_fetch_yf_data()` as `info["shortPercentOfFloat"]` — same `info` call already made for fundamentals, no extra request. |
+| `finvizfinance` removed | Dependency removed from `requirements.txt`. No environment variables affected. |
+
+### Discord readability improvements (July 1, 2026)
+
+| Change | Details |
+|---|---|
+| Ticker headers | Claude now uses `## TICKER — Company Name` (Discord H2) for each stock header. Renders as a large bold heading — visually distinct while scrolling through a multi-stock analysis. |
+| Section emojis | Each research section gets a prefix emoji: 🔬 Foundation · 📊 Valuation Rigor · 🐻 Bear Case · 📈 Technical Overlay · ⚖️ Verdict. Sections are identifiable at a glance without reading labels. |
+| Analysis header embed | Portfolio stats (Portfolio Value, Cash, SPY, Holdings) moved from four inline fields (3+1 awkward layout) into a single description line using bold labels and code-formatted values. |
+| Trade embed layout | SELL and TRIM embeds reordered so Qty + Record share the top inline row and P&L gets its own full-width row below — consistent layout across all trade types. |
+| Completion embed | Summary line changed from bare counts (`Trades Executed: 4`) to an emoji trade-type breakdown (`🔴 1× SELL  ·  ✂️ 1× TRIM  ·  🟢 2× BUY`). |
+
 ### Finviz technical data integration (June 30, 2026)
 
 | Change | Details |
 |---|---|
-| Finviz as data source | `_fetch_finviz_data()` in `app/claude_manager.py` fetches data from Finviz via `finvizfinance` for every position ticker and SPY. Runs in parallel with yfinance — no latency increase. |
-| Fundamental gap-fill | If yfinance is missing Forward P/E, PEG, EV/EBITDA, ROE, gross/operating/profit margins, or debt/equity, the Finviz value fills the gap automatically. |
-| Section 4 Technical Overlay | Four fields now provided to Claude for every holding: `sma200_pct` (% above/below 200-day MA), `rsi` (14-day RSI), `short_pct_float` (short interest as % of float), and `perf_qtd` (Finviz "Perf Quarter" — calendar-quarter-to-date return). |
-| `rs_vs_spy_qtd` computed | After fetching, each ticker's `perf_qtd` is compared to SPY's `perf_qtd` to produce `rs_vs_spy_qtd` — relative strength vs the S&P 500 over the current calendar quarter. |
-| `perf_qtd` naming | Field is named `perf_qtd` (not `perf_3m`) to accurately reflect that Finviz "Perf Quarter" resets at Jan 1 / Apr 1 / Jul 1 / Oct 1 — it is calendar-quarter-to-date, not a rolling 90-day window. |
-| Silent failure alert | If all Finviz requests return empty (e.g. scraping blocked), a Discord warning embed fires to `CLAUDE_MANAGER_WEBHOOK_URL` before the rebalance continues on fundamentals only. |
-| Dependency added | `finvizfinance>=0.14.6` added to `requirements.txt`. No new environment variables required — Finviz is scraped without an API key. |
+| Section 4 Technical Overlay | Four fields provided to Claude for every holding: `sma200_pct`, `rsi`, `short_pct_float`, `perf_qtd` (calendar-quarter-to-date, not rolling 90 days). |
+| `rs_vs_spy_qtd` computed | Each ticker's `perf_qtd` minus SPY's `perf_qtd` — relative strength vs S&P 500 for the current calendar quarter. |
+| Silent failure alert | If all technical fetches return empty, a Discord warning embed fires before the rebalance continues on fundamentals only. |
 
 ### `/withdraw` spy_price option (June 30, 2026)
 
