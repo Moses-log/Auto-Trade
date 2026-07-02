@@ -16,7 +16,7 @@ from apscheduler.triggers.cron import CronTrigger
 from app.config import settings
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
 from app.rh_equity_history import get_snapshots
-from app.rh_keep_alive_state import get_last_run_ts, record_run
+from app.rh_keep_alive_state import get_next_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 from app.pending_withdrawals import load_pending_withdrawals
 from app.trading.alpaca_client import was_market_open_today
@@ -25,7 +25,6 @@ log = logging.getLogger(__name__)
 
 ET = pytz.timezone("America/New_York")
 
-_KEEP_ALIVE_INTERVAL_SECONDS = 3 * 24 * 60 * 60  # 3 days
 
 # Singleton — imported and started in main.py lifespan.
 scheduler = AsyncIOScheduler(timezone=ET)
@@ -85,19 +84,18 @@ async def _friday_jobs() -> None:
 
 
 async def _robinhood_keep_alive() -> None:
-    """Run rh_client.keep_alive() at most once every 3 days.
+    """Refresh the Robinhood session at a random time between 1–5 AM ET, every 1–2 days.
 
-    Checked daily via a cron trigger — wall-clock anchored, so restarts
-    can't drift the schedule. If a check is missed (app down at the
-    scheduled time), the next day's check sees >=3 days elapsed since the
-    last run and catches up immediately.
+    Cron fires every 15 minutes inside that window. Fires only when
+    now >= next_run_ts so the exact refresh time is unpredictable.
+    If the state file is absent (first run or /data wiped), fires immediately.
     """
     if not settings.rh_enabled:
         return
     from app.trading.robinhood_client import rh_client
     now_ts = int(datetime.now(ET).timestamp())
-    last_run = get_last_run_ts()
-    if last_run is not None and now_ts - last_run < _KEEP_ALIVE_INTERVAL_SECONDS:
+    next_run = get_next_run_ts()
+    if next_run is not None and now_ts < next_run:
         return
     await rh_client.keep_alive()
     record_run(now_ts)
@@ -148,7 +146,7 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _robinhood_keep_alive,
-        CronTrigger(hour=1, minute=0, timezone=ET),
+        CronTrigger(hour="1,2,3,4", minute="0,15,30,45", timezone=ET),
         id="robinhood_keep_alive",
         replace_existing=True,
     )
