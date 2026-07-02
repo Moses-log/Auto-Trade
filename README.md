@@ -86,7 +86,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   Fri     4:00 PM ET ──► Above  +  weekly P&L charts  +  Portfolio Pie Chart
   1st of month 9:35 AM ET ──► Kimi autonomous portfolio rebalance
   Daily midnight ET ────► Gist backup — all critical /data/ files pushed to private GitHub Gist
-  Daily (wall-clock) ──► RH session keep-alive check (runs every ~72 h actual)
+  Daily 1–5 AM ET ───► RH session keep-alive (randomized 1–2 day interval, random minute in window)
   Jan/Apr/Jul/Oct 1 ───► Quarterly Alpaca + RH tax summaries
   9:31 AM ET next open ► Queued Kimi sell fill confirmation (when after-hours)
 
@@ -112,7 +112,7 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
   PERSISTENT DISK  (/data on Render)
 ════════════════════════════════════════════════════════════════
 
-  robinhood.pickle          ← RH session token (auto-refreshed every 72 h)
+  robinhood.pickle          ← RH session token (auto-refreshed every 1–2 days, 1–5 AM ET)
   investors.json            ← Investor deposit history
   trade_record.json         ← Alpaca win/loss record
   rh_trade_record.json      ← RH win/loss record (all strategies)
@@ -288,7 +288,7 @@ app/
 ├── pending_orders.py     # Persist queued orders to disk (Alpaca + Kimi sells)
 ├── tax.py                # Quarterly Alpaca + RH tax summary reports
 ├── rh_equity_history.py  # Daily RH equity + SPY price snapshot store (replaces retired RH historicals API)
-├── rh_keep_alive_state.py # Persists last RH keep-alive timestamp for restart-immune cadence tracking
+├── rh_keep_alive_state.py # Persists last run + next_run_ts for randomized 1–5 AM ET keep-alive schedule
 ├── interactions.py       # Discord Ed25519 signature verification + option parsing
 ├── discord_commands.py   # All slash command handlers
 ├── scheduler.py          # APScheduler job registration
@@ -1001,7 +1001,7 @@ Same flow, but the pending entry has `broker="claude_sell"` and resolves via `no
 
 ## Robinhood Session Setup
 
-Robinhood requires SMS 2FA. The session token is stored at `/data/robinhood.pickle` and auto-refreshed every 72 hours.
+Robinhood requires SMS 2FA. The session token is stored at `/data/robinhood.pickle` and auto-refreshed on a randomized schedule every 1–2 days at a random time between 1:00–4:59 AM ET.
 
 **First-time setup:**
 ```powershell
@@ -1076,6 +1076,15 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Randomized RH keep-alive schedule (July 1, 2026)
+
+| Change | Details |
+|---|---|
+| Root cause | Fixed 3-day keep-alive interval was too long — Robinhood access tokens expire after 24 hours, so the session died on day 2 and 3 between refreshes. |
+| Randomized interval | After each refresh, a new `next_run_ts` is drawn randomly 1–2 days out at a random minute between 1:00–4:59 AM ET. Prevents Robinhood from seeing a metronomic login pattern. |
+| Cron updated | Scheduler now checks every 15 minutes from 1:00–4:45 AM ET (instead of once at 1:00 AM) so the random target time can be hit precisely. |
+| State file | `rh_keep_alive_state.json` now stores both `last_run_ts` and `next_run_ts`. Render logs show the exact next scheduled refresh time after every run. |
 
 ### Discord message ordering + per-ticker thesis + chart placement (July 1, 2026)
 
