@@ -7,7 +7,7 @@ Call setup_jobs() once at startup to register the cron triggers.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, date as _date
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -19,7 +19,7 @@ from app.rh_equity_history import get_snapshots
 from app.rh_keep_alive_state import get_next_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 from app.pending_withdrawals import load_pending_withdrawals
-from app.trading.alpaca_client import was_market_open_today
+from app.trading.alpaca_client import was_market_open_today, get_client
 
 log = logging.getLogger(__name__)
 
@@ -110,9 +110,33 @@ async def _robinhood_keep_alive() -> None:
 async def _quarterly_tax_report() -> None:
     """Post Alpaca + RH tax summaries to their respective channels.
 
-    Jan 1: reports the just-completed year (year - 1).
-    Apr 1, Jul 1, Oct 1: reports the current year YTD.
+    Fires on the first trading day of Jan/Apr/Jul/Oct (cron covers days 1–3
+    to handle cases where the 1st is a holiday or weekend).
+
+    Jan: reports the just-completed year (year - 1).
+    Apr/Jul/Oct: reports the current year YTD.
     """
+    # Skip if the market is closed today (e.g. Jan 1 is always a holiday)
+    if not was_market_open_today():
+        log.info("_quarterly_tax_report: market holiday — skipping")
+        return
+
+    # If the cron fired on day 2 or 3, skip if day 1 was already a trading day
+    # (prevents double-firing when the 1st is open and the 2nd/3rd also trigger)
+    today = _date.today()
+    first_of_month = today.replace(day=1)
+    if first_of_month < today:
+        try:
+            from alpaca.trading.requests import GetCalendarRequest
+            prior = get_client().get_calendar(
+                GetCalendarRequest(start=first_of_month, end=today - timedelta(days=1))
+            )
+            if prior:
+                log.info("_quarterly_tax_report: not first trading day of quarter — skipping")
+                return
+        except Exception as exc:
+            log.warning("Could not verify first trading day for tax report: %s", exc)
+
     from app.tax import send_alpaca_tax_report, send_rh_tax_report
     now = datetime.now(ET)
     year = now.year - 1 if now.month == 1 else now.year
@@ -158,7 +182,7 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _quarterly_tax_report,
-        CronTrigger(month="1,4,7,10", day=1, hour=8, minute=0, timezone=ET),
+        CronTrigger(month="1,4,7,10", day="1-3", hour=8, minute=0, timezone=ET),
         id="quarterly_tax_report",
         replace_existing=True,
     )
