@@ -47,6 +47,9 @@ async def _check_rh_period_reports() -> None:
 
 async def _weekday_jobs() -> None:
     """Run Mon–Thu reports in parallel: Alpaca + RH daily, investor breakdown, period checks."""
+    if not was_market_open_today():
+        log.info("_weekday_jobs: market holiday — skipping all reports")
+        return
     # Record today's RH-equity/SPY-price snapshot first so send_rh_report
     # below can use it as "today" — keeps the pair in sync, no drift.
     await record_rh_equity_snapshot()
@@ -67,6 +70,9 @@ async def _portfolio_snapshot() -> None:
 
 async def _friday_jobs() -> None:
     """Run Friday reports in parallel: Alpaca + RH daily/weekly, investor breakdown, period checks, portfolio snapshot."""
+    if not was_market_open_today():
+        log.info("_friday_jobs: market holiday — skipping all reports")
+        return
     # Record today's RH-equity/SPY-price snapshot first so send_rh_report
     # below can use it as "today" — keeps the pair in sync, no drift.
     await record_rh_equity_snapshot()
