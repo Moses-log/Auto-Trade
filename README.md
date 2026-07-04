@@ -68,13 +68,13 @@ flowchart LR
     SCH -->|reports| RPR
     SITE -->|public-stats| API
 
-    classDef signal   fill:#1A1A2E,stroke:#A0A0C0,color:#d0d0e0
-    classDef strategy fill:#1A1800,stroke:#C0A800,color:#F5E642
-    classDef engine   fill:#001020,stroke:#3A6DA0,color:#6B9FD4
-    classDef broker   fill:#001810,stroke:#208050,color:#4AE2A0
-    classDef ki       fill:#07091E,stroke:#404DC0,color:#7B8EFF
-    classDef private  fill:#100720,stroke:#703AC0,color:#C08FFF
-    classDef site     fill:#001616,stroke:#208080,color:#4AE2E2
+    classDef signal   fill:#090910,stroke:#6060A0,color:#9090C8
+    classDef strategy fill:#0D0B00,stroke:#B09000,color:#F5E642
+    classDef engine   fill:#020A14,stroke:#3070B0,color:#5B9FE0
+    classDef broker   fill:#010D08,stroke:#208060,color:#3AE0A0
+    classDef ki       fill:#04051A,stroke:#3848C0,color:#7B8EFF
+    classDef private  fill:#0A0416,stroke:#7030C0,color:#B878FF
+    classDef site     fill:#011212,stroke:#189090,color:#30D8D8
 
     class TV,TW signal
     class KS,KA,KM strategy
