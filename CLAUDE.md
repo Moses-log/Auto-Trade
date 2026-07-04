@@ -19,10 +19,14 @@ and Claude will know exactly which part you mean without further explanation.
 
 ### Brokers — where trades actually execute
 
-| Name | What it is |
-|---|---|
-| **Alpaca** | Live brokerage used exclusively by Kimi SPY. Primary execution venue. |
-| **RH** | Robinhood. Mirrors Kimi SPY and executes Kimi Autopilot and Kimi Manager. |
+Each broker has two distinct Discord presences: one in KI Server (subscribers) and one in Private Server (owner-only). Refer to them by the names below.
+
+| Name | Broker | What it contains |
+|---|---|---|
+| **Alpaca KI** | Alpaca | Kimi SPY trade signals/callouts + Trades P&L summary. Visible to KI Server subscribers. |
+| **Alpaca Private** | Alpaca | Everything in Alpaca KI plus full P&L reports (daily, weekly, monthly, yearly), SPY comparison charts, fill notifications, and tax summaries. Owner-only. |
+| **RH KI** | Robinhood | Callouts only — Kimi Manager rebalance decisions and Kimi Autopilot signals. Subscribers see what the system decided to do, not execution detail or P&L. |
+| **RH Private** | Robinhood | Everything: fill notifications, full RH P&L reports (daily/weekly/monthly/yearly) with charts, Friday portfolio pie chart snapshot, Investor Tracker equity breakdown, RH Session alerts, and tax summaries. Owner-only. |
 
 ---
 
