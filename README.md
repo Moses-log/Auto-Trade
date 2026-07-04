@@ -8,21 +8,107 @@ Deployed on [Render](https://render.com) with a persistent disk at `/data/`.
 
 ---
 
-## System Visual Map
+## System Map
+
+**Interactive version:** [kimiinvest.com/system-map.html](https://kimiinvest.com/system-map.html) — click any node for full details, inputs/outputs, and technical references.
+
+```mermaid
+flowchart LR
+    subgraph EXT ["📡 External Signals"]
+        TV[TradingView]
+        TW[X / Twitter]
+    end
+
+    subgraph STR ["⚡ Strategies"]
+        KS[Kimi SPY]
+        KA[Kimi Autopilot]
+        KM[Kimi Manager]
+    end
+
+    subgraph ENG ["🔧 Engine"]
+        API[Kimi API]
+        SCH[Scheduler]
+        RHS[RH Session]
+        GB[Gist Backup]
+    end
+
+    subgraph BRK ["💱 Brokers"]
+        ALP[Alpaca]
+        RH[RH]
+    end
+
+    subgraph KIS ["🔵 KI Server"]
+        AKI[Alpaca KI]
+        RKI[RH KI]
+    end
+
+    subgraph PRV ["🟣 Private Server"]
+        APR[Alpaca Private]
+        RPR[RH Private]
+    end
+
+    SITE[KI Site]
+
+    TV -->|alert| KS
+    TW -->|signal| KA
+    KS -->|webhook| API
+    KA -->|webhook| API
+    API -->|execute| ALP
+    API -->|mirror| RH
+    SCH -->|monthly| KM
+    KM -->|rebalance| RH
+    SCH -->|keep-alive| RHS
+    SCH -->|backup| GB
+    ALP -->|signals| AKI
+    ALP -->|fills| APR
+    RH -->|callouts| RKI
+    RH -->|fills| RPR
+    SCH -->|reports| APR
+    SCH -->|P&L feed| RKI
+    SCH -->|reports| RPR
+    SITE -->|public-stats| API
+
+    classDef signal   fill:#1A1A2E,stroke:#A0A0C0,color:#d0d0e0
+    classDef strategy fill:#1A1800,stroke:#C0A800,color:#F5E642
+    classDef engine   fill:#001020,stroke:#3A6DA0,color:#6B9FD4
+    classDef broker   fill:#001810,stroke:#208050,color:#4AE2A0
+    classDef ki       fill:#07091E,stroke:#404DC0,color:#7B8EFF
+    classDef private  fill:#100720,stroke:#703AC0,color:#C08FFF
+    classDef site     fill:#001616,stroke:#208080,color:#4AE2E2
+
+    class TV,TW signal
+    class KS,KA,KM strategy
+    class API,SCH,RHS,GB engine
+    class ALP,RH broker
+    class AKI,RKI ki
+    class APR,RPR private
+    class SITE site
+```
+
+**Node key:**
+
+| Name | Layer | What it does |
+|---|---|---|
+| **Kimi SPY** | Strategy | TradingView-triggered SPY DCA — Alpaca primary, RH mirror |
+| **Kimi Autopilot** | Strategy | Manual X/Twitter signals forwarded to RH |
+| **Kimi Manager** | Strategy | Autonomous monthly Claude Opus rebalancer on RH |
+| **Kimi API** | Engine | FastAPI on Render — webhook router, slash commands, public endpoints |
+| **Scheduler** | Engine | APScheduler cron — all P&L reports, rebalance, keep-alive, backup |
+| **RH Session** | Engine | Robinhood auth + randomised keep-alive (1–5 AM ET, every 1–2 days) |
+| **Gist Backup** | Engine | Nightly /data/ push to private GitHub Gist |
+| **Alpaca** | Broker | Kimi SPY execution only |
+| **RH** | Broker | All three strategies |
+| **Alpaca KI** | KI Server | SPY signals + Trades P&L summary → subscribers |
+| **Alpaca Private** | Private Server | Fills + full P&L suite + tax → owner only |
+| **RH KI** | KI Server | Manager/Autopilot callouts → subscribers |
+| **RH Private** | Private Server | Everything: fills, P&L, snapshot, Investor Tracker, session alerts, tax |
+| **KI Site** | Site | kimiinvest.com — public dashboard + Whop gateway |
+
+---
+
+## Architecture Detail
 
 ```
-╔══════════════════════════════════════════════════════════════════════════════════╗
-║                          KIMI AUTO TRADE SYSTEM                                  ║
-╚══════════════════════════════════════════════════════════════════════════════════╝
-
-  ┌─────────────────┐   ┌──────────────────┐   ┌───────────────────────────────┐
-  │  TradingView    │   │  You (manually   │   │       APScheduler             │
-  │  Pine Script    │   │  read signal &   │   │  1st of month, 9:35 AM ET     │
-  │  strategy.alert │   │  confirm trade)  │   │  → Kimi Monthly Rebalance   │
-  └────────┬────────┘   └────────┬─────────┘   └───────────────┬───────────────┘
-           │                     │                              │
-           │ POST /webhook        │ POST /claude-signal         │ run_monthly_rebalance()
-           ▼                     ▼                              ▼
 ╔══════════════════════════════════════════════════════════════════════════════════╗
 ║                        FastAPI Server  (Render)                                  ║
 ║                                                                                  ║
