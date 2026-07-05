@@ -252,7 +252,7 @@ On the **1st of each month at 9:35 AM ET**, the system:
 2. Enriches each holding with **yfinance fundamentals** (Forward P/E, PEG, EV/EBITDA, ROE, margins, short interest, earnings date) and **yfinance-computed technical indicators** (200-day MA position, RSI(14), calendar-QTD performance, RS vs SPY) — fundamentals and technicals fetched in parallel for all tickers
 3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
 4. Loads **last 3 rebalance log entries** (date, portfolio value, SPY price, trade counts) + the **full 5-section research from the most recent entry** so Claude can track thesis evolution month-over-month
-5. Calls **claude-opus-4-8** via the Anthropic API with a full Ackman-style scoring framework
+5. Calls **claude-opus-4-8** via the Anthropic API using an **agentic loop** (up to 80 turns, 16,000 token responses). Claude has access to **live internet search** (`web_search_20250305`, up to 30 searches per rebalance) — used to verify news, earnings surprises, analyst estimate revisions, SEC filings, short interest updates, and macro context. Each search is handled server-side by Anthropic; results are embedded in the response and cited inline.
 6. The system scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage — using macro conditions and upcoming earnings dates to inform timing
 7. The system proposes an optimal portfolio using five trade actions:
    - **BUY** — open or add to a position (delta-buy: only invests the additional dollars needed to reach target weight)
@@ -312,7 +312,7 @@ Before taking or sizing any position, the system runs a structured 5-section res
 | **1 — Foundation** | Business model, moat, top 3 competitors, unique technological advantage; top 3 upcoming catalysts (Critical / High / Strategic); asymmetry check (valuation floor vs. growth ceiling) |
 | **2 — Valuation Rigor** | Rule of 40 (revenue growth % + EBITDA margin %); Value/Growth Score (P/S TTM ÷ YoY revenue growth %); forward P/S vs. TTM P/S (guidance credibility check); 3-year historical P/S range; insider ownership; SBC as % of revenue |
 | **3 — Mandatory Bear Case** | Customer concentration (flag if single customer >30% revenue); dilution risk (ATM programs or secondaries in last 24 months); last earnings miss (reason + stock reaction); 10-K specific risks (no boilerplate); bull case critique |
-| **4 — Technical Overlay** | 200-day MA position and slope (rising / falling); RS vs. SPY (calendar-QTD, relative to SPY QTD); short interest (days to cover, rising or falling); RSI (14) |
+| **4 — Technical Overlay** | **4.1 Key Price Levels** — 52-week high/low, recent support/resistance; **4.2 Moving Averages** — 200-day MA position + slope, 50/200-day golden/death cross; **4.3 Relative Strength** — RS vs SPY calendar-QTD; **4.4 Short Interest** — float %, days to cover, rising/falling trend; **4.5 Sentiment & Volatility** — IV rank, put/call ratio, fear/greed context |
 | **5 — Verdict** | Three-point bull case, three-point bear case, net view, conviction (High / Medium / Low), and what would change the thesis |
 
 **Bear case rule:** Any position sized above 10% must have a fully resolved bear case documented in Section 3. If the bear case is unresolved, the position is capped at ≤7% or avoided entirely.
@@ -446,7 +446,7 @@ scripts/
 | Variable | Description |
 |---|---|
 | `SIGNAL_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Kimi BUY/SELL signals with WIN/LOSS on sells. No P&L amounts or quantities. |
-| `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Kimi Manager BUY/DOUBLE_DOWN/SELL/TRIM signals posted on every autonomous trade. |
+| `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — full 5-section research analysis (one stock per message, chunked) + decisions summary card on every autonomous rebalance. Dollar amounts are stripped — subscribers see research, action, and target weight but not portfolio value or position sizes. |
 | `WHOP_WEBHOOK_SECRET` | HMAC-SHA256 secret for verifying Whop membership webhook payloads. Optional — signature check is skipped if not set. |
 
 ### GitHub Gist Backup
@@ -1162,6 +1162,16 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Live web search + Discord reliability (July 4, 2026)
+
+| Change | Details |
+|---|---|
+| **Live internet access during rebalances** | Claude now uses Anthropic's server-side `web_search_20250305` tool (up to 30 searches per rebalance) to verify current data: breaking news, earnings surprises, analyst estimate revisions, SEC filings, short interest updates, and macro context. Searches are executed server-side by Anthropic — results embedded directly in the response content with inline citations. |
+| **Agentic loop** | `_call_claude_sync` rewritten as an 80-turn loop to support multi-step web research. `max_tokens` increased 8192 → 16,000; per-turn timeout increased 120s → 300s. Typical rebalance now takes **8–10 minutes** end-to-end (data fetch ~20s, Claude + web search ~4–5 min, Discord ~1 min, trade execution ~2–3 min). |
+| **Full research on KI Server** | Subscriber feed (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`) now receives the complete 5-section analysis (same content as Private Server), one stock per message. Dollar amounts are stripped — portfolio value, position sizes, and invested amounts stay Private Server only. Decisions summary card posts after the research, ordered within a single coroutine. |
+| **Discord chunking** | `_chunk_text()` splits messages longer than 1900 characters at the last newline — prevents Discord's hard 2000-char reject. `_send_chunked()` sends all chunks as a single sequential coroutine, guaranteeing in-order delivery. With web search generating 3,000–5,000 chars per stock section, chunking is necessary on every rebalance. |
+| **Bug fixes (4 MEDIUM, 1 LOW)** | (1) KI Server decisions card raced ahead of research — merged into one `_ki_full_task()` coroutine. (2) `_chunk_text` lstrip consumed double-newline section separators — fixed to advance past exactly one split newline. (3) `stop_reason: "max_tokens"` was silently logged as "80-turn cap" — now explicit error-level log. (4) `resolved_ids` checked for `tool_result` in assistant content where it never appears — fixed to match any block with a `tool_use_id` field. (5) 80-turn fallback concatenated all intermediate turns — now returns only the last turn. |
 
 ### Randomized RH keep-alive schedule (July 1, 2026)
 
