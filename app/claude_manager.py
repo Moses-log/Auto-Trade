@@ -246,9 +246,11 @@ A position must survive the bear case to be sized above 10%. If the bear case is
 
 SECTION 4 — TECHNICAL OVERLAY
 Fundamentals tell you what to buy. Technicals help with price and timing.
-- 200-day Moving Average: Is the stock above or below? Is the slope rising (bullish) or falling (bearish)? A stock well below a falling 200-day MA is in structural downtrend — size cautiously.
-- Relative Strength vs SPY (3 months): Has the stock outperformed SPY? Is the RS line accelerating or breaking down on market pullbacks? An RS breakdown while the index rallies is a bearish divergence signal.
-- Short interest: High short interest + a positive upcoming catalyst = potential short squeeze (opportunity). High short interest + deteriorating fundamentals = dangerous.
+- Key price levels (4.1): Identify key resistance levels (52-week high, swing highs, analyst price targets) and support levels (20-day, 100-day, 200-day SMA). What is the immediate level to watch? Is price near a critical breakout or breakdown zone?
+- Moving averages (4.2): Is the stock above or below its 200-day MA? What is the slope — rising (bullish) or falling (bearish)? Has there been a recent Golden Cross (bullish) or Death Cross (bearish)? A sharply rising 200-day MA with price well above it signals strong trend momentum. A stock well below a falling 200-day MA is in structural downtrend — size cautiously.
+- Relative Strength (4.3): Analyze RS vs SPY over the last 3 months. Is the RS line accelerating or breaking down on market pullbacks? An RS breakdown while the index rallies is a bearish divergence signal.
+- Short interest (4.4): Check short interest as % of float and days to cover. Has it been rising or falling over the last 12 months? Low days-to-cover plus a positive upcoming catalyst = potential short squeeze opportunity. High short interest + deteriorating fundamentals = dangerous.
+- Sentiment and volatility (4.5): What is the prevailing retail sentiment — overwhelmingly bullish, mixed, or fearful? How does current implied volatility compare to historical volatility? Are there any notable price/volume patterns — high-volume breakouts, breakdowns, or divergences worth flagging?
 
 SECTION 5 — VERDICT
 After running the full framework, state explicitly:
@@ -789,8 +791,9 @@ async def run_monthly_rebalance() -> None:
             f"framework: foundation (moat, catalysts), valuation rigor (Rule of 40, Value/Growth "
             f"Score, Forward P/S vs TTM, historical range), mandatory bear case (customer "
             f"concentration, dilution risk, last earnings miss, 10-K risks), technical overlay "
-            f"(200-day MA status and slope, RS vs SPY, short interest), and a final verdict "
-            f"(bull case, bear case, net view).\n\n"
+            f"(key price levels, moving averages + Golden/Death Cross, RS vs SPY, short interest "
+            f"+ days to cover, sentiment + implied volatility + volume patterns), and a final "
+            f"verdict (bull case, bear case, net view).\n\n"
             f"2. IDENTIFY NEW CANDIDATES — Screen for superior opportunities not currently held. "
             f"For each serious candidate, run all 5 research sections. A new position must survive "
             f"the full bear case before being sized above 10%.\n\n"
