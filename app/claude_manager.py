@@ -660,27 +660,25 @@ async def notify_claude_pending_sell_fill(
 
 def _build_ki_decisions_summary(
     trades: list[dict],
-    portfolio_value: float,
     spy_price: Optional[float],
     month_label: str,
+    holdings_count: int,
 ) -> str:
-    """Build a clean monthly decisions card for the KI Server subscriber feed."""
+    """Build a clean monthly decisions card for the KI Server subscriber feed.
+    No personal dollar amounts — portfolio $ stays Private Server only."""
     _ORDER  = ("SELL", "TRIM", "DOUBLE_DOWN", "BUY", "HOLD")
     _EMOJI  = {"SELL": "🔴", "TRIM": "✂️", "DOUBLE_DOWN": "🔥", "BUY": "🟢", "HOLD": "⏸"}
     _LABEL  = {"SELL": "SELL", "TRIM": "TRIM", "DOUBLE_DOWN": "DOUBLE DOWN", "BUY": "BUY", "HOLD": "HOLD"}
     sorted_trades = sorted(trades, key=lambda t: _ORDER.index(t["action"]) if t["action"] in _ORDER else 99)
-    lines = [f"📊 **KIMI MONTHLY REBALANCE — {month_label}**\n", "**REBALANCE DECISIONS**"]
+    lines = [f"**REBALANCE DECISIONS — {month_label}**"]
     for t in sorted_trades:
         emoji  = _EMOJI.get(t["action"], "📌")
         label  = f"`{_LABEL.get(t['action'], t['action']):<11}`"
         ticker = f"**{t['ticker']:<5}**"
         weight = f"→ **{t['target_weight_pct']}%**" if t.get("target_weight_pct") is not None else "→ **EXIT**"
         lines.append(f"{emoji} {label} {ticker} {weight}")
-    spy_str = f"  ·  SPY `${spy_price:,.2f}`" if spy_price else ""
-    lines.append(
-        f"\n💼 Portfolio `${portfolio_value:,.0f}`{spy_str}"
-        f"  ·  Web-verified 5-section research  ·  Full analysis: Private Server"
-    )
+    spy_str = f"SPY `${spy_price:,.2f}`  ·  " if spy_price else ""
+    lines.append(f"\n{spy_str}`{holdings_count}` holdings  ·  Web-verified 5-section research")
     return "\n".join(lines)
 
 
@@ -955,7 +953,10 @@ async def run_monthly_rebalance() -> None:
             if section_tkr:
                 await _post_financials_chart(section_tkr)
 
-        # KI Server decisions summary posted after trades are parsed (see below)
+        # KI Server: full research analysis (no personal $ amounts in analysis text)
+        _fire(notify_claude_signal_feed(
+            f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS — {datetime.now(_CT).strftime('%B %Y').upper()}**\n\n{analysis_body}"
+        ))
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
@@ -987,10 +988,11 @@ async def run_monthly_rebalance() -> None:
 
         trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
 
-        # KI Server: clean decisions summary card (full analysis stays in Private Server)
+        # KI Server: decisions summary card (no portfolio $ — private amounts stay in Private Server)
         _fire(notify_claude_signal_feed(_build_ki_decisions_summary(
-            trades, portfolio_value, spy_price,
+            trades, spy_price,
             datetime.now(_CT).strftime("%B %Y").upper(),
+            len(positions),
         )))
 
         if not trades:
