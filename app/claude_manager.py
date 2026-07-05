@@ -658,6 +658,36 @@ async def notify_claude_pending_sell_fill(
     )
 
 
+_DISCORD_LIMIT = 1900  # Discord max is 2000; leave headroom for formatting
+
+
+def _chunk_text(text: str, limit: int = _DISCORD_LIMIT) -> list[str]:
+    """Split text into chunks that fit within Discord's character limit.
+    Splits on the last newline within the limit so code blocks and sections
+    stay intact. Falls back to a hard split only if no newline exists."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    while text:
+        if len(text) <= limit:
+            chunks.append(text)
+            break
+        split_at = text.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(text[:split_at])
+        text = text[split_at:].lstrip("\n")
+    return chunks
+
+
+async def _send_chunked(notify_fn, text: str, delay: float = 0.55) -> None:
+    """Send text as one or more ordered Discord messages, respecting the limit.
+    Using a single coroutine guarantees chunk ordering — no race conditions."""
+    for chunk in _chunk_text(text):
+        await notify_fn(chunk)
+        await asyncio.sleep(delay)
+
+
 def _build_ki_decisions_summary(
     trades: list[dict],
     spy_price: Optional[float],
@@ -947,16 +977,21 @@ async def run_monthly_rebalance() -> None:
 
         ticker_sections = [s.strip() for s in analysis_body.split(_DIVIDER) if s.strip()]
         for section in ticker_sections:
-            await asyncio.sleep(0.8)
-            await notify_claude_manager(section)
+            # _send_chunked handles splitting + inter-chunk delay; chart posts after
+            await _send_chunked(notify_claude_manager, section)
             section_tkr = _section_ticker(section)
             if section_tkr:
                 await _post_financials_chart(section_tkr)
 
-        # KI Server: full research analysis (no personal $ amounts in analysis text)
-        _fire(notify_claude_signal_feed(
-            f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS — {datetime.now(_CT).strftime('%B %Y').upper()}**\n\n{analysis_body}"
-        ))
+        # KI Server: same per-stock sections, chunked, in order — no charts
+        # Wrapped in a single coroutine so all chunks are ordered within one _fire task
+        _month = datetime.now(_CT).strftime("%B %Y").upper()
+        async def _ki_research_task(sections=ticker_sections, month=_month) -> None:
+            await notify_claude_signal_feed(f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS — {month}**")
+            await asyncio.sleep(0.55)
+            for sec in sections:
+                await _send_chunked(notify_claude_signal_feed, sec)
+        _fire(_ki_research_task())
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
