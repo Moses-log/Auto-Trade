@@ -259,6 +259,23 @@ After running the full framework, state explicitly:
 - Net view and conviction level (High / Medium / Low)
 - What would change your mind in either direction?
 
+========================
+WEB SEARCH GUIDANCE
+========================
+
+You have live web search. Use it proactively to fill data gaps the provided holdings JSON cannot cover.
+
+Search for each stock under review:
+- §2 gaps: current P/S TTM and forward P/S, 3-year historical P/S range (min/max/avg), insider ownership %, SBC as % of revenue
+- §3 gaps: revenue from top 3 customers (% of total), any ATM equity programs or secondary offerings filed in the last 24 months, most recent earnings miss (date, reason, stock reaction), company-specific 10-K risk factors (not boilerplate)
+- §4.1: current analyst consensus price target, 52-week high, key swing levels
+- §4.4: current short interest as % of float and days to cover (if not in holdings data)
+- §4.5: current retail sentiment (Stocktwits/Reddit), implied volatility vs 1-year historical average, notable recent volume events
+
+Do NOT search for data already in the holdings JSON: forward_pe, revenue_growth_yoy, gross_margin, operating_margin, sma200_pct, rs_vs_spy_qtd, short_pct_float.
+
+Cite web-sourced data inline: "per SEC EDGAR:" / "per Fintel:" / "per Stocktwits:" / "per analyst consensus:".
+
 POSITION SIZING ACTIONS:
 - BUY: Open a new position or add to an existing one. The system uses delta-buy logic — it only invests the additional dollars needed to reach your target weight, not the full amount.
 - DOUBLE_DOWN: Explicitly increase conviction in an existing position beyond its current weight. Executes identically to BUY (same delta-buy logic). Use when you want to signal elevated conviction.
@@ -401,27 +418,64 @@ def _fetch_technical_data(ticker: str) -> dict:
         return {}
 
 
+_WEB_SEARCH_TOOL: dict = {
+    "type": "web_search_20250305",
+    "name": "web_search",
+    "max_uses": 30,
+}
+
+
 def _call_claude_sync(user_message: str) -> str:
-    """Synchronous Anthropic API call. Run via executor to avoid blocking."""
+    """Agentic loop with live web search. Continues until Claude signals end_turn."""
     if not settings.anthropic_api_key:
         raise RuntimeError("ANTHROPIC_API_KEY not configured")
-    response = httpx.post(
-        "https://api.anthropic.com/v1/messages",
-        headers={
-            "x-api-key": settings.anthropic_api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        },
-        json={
-            "model": "claude-opus-4-8",
-            "max_tokens": 8192,
-            "system": _SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": user_message}],
-        },
-        timeout=120,
-    )
-    response.raise_for_status()
-    return response.json()["content"][0]["text"]
+    headers = {
+        "x-api-key": settings.anthropic_api_key,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "web-search-2025-03-05",
+        "content-type": "application/json",
+    }
+    messages: list[dict] = [{"role": "user", "content": user_message}]
+    for _turn in range(80):
+        resp = httpx.post(
+            "https://api.anthropic.com/v1/messages",
+            headers=headers,
+            json={
+                "model": "claude-opus-4-8",
+                "max_tokens": 16000,
+                "system": _SYSTEM_PROMPT,
+                "messages": messages,
+                "tools": [_WEB_SEARCH_TOOL],
+            },
+            timeout=300,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        content: list = data["content"]
+        stop_reason: str = data.get("stop_reason", "end_turn")
+        messages.append({"role": "assistant", "content": content})
+        if stop_reason == "end_turn":
+            return "\n".join(b["text"] for b in content if b.get("type") == "text")
+        if stop_reason == "tool_use":
+            # web_search_20250305 is server-side: results are embedded in content.
+            # Only add user tool_results for any unresolved tool_use blocks.
+            resolved_ids = {b.get("tool_use_id") for b in content if b.get("type") == "tool_result"}
+            pending = [b for b in content if b.get("type") == "tool_use" and b.get("id") not in resolved_ids]
+            if pending:
+                messages.append({
+                    "role": "user",
+                    "content": [{"type": "tool_result", "tool_use_id": b["id"], "content": ""} for b in pending],
+                })
+            continue
+        break
+    log.warning("Claude agentic loop hit 80-turn safety cap — extracting partial response")
+    texts: list[str] = []
+    for msg in messages:
+        if msg["role"] == "assistant":
+            for b in (msg["content"] if isinstance(msg["content"], list) else []):
+                if isinstance(b, dict) and b.get("type") == "text":
+                    texts.append(b["text"])
+    return "\n".join(texts)
 
 
 def _append_rebalance_log(entry: dict) -> None:
@@ -604,6 +658,32 @@ async def notify_claude_pending_sell_fill(
     )
 
 
+def _build_ki_decisions_summary(
+    trades: list[dict],
+    portfolio_value: float,
+    spy_price: Optional[float],
+    month_label: str,
+) -> str:
+    """Build a clean monthly decisions card for the KI Server subscriber feed."""
+    _ORDER  = ("SELL", "TRIM", "DOUBLE_DOWN", "BUY", "HOLD")
+    _EMOJI  = {"SELL": "🔴", "TRIM": "✂️", "DOUBLE_DOWN": "🔥", "BUY": "🟢", "HOLD": "⏸"}
+    _LABEL  = {"SELL": "SELL", "TRIM": "TRIM", "DOUBLE_DOWN": "DOUBLE DOWN", "BUY": "BUY", "HOLD": "HOLD"}
+    sorted_trades = sorted(trades, key=lambda t: _ORDER.index(t["action"]) if t["action"] in _ORDER else 99)
+    lines = [f"📊 **KIMI MONTHLY REBALANCE — {month_label}**\n", "**REBALANCE DECISIONS**"]
+    for t in sorted_trades:
+        emoji  = _EMOJI.get(t["action"], "📌")
+        label  = f"`{_LABEL.get(t['action'], t['action']):<11}`"
+        ticker = f"**{t['ticker']:<5}**"
+        weight = f"→ **{t['target_weight_pct']}%**" if t.get("target_weight_pct") is not None else "→ **EXIT**"
+        lines.append(f"{emoji} {label} {ticker} {weight}")
+    spy_str = f"  ·  SPY `${spy_price:,.2f}`" if spy_price else ""
+    lines.append(
+        f"\n💼 Portfolio `${portfolio_value:,.0f}`{spy_str}"
+        f"  ·  Web-verified 5-section research  ·  Full analysis: Private Server"
+    )
+    return "\n".join(lines)
+
+
 async def run_monthly_rebalance() -> None:
     """
     Main entry point for the autonomous monthly portfolio rebalance.
@@ -667,7 +747,7 @@ async def run_monthly_rebalance() -> None:
     await notify_claude_manager_embed(_embed(
         "🤖 KIMI PORTFOLIO MANAGER — MONTHLY REBALANCE",
         _CLR_YELLOW,
-        description="Fetching portfolio data and running 5-section research analysis…",
+        description="Fetching portfolio data and running web-verified 5-section research analysis (up to 30 live searches)…",
         footer=_timestamp(),
     ))
 
@@ -807,9 +887,10 @@ async def run_monthly_rebalance() -> None:
             f"       🔬 **§1 FOUNDATION**\n"
             f"       📊 **§2 VALUATION RIGOR**\n"
             f"       🐻 **§3 BEAR CASE**\n"
-            f"       📈 **§4 TECHNICAL OVERLAY**\n"
+            f"       📈 **§4 TECHNICAL OVERLAY** — 4.1 Key Levels · 4.2 MAs + Golden/Death Cross · 4.3 RS vs SPY · 4.4 Short Interest · 4.5 Sentiment & Vol\n"
             f"       ⚖️ **§5 VERDICT**\n"
             f"   • Use inline code for numbers: `Rule of 40: 68` `P/S: 8.2x` `+23% YoY`\n"
+            f"   • Cite web-sourced data inline: `per Fintel:` `per SEC EDGAR:` `per Stocktwits:` etc.\n"
             f"   • Conviction line (last line of §5): **Conviction: HIGH** | **MEDIUM** | **LOW**\n"
             f"   • After all analysis, end with the required JSON block."
         )
@@ -874,9 +955,7 @@ async def run_monthly_rebalance() -> None:
             if section_tkr:
                 await _post_financials_chart(section_tkr)
 
-        _fire(notify_claude_signal_feed(
-            f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS**\n\n{analysis_body}"
-        ))
+        # KI Server decisions summary posted after trades are parsed (see below)
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
@@ -907,6 +986,13 @@ async def run_monthly_rebalance() -> None:
         _EXCLUDED = {"SPY"}  # managed by Kimi — Claude must never touch these
 
         trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
+
+        # KI Server: clean decisions summary card (full analysis stays in Private Server)
+        _fire(notify_claude_signal_feed(_build_ki_decisions_summary(
+            trades, portfolio_value, spy_price,
+            datetime.now(_CT).strftime("%B %Y").upper(),
+        )))
+
         if not trades:
             log_entry["status"] = "no_trades"
             await asyncio.sleep(0.8)
