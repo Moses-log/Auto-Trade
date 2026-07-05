@@ -456,10 +456,21 @@ def _call_claude_sync(user_message: str) -> str:
         messages.append({"role": "assistant", "content": content})
         if stop_reason == "end_turn":
             return "\n".join(b["text"] for b in content if b.get("type") == "text")
+        if stop_reason == "max_tokens":
+            # Response was cut at the token budget — trade block is likely truncated.
+            # Return what we have; _parse_trade_block will detect the incomplete JSON.
+            log.error(
+                "Claude hit max_tokens limit (%d) — response truncated; "
+                "analysis may be incomplete and trade block may fail to parse",
+                16000,
+            )
+            return "\n".join(b["text"] for b in content if b.get("type") == "text")
         if stop_reason == "tool_use":
-            # web_search_20250305 is server-side: results are embedded in content.
-            # Only add user tool_results for any unresolved tool_use blocks.
-            resolved_ids = {b.get("tool_use_id") for b in content if b.get("type") == "tool_result"}
+            # web_search_20250305 is server-side: Anthropic embeds search results as
+            # content blocks that carry a tool_use_id field (e.g. "web_search_result").
+            # Collect any tool_use_id that already has a result block, so we only
+            # stub out tool_use blocks the server has not yet resolved.
+            resolved_ids = {b["tool_use_id"] for b in content if b.get("tool_use_id")}
             pending = [b for b in content if b.get("type") == "tool_use" and b.get("id") not in resolved_ids]
             if pending:
                 messages.append({
@@ -468,14 +479,16 @@ def _call_claude_sync(user_message: str) -> str:
                 })
             continue
         break
-    log.warning("Claude agentic loop hit 80-turn safety cap — extracting partial response")
-    texts: list[str] = []
-    for msg in messages:
+    log.warning("Claude agentic loop hit 80-turn safety cap — returning last assistant turn only")
+    for msg in reversed(messages):
         if msg["role"] == "assistant":
-            for b in (msg["content"] if isinstance(msg["content"], list) else []):
-                if isinstance(b, dict) and b.get("type") == "text":
-                    texts.append(b["text"])
-    return "\n".join(texts)
+            texts = [
+                b["text"] for b in (msg["content"] if isinstance(msg["content"], list) else [])
+                if isinstance(b, dict) and b.get("type") == "text"
+            ]
+            if texts:
+                return "\n".join(texts)
+    return ""
 
 
 def _append_rebalance_log(entry: dict) -> None:
@@ -674,9 +687,14 @@ def _chunk_text(text: str, limit: int = _DISCORD_LIMIT) -> list[str]:
             break
         split_at = text.rfind("\n", 0, limit)
         if split_at <= 0:
-            split_at = limit
-        chunks.append(text[:split_at])
-        text = text[split_at:].lstrip("\n")
+            # No newline in window — hard split, nothing to skip
+            chunks.append(text[:limit])
+            text = text[limit:]
+        else:
+            chunks.append(text[:split_at])
+            # Advance past exactly the one split newline; preserve any subsequent
+            # blank lines so section separators (\n\n) survive chunk boundaries
+            text = text[split_at + 1:]
     return chunks
 
 
@@ -983,15 +1001,8 @@ async def run_monthly_rebalance() -> None:
             if section_tkr:
                 await _post_financials_chart(section_tkr)
 
-        # KI Server: same per-stock sections, chunked, in order — no charts
-        # Wrapped in a single coroutine so all chunks are ordered within one _fire task
-        _month = datetime.now(_CT).strftime("%B %Y").upper()
-        async def _ki_research_task(sections=ticker_sections, month=_month) -> None:
-            await notify_claude_signal_feed(f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS — {month}**")
-            await asyncio.sleep(0.55)
-            for sec in sections:
-                await _send_chunked(notify_claude_signal_feed, sec)
-        _fire(_ki_research_task())
+        # KI Server task is defined below after `trades` is parsed so research and
+        # decisions card fire in one coroutine — no ordering race possible.
 
         if trade_block is None:
             log_entry["status"] = "failed_parse"
@@ -1023,12 +1034,19 @@ async def run_monthly_rebalance() -> None:
 
         trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
 
-        # KI Server: decisions summary card (no portfolio $ — private amounts stay in Private Server)
-        _fire(notify_claude_signal_feed(_build_ki_decisions_summary(
-            trades, spy_price,
-            datetime.now(_CT).strftime("%B %Y").upper(),
-            len(positions),
-        )))
+        # KI Server: research sections then decisions card — single task, guaranteed ordering
+        _ki_month = datetime.now(_CT).strftime("%B %Y").upper()
+        async def _ki_full_task(
+            _secs=ticker_sections, _mo=_ki_month,
+            _tr=trades, _spy=spy_price, _cnt=len(positions),
+        ) -> None:
+            await notify_claude_signal_feed(f"📊 **KIMI MONTHLY PORTFOLIO ANALYSIS — {_mo}**")
+            await asyncio.sleep(0.55)
+            for sec in _secs:
+                await _send_chunked(notify_claude_signal_feed, sec)
+            await asyncio.sleep(0.55)
+            await notify_claude_signal_feed(_build_ki_decisions_summary(_tr, _spy, _mo, _cnt))
+        _fire(_ki_full_task())
 
         if not trades:
             log_entry["status"] = "no_trades"
