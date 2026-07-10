@@ -402,6 +402,18 @@ def _load_recent_inspection_entries(limit: int = 5) -> list[dict]:
     except (FileNotFoundError, json.JSONDecodeError):
         return []
     return records[-limit:]
+
+
+async def run_weekly_inspection() -> None:
+    """Placeholder — replaced with the real implementation in Task 8/9.
+
+    Exists now so app/scheduler.py (Task 4) can import this name at module
+    level; @patch("app.scheduler.run_weekly_inspection", ...) requires the
+    attribute to already exist (patch's default create=False), which in turn
+    requires app.claude_inspection.run_weekly_inspection to exist. Task 8
+    replaces this entire function body — not append a second definition.
+    """
+    raise NotImplementedError("run_weekly_inspection is implemented in Task 8/9")
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -425,7 +437,7 @@ git commit -m "feat: add claude_inspection module skeleton with log read/write"
 - Test: Create `tests/test_scheduler_inspection_guard.py`
 
 **Interfaces:**
-- Consumes: `is_first_trading_day_of()` (Task 1), `run_weekly_inspection()` (stubbed here, fully implemented in Task 7 — importing a not-yet-fully-implemented function is fine since the import is lazy/local inside the function, matching the existing `_claude_monthly_rebalance` pattern, and this task's tests mock it directly).
+- Consumes: `is_first_trading_day_of()` (Task 1), `run_weekly_inspection()` (a `NotImplementedError` placeholder from Task 3, fully implemented in Tasks 8-9). Import it at **module level** in `app/scheduler.py`, not lazily inside the function — this task's tests use `@patch("app.scheduler.run_weekly_inspection", ...)`, and `unittest.mock.patch` requires the target to already exist as a module attribute (default `create=False`). Task 2 hit this exact issue with `run_monthly_rebalance` and fixed it the same way by hoisting to a module-level import — follow that same fix here from the start.
 - Produces: `_weekly_inspection()` — new scheduler entry point; cron job id `"weekly_inspection"`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -521,14 +533,13 @@ Expected: FAIL — `_weekly_inspection` doesn't exist yet (`AttributeError`/`Imp
 
 - [ ] **Step 3: Implement `_weekly_inspection()` and register the cron job**
 
-In `app/scheduler.py`, insert immediately after `_claude_monthly_rebalance()` (after the code from Task 2):
+In `app/scheduler.py`, add `run_weekly_inspection` to the module-level imports (alongside wherever `run_monthly_rebalance` ended up after Task 2 — e.g. `from app.claude_manager import run_monthly_rebalance` becomes a two-line block also importing `from app.claude_inspection import run_weekly_inspection`, or one combined import — match whatever form Task 2 actually left in the file). Then insert immediately after `_claude_monthly_rebalance()` (after the code from Task 2):
 
 ```python
 async def _weekly_inspection() -> None:
     """Fires on the first trading day of the week (cron covers Mon-Wed to
     handle a Monday/Tuesday holiday). Skipped when today is also the first
     trading day of the month — the monthly rebalance owns that week."""
-    from app.claude_inspection import run_weekly_inspection
     if not was_market_open_today():
         log.info("_weekly_inspection: market holiday — skipping")
         return
@@ -1139,11 +1150,11 @@ async def test_claude_api_failure_notifies_and_does_not_raise(
 - [ ] **Step 2: Run tests to verify they fail**
 
 Run: `pytest tests/test_claude_inspection_run.py -v`
-Expected: FAIL — `run_weekly_inspection` doesn't exist yet.
+Expected: FAIL — `run_weekly_inspection` currently raises `NotImplementedError` (the Task 3 placeholder), so every test in this file fails on that exception rather than on missing-attribute/import errors.
 
 - [ ] **Step 3: Implement `run_weekly_inspection()` (data gathering through parse)**
 
-Append to `app/claude_inspection.py`:
+**Replace the Task 3 placeholder function entirely** (the `async def run_weekly_inspection() -> None: raise NotImplementedError(...)` stub and its docstring) with the real implementation below. Also add these new imports near the top of `app/claude_inspection.py`, alongside the existing `import json`/`import logging`/`import os`:
 
 ```python
 import asyncio
