@@ -46,3 +46,40 @@ def test_history_string_unchanged_when_no_inspection_activity(tmp_path):
 
     assert len(records) == 1
     assert "Inspection" not in history_str
+
+
+def test_load_recent_history_handles_corrupted_inspection_gracefully(tmp_path):
+    """Verify that corrupted or malformed inspection data does not crash _load_recent_history().
+
+    This test simulates a scenario where:
+    - The rebalance log is valid and has recent history
+    - The inspection module raises an exception (e.g., corrupted JSON, invalid data structure)
+
+    Expected: _load_recent_history() should return normally with rebalance history intact,
+    and the Inspection section should simply be omitted (not included in the output).
+    """
+    rebalance_log = tmp_path / "claude_rebalance_log.json"
+    rebalance_log.write_text(json.dumps([{
+        "timestamp": "2026-07-01T09:35:00", "status": "completed",
+        "portfolio_value": 10000.0, "trades_executed": [], "analysis_body": "Prior analysis text.",
+    }]))
+
+    def raise_corruption(*args, **kwargs):
+        raise ValueError("Corrupted inspection log: invalid data shape")
+
+    with patch("app.claude_manager._LOG_PATH", str(rebalance_log)), \
+         patch("app.claude_inspection._load_recent_inspection_entries", side_effect=raise_corruption):
+        from app.claude_manager import _load_recent_history
+        records, history_str = _load_recent_history()
+
+    # Verify rebalance history is still present
+    assert len(records) == 1
+    assert "Prior Rebalance History" in history_str
+    assert "2026-07-01" in history_str
+
+    # Verify Inspection section was NOT added (gracefully omitted)
+    assert "Inspection Activity" not in history_str
+    assert "End Inspection Activity" not in history_str
+
+    # Verify prior research is still there
+    assert "Prior analysis text" in history_str
