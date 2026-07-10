@@ -95,6 +95,18 @@ def _trade_embed(action: str, ticker: str, fields: list[dict], footer: str) -> d
         footer=footer,
     )
 
+_DIVIDER = "══════════════════════════════"
+
+
+def _section_ticker(section: str) -> str:
+    """Extract the ticker symbol from a '## TICKER — Name' header line."""
+    for line in section.splitlines():
+        line = line.strip()
+        if line.startswith("## "):
+            first_word = line[3:].split("—")[0].split("–")[0].strip().split()[0]
+            return first_word.upper()
+    return ""
+
 _SYSTEM_PROMPT = """You are an institutional-grade portfolio manager whose objective is to outperform the S&P 500 over rolling 3-, 5-, and 10-year periods by identifying the companies most likely to dominate the future economy.
 
 ========================
@@ -982,16 +994,6 @@ async def run_monthly_rebalance() -> None:
         # Send each ticker's thesis as its own message, immediately followed by
         # its financials chart. Sequential awaits guarantee ordering — no racing.
         from app.notifications import notify_claude_signal_feed
-        _DIVIDER = "══════════════════════════════"
-
-        def _section_ticker(section: str) -> str:
-            """Extract the ticker symbol from a '## TICKER — Name' header line."""
-            for line in section.splitlines():
-                line = line.strip()
-                if line.startswith("## "):
-                    first_word = line[3:].split("—")[0].split("–")[0].strip().split()[0]
-                    return first_word.upper()
-            return ""
 
         ticker_sections = [s.strip() for s in analysis_body.split(_DIVIDER) if s.strip()]
         for section in ticker_sections:
