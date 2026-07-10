@@ -333,6 +333,19 @@ Every Friday at 4:00 PM ET (and via `/portfolio` slash command), the system:
    - **Potential Upside** — weighted average analyst price target vs current price → Strong / Good / Moderate / Limited
 5. Posts chart + ratings to `PORTFOLIO_SNAPSHOT_WEBHOOK_URL`
 
+### 5 — Kimi Inspection (Weekly Holdings Check)
+
+On the **first trading day of each week** at **9:35 AM ET** — skipped on any week that coincides with the monthly rebalance — the system runs a lighter, holdings-only check-in between Kimi Portfolio Manager's monthly rebalances:
+
+1. Fetches current RH positions only — **no new candidate screening**
+2. Loads the most recent thesis per ticker (from the last monthly rebalance's research, or a more recent weekly Inspection note if one exists)
+3. Calls **claude-opus-4-8** via a lighter agentic loop (up to 30 turns, 8,000-token responses, up to **15 live searches** — about half the monthly rebalance's budget) asking only: has anything material happened to this holding in the last 7 days?
+4. Defaults to **HOLD** unless there's a specific, nameable trigger — earnings surprise, guidance change, major company-specific news, a macro shock tied to the name, or a meaningful technical breakdown. Routine price noise is not a trigger.
+5. Can act immediately with three trade actions — **SELL** (close the position), **TRIM** (reduce to a lower target weight, same 1-share-minimum rule as the monthly rebalance), or **DOUBLE_DOWN** (add to an existing position with elevated conviction)
+6. **Never opens a new position.** BUY is disallowed in the prompt *and* rejected in code — a response containing a BUY anywhere has its entire trade block discarded, nothing executes
+7. Posts full analysis + every trade to Discord (`CLAUDE_MANAGER_WEBHOOK_URL`); posts an actioned-holdings-only summary to the paid subscriber channel (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`); realized SELL/TRIM P&L is recorded to the same win/loss ledger the monthly rebalance uses
+8. Audit log saved to `/data/claude_inspection_log.json` (separate file from the monthly rebalance's log). The next monthly rebalance reads recent Inspection activity as part of its own history context, so it builds on what Inspection already decided instead of re-deriving a thesis
+
 ---
 
 ## Project Structure
@@ -434,6 +447,14 @@ scripts/
 | `ANTHROPIC_API_KEY` | Anthropic API key — required for autonomous monthly rebalance |
 | `CLAUDE_MANAGER_WEBHOOK_URL` | Discord channel for Kimi analysis, rebalance trades, and benchmark comparisons |
 | `FRED_API_KEY` | Free FRED API key (fred.stlouisfed.org → My Account → API Keys) — enables live CPI data in the rebalance prompt. Optional; VIX and 10Y yield work without it. |
+
+### Kimi Inspection
+
+| Variable | Default | Description |
+|---|---|---|
+| `CLAUDE_INSPECTION_LOG_PATH` | `/data/claude_inspection_log.json` | Audit log path for weekly Inspection runs — separate file from the monthly rebalance's log, same `/data` persistent disk. Default rarely needs overriding. |
+
+Uses the same `ANTHROPIC_API_KEY`, `CLAUDE_MANAGER_WEBHOOK_URL`, and `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` as Kimi Portfolio Manager — no separate credentials needed.
 
 ### Portfolio Snapshot
 
@@ -757,6 +778,19 @@ $env:DISCORD_APP_ID="..."; $env:DISCORD_BOT_TOKEN="..."; python scripts/register
 | `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. **Blocked if position qty < 1 share** (Robinhood cannot partially sell fractional positions). |
 | `HOLD` | `target_weight_pct` | No trade executed |
 
+## Trade Actions (Kimi Inspection)
+
+Same three non-BUY actions as Kimi Portfolio Manager, evaluated weekly against current holdings only:
+
+| Action | JSON field | Behaviour |
+|---|---|---|
+| `SELL` | — | Closes the entire position |
+| `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. **Blocked if position qty < 1 share.** |
+| `DOUBLE_DOWN` | `target_weight_pct` | Adds to the position — signals elevated conviction, same delta-buy sizing as the monthly rebalance, capped at 95% of buying power |
+| `HOLD` | — | No trade executed — the default unless a specific trigger is documented in the reasoning |
+
+`BUY` is never a valid action here — a response containing one anywhere has its entire trade block rejected before execution.
+
 ---
 
 ## Discord Notifications
@@ -904,6 +938,64 @@ Bear: (1) customer concentration (2) China export ceiling (3) valuation priced f
 ┃ Kimi Portfolio Manager determined the current portfolio requires no rebalancing.
 ┃ 🟢 This month:        Portfolio +1.10%  |  SPY +0.82%  |  Alpha +0.28%
 ┃                                    🕐 9:37 AM CT — July 1, 2026
+```
+
+### Kimi Inspection (`CLAUDE_MANAGER_WEBHOOK_URL`)
+Same embed-sequence pattern as Kimi Manager, scaled down. Fires weekly; the common case is a single "no material changes" embed and nothing else.
+
+**No holdings** *(gray border)*
+```
+┃ 🔍 KIMI INSPECTION — no current holdings to review
+┃                                    🕐 9:35 AM CT — July 6, 2026
+```
+
+**No material changes** *(green border)* — the common case
+```
+┃ 🔍 KIMI INSPECTION — no material changes this week
+┃ Reviewed 7 holding(s); no action needed.
+┃                                    🕐 9:37 AM CT — July 6, 2026
+```
+
+**Action(s) this week** *(orange border, fires once before any trades)*
+```
+┃ 🔍 KIMI INSPECTION — 2 action(s) this week
+┃                                    🕐 9:37 AM CT — July 6, 2026
+```
+
+**Per-trade embeds** — same color-coded style as Kimi Manager, plus a **Reasoning** field carrying the specific trigger that justified acting:
+```
+┃ red    🔴 KIMI SELL — NOW
+┃        Qty                Record
+┃        5.5 shares @       8W — 2L
+┃        $210.00
+┃        Reasoning
+┃        Guidance cut on July 3 earnings call — thesis broken.
+┃        P&L
+┃        +$312.00 (+18.42%)
+┃                                    🕐 9:38 AM CT — July 6, 2026
+
+┃ yellow 🔥 KIMI DOUBLE_DOWN — META
+┃        Qty                Target Weight
+┃        0.834 shares @     22%
+┃        $601.00
+┃        Reasoning
+┃        Ad business reaccelerated on Q2 print — raising conviction.
+┃                                    🕐 9:38 AM CT — July 6, 2026
+```
+
+**Completion** *(green border)*
+```
+┃ ✅ KIMI INSPECTION COMPLETE
+┃ 2 trade(s) executed
+┃                                    🕐 9:39 AM CT — July 6, 2026
+```
+
+Paid subscribers (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`) only see actioned holdings — no "no changes" noise, and no P&L or position-sizing detail beyond the reasoning and fill price:
+```
+🔴 **KIMI INSPECTION SELL — NOW**
+Guidance cut on July 3 earnings call — thesis broken.
+@ $210.00
+🕐 9:38 AM CT — July 6, 2026
 ```
 
 ### Paid Signal Subscribers (`SIGNAL_SUBSCRIBERS_WEBHOOK_URL`)
@@ -1162,6 +1254,15 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Kimi Inspection — weekly holdings check-in (July 10, 2026)
+
+| Change | Details |
+|---|---|
+| **New weekly review** | `app/claude_inspection.py` — runs on the first trading day of each week (skipped on rebalance weeks) with SELL/TRIM/DOUBLE_DOWN authority over current holdings only. Never opens new positions — BUY is rejected in code, not just prompted against. Lighter agentic loop than the monthly rebalance (30-turn cap, 15-search budget vs. 80/30) doing a delta-check against the last known thesis instead of a full 5-section rebuild. |
+| **Shared history** | The monthly rebalance now reads recent Inspection activity as part of its own context (`_load_recent_history`), so it builds on decisions Inspection already made that month instead of re-deriving them. |
+| **Scheduling bug fix** | The monthly rebalance's cron previously fired only on a hardcoded `day=1` with no holiday guard — if the 1st fell on a weekend/holiday, the whole month was silently skipped. Now covers days 1–3 with the same first-trading-day check Inspection itself uses (`is_first_trading_day_of`), matching the pattern already used by the quarterly tax report. |
+| **New log file** | `/data/claude_inspection_log.json` — kept separate from `claude_rebalance_log.json`. |
 
 ### Live web search + Discord reliability (July 4, 2026)
 
