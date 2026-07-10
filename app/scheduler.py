@@ -21,6 +21,7 @@ from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 from app.pending_withdrawals import load_pending_withdrawals
 from app.trading.alpaca_client import was_market_open_today, get_client, is_first_trading_day_of
 from app.claude_manager import run_monthly_rebalance
+from app.claude_inspection import run_weekly_inspection
 
 log = logging.getLogger(__name__)
 
@@ -164,6 +165,24 @@ async def _claude_monthly_rebalance() -> None:
     await run_monthly_rebalance()
 
 
+async def _weekly_inspection() -> None:
+    """Fires on the first trading day of the week (cron covers Mon-Wed to
+    handle a Monday/Tuesday holiday). Skipped when today is also the first
+    trading day of the month — the monthly rebalance owns that week."""
+    if not was_market_open_today():
+        log.info("_weekly_inspection: market holiday — skipping")
+        return
+    today = _date.today()
+    week_start = today - timedelta(days=today.weekday())  # Monday of this week
+    if not is_first_trading_day_of(week_start):
+        log.info("_weekly_inspection: not first trading day of week — skipping")
+        return
+    if is_first_trading_day_of(today.replace(day=1)):
+        log.info("_weekly_inspection: coincides with monthly rebalance day — skipping")
+        return
+    await run_weekly_inspection()
+
+
 async def _nightly_backup() -> None:
     from app.backup import push_backup
     await push_backup()
@@ -202,6 +221,12 @@ def setup_jobs() -> None:
         replace_existing=True,
     )
     scheduler.add_job(
+        _weekly_inspection,
+        CronTrigger(day_of_week="mon-wed", hour=9, minute=35, timezone=ET),
+        id="weekly_inspection",
+        replace_existing=True,
+    )
+    scheduler.add_job(
         _nightly_backup,
         CronTrigger(hour=0, minute=0, timezone=ET),
         id="nightly_backup",
@@ -212,6 +237,7 @@ def setup_jobs() -> None:
         "robinhood_keep_alive (daily check, runs every ~3 days), "
         "quarterly_tax_report (Jan/Apr/Jul/Oct 1), "
         "claude_monthly_rebalance (1st of each month 9:35 AM ET), "
+        "weekly_inspection (first trading day of week, 9:35 AM ET, skipped on rebalance weeks), "
         "nightly_backup (daily midnight ET)"
     )
 
