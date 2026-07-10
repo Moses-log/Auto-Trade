@@ -714,8 +714,11 @@ os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
-os.environ.setdefault("RH_USERNAME", "test@example.com")
-os.environ.setdefault("RH_PASSWORD", "test_password")
+# Do NOT add RH_USERNAME/RH_PASSWORD here — this file doesn't need Robinhood
+# credentials (it only tests prompt/parser logic), and Task 5 hit a real
+# regression where a "test_cla..." file setting these via setdefault() sorted
+# alphabetically before tests/test_config_rh.py and polluted its
+# settings.rh_username/rh_password-is-None assertions for the whole pytest run.
 
 
 def test_parse_accepts_hold_sell_trim_double_down():
@@ -964,8 +967,8 @@ os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
-os.environ.setdefault("RH_USERNAME", "test@example.com")
-os.environ.setdefault("RH_PASSWORD", "test_password")
+# Do NOT add RH_USERNAME/RH_PASSWORD here — see Task 6's note on the
+# test_config_rh.py alphabetical-collision regression found in Task 5.
 
 
 def test_extracts_per_ticker_thesis_from_last_rebalance():
@@ -1072,8 +1075,10 @@ os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
-os.environ.setdefault("RH_USERNAME", "test@example.com")
-os.environ.setdefault("RH_PASSWORD", "test_password")
+# Do NOT add RH_USERNAME/RH_PASSWORD here — rh_client is fully mocked in every
+# test below, and settings.rh_username/rh_password default to None (Optional),
+# so no real value is ever needed. See Task 6's note on the alphabetical-
+# collision regression with tests/test_config_rh.py found in Task 5.
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1631,8 +1636,8 @@ os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
-os.environ.setdefault("RH_USERNAME", "test@example.com")
-os.environ.setdefault("RH_PASSWORD", "test_password")
+# Do NOT add RH_USERNAME/RH_PASSWORD here — see Task 6's note on the
+# test_config_rh.py alphabetical-collision regression found in Task 5.
 
 import json
 from unittest.mock import patch
