@@ -7,12 +7,25 @@ DOUBLE_DOWN — never BUY. See docs/superpowers/specs/2026-07-09-kimi-inspection
 
 from __future__ import annotations
 
+import asyncio
 import json
+import json as _json
 import logging
 import os
+from datetime import datetime
+
+import pytz
+
+from app.claude_manager import (
+    _embed, _timestamp, _fetch_yf_data, _fetch_technical_data,
+    _CLR_ORANGE, _CLR_GREEN, _CLR_GRAY, _LOG_PATH,
+)
+from app.notifications import notify_claude_manager_embed, notify_claude_signal_feed
+from app.trading.robinhood_client import rh_client
 
 log = logging.getLogger(__name__)
 
+_CT = pytz.timezone("America/Chicago")
 _INSPECTION_LOG_PATH = os.getenv("CLAUDE_INSPECTION_LOG_PATH", "/data/claude_inspection_log.json")
 
 
@@ -41,16 +54,132 @@ def _load_recent_inspection_entries(limit: int = 5) -> list[dict]:
     return records[-limit:]
 
 
-async def run_weekly_inspection() -> None:
-    """Placeholder — replaced with the real implementation in Task 8/9.
+def _load_recent_rebalance_records(limit: int = 1) -> list:
+    try:
+        with open(_LOG_PATH) as f:
+            records = _json.load(f)
+    except (FileNotFoundError, _json.JSONDecodeError):
+        return []
+    return records[-limit:]
 
-    Exists now so app/scheduler.py (Task 4) can import this name at module
-    level; @patch("app.scheduler.run_weekly_inspection", ...) requires the
-    attribute to already exist (patch's default create=False), which in turn
-    requires app.claude_inspection.run_weekly_inspection to exist. Task 8
-    replaces this entire function body — not append a second definition.
-    """
-    raise NotImplementedError("run_weekly_inspection is implemented in Task 8/9")
+
+async def run_weekly_inspection() -> None:
+    """Weekly holdings-only review. Never opens a new position — see
+    docs/superpowers/specs/2026-07-09-kimi-inspection-design.md."""
+    log_entry: dict = {
+        "timestamp": datetime.now(_CT).isoformat(),
+        "status": "started",
+        "holdings_reviewed": [],
+        "trades_executed": [],
+        "trades_skipped": [],
+        "notes": {},
+    }
+
+    if not rh_client.available:
+        log.warning("RH session unavailable — skipping weekly inspection")
+        await notify_claude_manager_embed(_embed(
+            "⚠️ INSPECTION SKIPPED — Robinhood session is offline",
+            _CLR_ORANGE, footer=_timestamp(),
+        ))
+        return
+
+    try:
+        positions = await rh_client.get_all_positions_async()
+        if not positions:
+            log_entry["status"] = "no_holdings"
+            await notify_claude_manager_embed(_embed(
+                "🔍 KIMI INSPECTION — no current holdings to review",
+                _CLR_GRAY, footer=_timestamp(),
+            ))
+            return
+
+        loop = asyncio.get_running_loop()
+        yf_tasks = [loop.run_in_executor(None, _fetch_yf_data, pos["symbol"]) for pos in positions]
+        fv_tasks = [loop.run_in_executor(None, _fetch_technical_data, pos["symbol"]) for pos in positions]
+        yf_results, fv_results = await asyncio.gather(
+            asyncio.gather(*yf_tasks, return_exceptions=True),
+            asyncio.gather(*fv_tasks, return_exceptions=True),
+        )
+
+        enriched = []
+        for pos, yf_data, fv_data in zip(positions, yf_results, fv_results):
+            yf_data = yf_data if isinstance(yf_data, dict) else {"ticker": pos["symbol"]}
+            fv_data = fv_data if isinstance(fv_data, dict) else {}
+            enriched.append({
+                **yf_data, **fv_data,
+                "qty": pos["qty"],
+                "avg_entry_price": pos["avg_entry_price"],
+                "current_price": pos.get("current_price"),
+                "unrealized_pnl_pct": round(pos.get("unrealized_plpc", 0), 2),
+            })
+        log_entry["holdings_reviewed"] = [e["ticker"] for e in enriched if e.get("ticker")]
+
+        rebalance_records = _load_recent_rebalance_records(limit=1)
+        inspection_records = _load_recent_inspection_entries(limit=5)
+        thesis_map = _build_prior_thesis_map(rebalance_records, inspection_records)
+
+        holdings_json = _json.dumps(enriched, indent=2)
+        thesis_lines = "\n\n".join(
+            f"### {ticker}\n{thesis_map.get(ticker, 'No prior thesis on record — treat conservatively.')}"
+            for ticker in log_entry["holdings_reviewed"]
+        )
+        prompt = (
+            f"Weekly Inspection — review current holdings for anything material since the last check-in.\n\n"
+            f"Current Holdings:\n{holdings_json}\n\n"
+            f"Most Recent Thesis Per Ticker:\n{thesis_lines}\n\n"
+            f"For each holding, decide HOLD / SELL / TRIM / DOUBLE_DOWN per the rules in your system prompt. "
+            f"End with the required JSON block."
+        )
+
+        try:
+            response_text = await loop.run_in_executor(None, _call_claude_inspection_sync, prompt)
+        except Exception as exc:
+            log.error("Inspection Claude API call failed: %s", exc)
+            log_entry["status"] = "failed_claude_api"
+            _append_inspection_log(log_entry)
+            await notify_claude_manager_embed(_embed(
+                "❌ INSPECTION FAILED — Anthropic API error",
+                _CLR_ORANGE, description=str(exc), footer=_timestamp(),
+            ))
+            return
+
+        trade_block = _parse_inspection_trade_block(response_text)
+
+        if trade_block is None:
+            log_entry["status"] = "failed_parse_or_buy_rejected"
+            _append_inspection_log(log_entry)
+            await notify_claude_manager_embed(_embed(
+                "⚠️ INSPECTION — could not parse response (or a disallowed BUY was proposed)",
+                _CLR_ORANGE,
+                description="No trades executed this week — see logs for the raw response.",
+                footer=_timestamp(),
+            ))
+            return
+
+        if trade_block.get("no_changes") or not [
+            t for t in trade_block.get("trades", []) if t.get("action") != "HOLD"
+        ]:
+            log_entry["status"] = "no_changes"
+            _append_inspection_log(log_entry)
+            await notify_claude_manager_embed(_embed(
+                "🔍 KIMI INSPECTION — no material changes this week",
+                _CLR_GREEN,
+                description=f"Reviewed {len(log_entry['holdings_reviewed'])} holding(s); no action needed.",
+                footer=_timestamp(),
+            ))
+            return
+
+        # Task 9 continues here with trade execution for the non-HOLD trades.
+        log_entry["_pending_trades"] = [t for t in trade_block["trades"] if t.get("action") != "HOLD"]
+        log_entry["status"] = "trades_pending_execution"
+        _append_inspection_log(log_entry)
+
+    except Exception as exc:
+        log.error("Unhandled error in run_weekly_inspection: %s", exc)
+        await notify_claude_manager_embed(_embed(
+            "❌ INSPECTION FAILED — unexpected error",
+            _CLR_ORANGE, description=str(exc), footer=_timestamp(),
+        ))
 
 
 import httpx
