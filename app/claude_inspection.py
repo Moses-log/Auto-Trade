@@ -20,6 +20,8 @@ from app.claude_manager import (
     _embed, _timestamp, _fetch_yf_data, _fetch_technical_data,
     _CLR_ORANGE, _CLR_GREEN, _CLR_GRAY, _LOG_PATH,
 )
+from app.claude_manager import _trade_embed, _field, _CLR_RED
+from app.claude_portfolio import open_position, close_position, trim_position, get_record
 from app.notifications import notify_claude_manager_embed, notify_claude_signal_feed
 from app.trading.robinhood_client import rh_client
 
@@ -170,10 +172,165 @@ async def run_weekly_inspection() -> None:
             ))
             return
 
-        # Task 9 continues here with trade execution for the non-HOLD trades.
-        log_entry["_pending_trades"] = [t for t in trade_block["trades"] if t.get("action") != "HOLD"]
-        log_entry["status"] = "trades_pending_execution"
+        pending_trades = [t for t in trade_block["trades"] if t.get("action") != "HOLD"]
+        position_by_ticker = {p["symbol"]: p for p in positions}
+        portfolio_value = sum(p["qty"] * p.get("current_price", 0) for p in positions)
+
+        await notify_claude_manager_embed(_embed(
+            f"🔍 KIMI INSPECTION — {len(pending_trades)} action(s) this week",
+            _CLR_ORANGE, footer=_timestamp(),
+        ))
+
+        for trade in pending_trades:
+            ticker = trade["ticker"].upper()
+            action = trade["action"]
+            reasoning = trade.get("reasoning", "")
+            log_entry["notes"][ticker] = reasoning or f"{action} — see full analysis in Discord."
+            pos = position_by_ticker.get(ticker)
+
+            if pos is None:
+                log_entry["trades_skipped"].append({"action": action, "ticker": ticker, "reason": "no position"})
+                continue
+
+            if action == "SELL":
+                result = await rh_client.close_ticker_async(ticker)
+                if result.get("status") != "ok" or not result.get("qty"):
+                    reason = result.get("reason", result.get("note", "unknown"))
+                    log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": reason})
+                    await asyncio.sleep(0.8)
+                    await notify_claude_manager_embed(_embed(
+                        f"❌ KIMI INSPECTION SELL — {ticker} FAILED",
+                        _CLR_RED, description=reason, footer=_timestamp(),
+                    ))
+                    continue
+                qty = result["qty"]
+                fill = result.get("fill_price") or result.get("price_est")
+                _, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
+                wins, losses = get_record()
+                log_entry["trades_executed"].append({
+                    "action": "SELL", "ticker": ticker, "qty": qty,
+                    "fill_price": fill, "dollar_pnl": dollar_pnl, "reasoning": reasoning,
+                })
+                pnl_str = (f"+${dollar_pnl:,.2f} ({pct_pnl:+.2f}%)" if dollar_pnl is not None else "—")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_trade_embed(
+                    "SELL", ticker,
+                    [_field("Qty", f"{qty:g} shares @ ${fill or 0:,.2f}"),
+                     _field("Record", f"{wins}W — {losses}L"),
+                     _field("Reasoning", reasoning or "—", inline=False),
+                     _field("P&L", pnl_str, inline=False)],
+                    _timestamp(),
+                ))
+                await notify_claude_signal_feed(
+                    f"🔴 **KIMI INSPECTION SELL — {ticker}**\n{reasoning or 'See analysis.'}\n"
+                    f"@ ${fill or 0:,.2f}\n{_timestamp()}"
+                )
+
+            elif action == "TRIM":
+                target_wt = trade.get("target_weight_pct", 5)
+                target_value = portfolio_value * target_wt / 100
+                current_qty = pos["qty"]
+                current_price = pos.get("current_price", 0)
+                current_value = current_qty * current_price
+                if current_qty < 1.0 or target_value >= current_value * 0.95:
+                    reason = "fractional position" if current_qty < 1.0 else "already at target"
+                    log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": reason})
+                    continue
+                sell_qty = round((current_value - target_value) / current_price, 6) if current_price > 0 else 0.0
+                if sell_qty <= 0:
+                    log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "sell qty <= 0"})
+                    continue
+                result = await rh_client.sell_shares_async(ticker, sell_qty)
+                if result.get("status") != "ok":
+                    reason = result.get("reason", "unknown")
+                    log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": reason})
+                    await asyncio.sleep(0.8)
+                    await notify_claude_manager_embed(_embed(
+                        f"❌ KIMI INSPECTION TRIM — {ticker} FAILED",
+                        _CLR_RED, description=reason, footer=_timestamp(),
+                    ))
+                    continue
+                qty_sold = result.get("qty", sell_qty)
+                fill = result.get("fill_price") or result.get("price_est")
+                _, dollar_pnl, pct_pnl = trim_position(ticker, qty_sold, fill or 0.0)
+                wins, losses = get_record()
+                log_entry["trades_executed"].append({
+                    "action": "TRIM", "ticker": ticker, "qty": qty_sold,
+                    "fill_price": fill, "dollar_pnl": dollar_pnl,
+                    "target_weight_pct": target_wt, "reasoning": reasoning,
+                })
+                pnl_str = (f"+${dollar_pnl:,.2f} ({pct_pnl:+.2f}%)" if dollar_pnl is not None else "—")
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_trade_embed(
+                    "TRIM", ticker,
+                    [_field("Sold", f"{qty_sold:g} shares @ ${fill or 0:,.2f}"),
+                     _field("→ Target", f"{target_wt}%"),
+                     _field("Reasoning", reasoning or "—", inline=False),
+                     _field("P&L", pnl_str, inline=False)],
+                    _timestamp(),
+                ))
+                await notify_claude_signal_feed(
+                    f"✂️ **KIMI INSPECTION TRIM — {ticker}**\n{reasoning or 'See analysis.'}\n"
+                    f"→ target {target_wt}% · {_timestamp()}"
+                )
+
+            elif action == "DOUBLE_DOWN":
+                target_wt = trade.get("target_weight_pct", 10)
+                target_dollars = portfolio_value * target_wt / 100
+                current_val = pos["qty"] * pos.get("current_price", 0)
+                buying_power = await rh_client.get_buying_power_async() or 0.0
+                delta_dollars = max(0.0, target_dollars - current_val)
+                invest_dollars = min(delta_dollars, buying_power * 0.95)
+                if invest_dollars < 1:
+                    log_entry["trades_skipped"].append({
+                        "action": "DOUBLE_DOWN", "ticker": ticker,
+                        "reason": f"needed ${delta_dollars:,.0f}, only ${buying_power:,.0f} available",
+                    })
+                    continue
+                result = await rh_client.buy_dollars_async(ticker, invest_dollars)
+                if result.get("status") != "ok":
+                    reason = result.get("reason", "unknown")
+                    log_entry["trades_skipped"].append({"action": "DOUBLE_DOWN", "ticker": ticker, "reason": reason})
+                    await asyncio.sleep(0.8)
+                    await notify_claude_manager_embed(_embed(
+                        f"❌ KIMI INSPECTION DOUBLE_DOWN — {ticker} FAILED",
+                        _CLR_RED, description=reason, footer=_timestamp(),
+                    ))
+                    continue
+                qty = result.get("qty", 0)
+                fill = result.get("fill_price") or result.get("price_est", 0)
+                open_position(ticker, qty, fill or 0.0)
+                log_entry["trades_executed"].append({
+                    "action": "DOUBLE_DOWN", "ticker": ticker, "qty": qty,
+                    "fill_price": fill, "dollars_invested": invest_dollars,
+                    "target_weight_pct": target_wt, "reasoning": reasoning,
+                })
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_trade_embed(
+                    "DOUBLE_DOWN", ticker,
+                    [_field("Qty", f"{qty:g} shares @ ${fill or 0:,.2f}"),
+                     _field("Target Weight", f"{target_wt}%"),
+                     _field("Reasoning", reasoning or "—", inline=False)],
+                    _timestamp(),
+                ))
+                await notify_claude_signal_feed(
+                    f"🔥 **KIMI INSPECTION DOUBLE_DOWN — {ticker}**\n{reasoning or 'See analysis.'}\n"
+                    f"Target: {target_wt}% · {_timestamp()}"
+                )
+
+        log_entry["status"] = "completed"
         _append_inspection_log(log_entry)
+
+        executed = len(log_entry["trades_executed"])
+        skipped = len(log_entry["trades_skipped"])
+        await asyncio.sleep(0.8)
+        await notify_claude_manager_embed(_embed(
+            "✅ KIMI INSPECTION COMPLETE",
+            _CLR_GREEN,
+            description=f"{executed} trade(s) executed"
+                        + (f", {skipped} skipped" if skipped else ""),
+            footer=_timestamp(),
+        ))
 
     except Exception as exc:
         log.error("Unhandled error in run_weekly_inspection: %s", exc)

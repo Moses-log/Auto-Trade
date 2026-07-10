@@ -78,3 +78,76 @@ async def test_claude_api_failure_notifies_and_does_not_raise(
     await run_weekly_inspection()  # must not raise
 
     assert mock_notify.await_count >= 1
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection.get_record", return_value=(5, 2))
+@patch("app.claude_inspection.close_position", return_value=(10.0, 500.0, 12.5))
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NOW"})
+@patch("app.claude_inspection.rh_client")
+async def test_sell_action_executes_and_notifies_both_channels(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_close_position, mock_get_record, mock_notify_private, mock_notify_public, mock_log,
+):
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[{"symbol": "NOW", "qty": 5.0, "avg_entry_price": 900.0,
+                       "current_price": 950.0, "unrealized_pl": 250.0, "unrealized_plpc": 5.5}]
+    )
+    mock_rh.close_ticker_async = AsyncMock(
+        return_value={"status": "ok", "qty": 5.0, "fill_price": 960.0, "queued": False}
+    )
+    mock_call.return_value = "thesis broken ```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [{"action": "SELL", "ticker": "NOW", "reasoning": "guidance cut"}],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    mock_rh.close_ticker_async.assert_awaited_once_with("NOW")
+    mock_close_position.assert_called_once()
+    assert mock_notify_private.await_count >= 1   # Private Server gets full detail
+    assert mock_notify_public.await_count >= 1    # KI Server gets the actioned-holding summary
+    logged_entry = mock_log.call_args[0][0]
+    assert logged_entry["status"] == "completed"
+    assert logged_entry["trades_executed"][0]["action"] == "SELL"
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_double_down_never_calls_open_position_for_a_buy_action(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    """Belt-and-suspenders: even if a BUY somehow reached this point, the
+    execution loop below only dispatches SELL/TRIM/DOUBLE_DOWN branches —
+    there is no BUY branch to accidentally execute."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[{"symbol": "NVDA", "qty": 10.0, "avg_entry_price": 400.0,
+                       "current_price": 450.0, "unrealized_pl": 500.0, "unrealized_plpc": 12.5}]
+    )
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {"no_changes": True, "trades": []}
+
+    from app.claude_inspection import run_weekly_inspection
+    import inspect
+    source = inspect.getsource(run_weekly_inspection)
+    assert '"BUY"' not in source
