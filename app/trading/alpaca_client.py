@@ -332,6 +332,30 @@ def was_market_open_today() -> bool:
         return True
 
 
+def is_first_trading_day_of(period_start: date) -> bool:
+    """Return True if no trading day occurred between period_start and yesterday (inclusive).
+
+    Used when a cron job fires on a fixed calendar day/window that might
+    start on a holiday or weekend: cover the window with a few days of cron
+    (e.g. day="1-3"), then call this inside the job to skip once an earlier
+    day in the period already ran. Defaults to True on error — same
+    fail-open behavior as was_market_open_today().
+    """
+    today = date.today()
+    if period_start >= today:
+        return True
+    try:
+        req = GetCalendarRequest(start=period_start, end=today - timedelta(days=1))
+        prior = get_client().get_calendar(req)
+        return not prior
+    except Exception as exc:
+        log.warning(
+            "Could not verify first trading day for period starting %s: %s",
+            period_start, exc,
+        )
+        return True
+
+
 def get_next_trading_day() -> date:
     """Return the next trading day using Alpaca's market calendar, with a weekday fallback."""
     today = date.today()
