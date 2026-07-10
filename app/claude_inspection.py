@@ -87,6 +87,7 @@ async def run_weekly_inspection() -> None:
         positions = await rh_client.get_all_positions_async()
         if not positions:
             log_entry["status"] = "no_holdings"
+            _append_inspection_log(log_entry)
             await notify_claude_manager_embed(_embed(
                 "🔍 KIMI INSPECTION — no current holdings to review",
                 _CLR_GRAY, footer=_timestamp(),
@@ -176,6 +177,8 @@ async def run_weekly_inspection() -> None:
 
     except Exception as exc:
         log.error("Unhandled error in run_weekly_inspection: %s", exc)
+        log_entry["status"] = "failed_unexpected_error"
+        _append_inspection_log(log_entry)
         await notify_claude_manager_embed(_embed(
             "❌ INSPECTION FAILED — unexpected error",
             _CLR_ORANGE, description=str(exc), footer=_timestamp(),
