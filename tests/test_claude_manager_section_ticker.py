@@ -3,8 +3,6 @@ os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
-os.environ.setdefault("RH_USERNAME", "test@example.com")
-os.environ.setdefault("RH_PASSWORD", "test_password")
 
 
 def test_section_ticker_extracts_symbol_with_em_dash():
