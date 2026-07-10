@@ -79,6 +79,8 @@ async def run_weekly_inspection() -> None:
 
     if not rh_client.available:
         log.warning("RH session unavailable — skipping weekly inspection")
+        log_entry["status"] = "skipped_rh_unavailable"
+        _append_inspection_log(log_entry)
         await notify_claude_manager_embed(_embed(
             "⚠️ INSPECTION SKIPPED — Robinhood session is offline",
             _CLR_ORANGE, footer=_timestamp(),
@@ -206,6 +208,9 @@ async def run_weekly_inspection() -> None:
                 qty = result["qty"]
                 fill = result.get("fill_price") or result.get("price_est")
                 _, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
+                if dollar_pnl is not None:
+                    from app.rh_trade_record import record_rh_trade
+                    await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
                 wins, losses = get_record()
                 log_entry["trades_executed"].append({
                     "action": "SELL", "ticker": ticker, "qty": qty,
@@ -253,6 +258,9 @@ async def run_weekly_inspection() -> None:
                 qty_sold = result.get("qty", sell_qty)
                 fill = result.get("fill_price") or result.get("price_est")
                 _, dollar_pnl, pct_pnl = trim_position(ticker, qty_sold, fill or 0.0)
+                if dollar_pnl is not None:
+                    from app.rh_trade_record import record_rh_trade
+                    await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
                 wins, losses = get_record()
                 log_entry["trades_executed"].append({
                     "action": "TRIM", "ticker": ticker, "qty": qty_sold,
