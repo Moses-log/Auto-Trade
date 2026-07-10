@@ -19,7 +19,8 @@ from app.rh_equity_history import get_snapshots
 from app.rh_keep_alive_state import get_next_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 from app.pending_withdrawals import load_pending_withdrawals
-from app.trading.alpaca_client import was_market_open_today, get_client
+from app.trading.alpaca_client import was_market_open_today, get_client, is_first_trading_day_of
+from app.claude_manager import run_monthly_rebalance
 
 log = logging.getLogger(__name__)
 
@@ -151,7 +152,15 @@ async def _quarterly_tax_report() -> None:
 
 
 async def _claude_monthly_rebalance() -> None:
-    from app.claude_manager import run_monthly_rebalance
+    """Fires on the first trading day of the month (cron covers days 1-3 to
+    handle cases where the 1st is a holiday or weekend — same pattern as
+    _quarterly_tax_report)."""
+    if not was_market_open_today():
+        log.info("_claude_monthly_rebalance: market holiday — skipping")
+        return
+    if not is_first_trading_day_of(_date.today().replace(day=1)):
+        log.info("_claude_monthly_rebalance: not first trading day of month — skipping")
+        return
     await run_monthly_rebalance()
 
 
@@ -188,7 +197,7 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _claude_monthly_rebalance,
-        CronTrigger(day=1, hour=9, minute=35, timezone=ET),
+        CronTrigger(day="1-3", hour=9, minute=35, timezone=ET),
         id="claude_monthly_rebalance",
         replace_existing=True,
     )
