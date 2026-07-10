@@ -577,6 +577,27 @@ def _load_recent_history() -> tuple[list, str]:
             f"--- End Prior Research ---"
         )
 
+    # Weave in any weekly Inspection activity since the last rebalance, so the
+    # monthly rebalance can build on what Inspection already decided instead
+    # of re-deriving a thesis Inspection already updated.
+    from app.claude_inspection import _load_recent_inspection_entries
+    last_rebalance_ts = recent[-1].get("timestamp", "") if recent else ""
+    inspection_entries = [
+        e for e in _load_recent_inspection_entries(limit=10)
+        if e.get("timestamp", "") > last_rebalance_ts
+        and any(t for t in e.get("trades_executed", []))
+    ]
+    if inspection_entries:
+        lines.append("\n--- Weekly Inspection Activity Since Last Rebalance ---")
+        for entry in inspection_entries:
+            ts = entry.get("timestamp", "unknown")[:10]
+            for trade in entry.get("trades_executed", []):
+                ticker = trade.get("ticker", "?")
+                action = trade.get("action", "?")
+                note = entry.get("notes", {}).get(ticker, "")
+                lines.append(f"  {ts}: {action} {ticker} — {note}")
+        lines.append("--- End Inspection Activity ---")
+
     return records, "\n".join(lines)
 
 
