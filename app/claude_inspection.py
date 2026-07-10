@@ -55,7 +55,7 @@ async def run_weekly_inspection() -> None:
 
 import httpx
 
-from app.claude_manager import _parse_trade_block
+from app.claude_manager import _parse_trade_block, _DIVIDER, _section_ticker
 from app.config import settings
 
 _INSPECTION_WEB_SEARCH_TOOL: dict = {
@@ -190,3 +190,27 @@ def _parse_inspection_trade_block(text: str) -> "dict | None":
         log.error("Inspection proposed a BUY action — rejecting entire trade block: %s", trades)
         return None
     return block
+
+
+def _build_prior_thesis_map(rebalance_records: list, inspection_records: list) -> dict:
+    """Build {ticker: most_recent_thesis_text}, sourced from the last rebalance's
+    per-ticker research sections, then overlaid with any more recent Inspection
+    notes (an Inspection that ran after the last rebalance has a fresher view)."""
+    thesis_map: dict = {}
+
+    if rebalance_records:
+        last = rebalance_records[-1]
+        analysis_body = last.get("analysis_body") or ""
+        for section in analysis_body.split(_DIVIDER):
+            section = section.strip()
+            if not section:
+                continue
+            ticker = _section_ticker(section)
+            if ticker:
+                thesis_map[ticker] = section
+
+    for entry in inspection_records:
+        for ticker, note in (entry.get("notes") or {}).items():
+            thesis_map[ticker.upper()] = note
+
+    return thesis_map
