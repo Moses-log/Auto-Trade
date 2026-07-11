@@ -6,7 +6,9 @@ Call setup_jobs() once at startup to register the cron triggers.
 """
 
 import asyncio
+import json
 import logging
+import os
 from datetime import datetime, timedelta, date as _date
 
 import pytz
@@ -20,12 +22,57 @@ from app.rh_keep_alive_state import get_next_run_ts, record_run
 from app.rh_pnl import record_rh_equity_snapshot, send_rh_report
 from app.pending_withdrawals import load_pending_withdrawals
 from app.trading.alpaca_client import was_market_open_today, get_client, is_first_trading_day_of
-from app.claude_manager import run_monthly_rebalance
-from app.claude_inspection import run_weekly_inspection
 
 log = logging.getLogger(__name__)
 
 ET = pytz.timezone("America/New_York")
+
+# Imported at module level (not lazily inside the job functions) so tests can
+# @patch these names directly on app.scheduler — but wrapped in try/except so
+# a startup-time import failure in claude_manager/claude_inspection (e.g. a
+# missing dependency) disables only these two cron jobs instead of crashing
+# the whole app, since main.py imports this module unconditionally at boot.
+try:
+    from app.claude_manager import run_monthly_rebalance
+except Exception as exc:
+    log.error("app.claude_manager failed to import at startup — monthly rebalance disabled: %s", exc)
+    run_monthly_rebalance = None
+
+try:
+    from app.claude_inspection import run_weekly_inspection
+except Exception as exc:
+    log.error("app.claude_inspection failed to import at startup — weekly inspection disabled: %s", exc)
+    run_weekly_inspection = None
+
+_REBALANCE_LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
+_COMPLETED_REBALANCE_STATUSES = {"completed", "no_changes", "no_trades"}
+
+
+def _rebalance_already_completed_this_month() -> bool:
+    """True if claude_rebalance_log.json's last entry already finalized a
+    decision for the current month.
+
+    Belt-and-suspenders guard: is_first_trading_day_of() fails open (returns
+    True) on a transient Alpaca API error, which could let day 2-4 of the
+    cron window re-fire a full duplicate real-money run after day 1 already
+    completed. Pre-decision failures (fetch/API/parse errors) are excluded
+    from _COMPLETED_REBALANCE_STATUSES so the window can still retry them.
+    """
+    try:
+        with open(_REBALANCE_LOG_PATH) as f:
+            records = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False
+    if not records:
+        return False
+    last = records[-1]
+    if last.get("status") not in _COMPLETED_REBALANCE_STATUSES:
+        return False
+    try:
+        entry_date = datetime.fromisoformat(last.get("timestamp", "")).date()
+    except ValueError:
+        return False
+    return entry_date >= _date.today().replace(day=1)
 
 
 # Singleton — imported and started in main.py lifespan.
@@ -153,14 +200,22 @@ async def _quarterly_tax_report() -> None:
 
 
 async def _claude_monthly_rebalance() -> None:
-    """Fires on the first trading day of the month (cron covers days 1-3 to
+    """Fires on the first trading day of the month (cron covers days 1-4 to
     handle cases where the 1st is a holiday or weekend — same pattern as
-    _quarterly_tax_report)."""
+    _quarterly_tax_report, widened one extra day to cover a Friday New
+    Year's Day, where Fri holiday + Sat + Sun pushes the first trading day
+    to the 4th, e.g. Jan 2027)."""
     if not was_market_open_today():
         log.info("_claude_monthly_rebalance: market holiday — skipping")
         return
     if not is_first_trading_day_of(_date.today().replace(day=1)):
         log.info("_claude_monthly_rebalance: not first trading day of month — skipping")
+        return
+    if _rebalance_already_completed_this_month():
+        log.warning("_claude_monthly_rebalance: log shows this month already completed — skipping duplicate run")
+        return
+    if run_monthly_rebalance is None:
+        log.error("_claude_monthly_rebalance: claude_manager failed to import at startup — skipping")
         return
     await run_monthly_rebalance()
 
@@ -179,6 +234,9 @@ async def _weekly_inspection() -> None:
         return
     if is_first_trading_day_of(today.replace(day=1)):
         log.info("_weekly_inspection: coincides with monthly rebalance day — skipping")
+        return
+    if run_weekly_inspection is None:
+        log.error("_weekly_inspection: claude_inspection failed to import at startup — skipping")
         return
     await run_weekly_inspection()
 
@@ -216,7 +274,7 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _claude_monthly_rebalance,
-        CronTrigger(day="1-3", hour=9, minute=35, timezone=ET),
+        CronTrigger(day="1-4", hour=9, minute=35, timezone=ET),
         id="claude_monthly_rebalance",
         replace_existing=True,
     )
@@ -236,7 +294,7 @@ def setup_jobs() -> None:
         "Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), "
         "robinhood_keep_alive (daily check, runs every ~3 days), "
         "quarterly_tax_report (Jan/Apr/Jul/Oct 1), "
-        "claude_monthly_rebalance (1st of each month 9:35 AM ET), "
+        "claude_monthly_rebalance (first trading day of each month, 9:35 AM ET), "
         "weekly_inspection (first trading day of week, 9:35 AM ET, skipped on rebalance weeks), "
         "nightly_backup (daily midnight ET)"
     )
