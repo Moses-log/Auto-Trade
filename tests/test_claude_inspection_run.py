@@ -276,6 +276,52 @@ async def test_double_down_skips_on_insufficient_buying_power(
 @patch("app.claude_inspection._fetch_technical_data", return_value={})
 @patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
 @patch("app.claude_inspection.rh_client")
+async def test_double_down_skip_reason_distinguishes_already_at_target_from_low_budget(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    """Plenty of buying power but the position is already at/above its
+    target weight — the skip reason must say so, not claim a budget shortfall."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[
+            {"symbol": "NVDA", "qty": 20.0, "avg_entry_price": 400.0,
+             "current_price": 450.0, "unrealized_pl": 1000.0, "unrealized_plpc": 12.5},
+            {"symbol": "MSFT", "qty": 2.0, "avg_entry_price": 280.0,
+             "current_price": 300.0, "unrealized_pl": 40.0, "unrealized_plpc": 7.1},
+        ]
+    )
+    mock_rh.get_buying_power_async = AsyncMock(return_value=50000.0)
+    mock_call.return_value = "already large position ```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [{"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 10,
+                    "reasoning": "already large position"}],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    mock_rh.buy_dollars_async.assert_not_called()
+    logged_entry = mock_log.call_args[0][0]
+    skipped_reason = next(
+        t["reason"] for t in logged_entry["trades_skipped"]
+        if t["action"] == "DOUBLE_DOWN" and t["ticker"] == "NVDA"
+    )
+    assert "already at target" in skipped_reason
+    assert "only $" not in skipped_reason
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
 async def test_double_down_never_calls_open_position_for_a_buy_action(
     mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
     mock_notify_private, mock_notify_public, mock_log,
@@ -494,3 +540,75 @@ async def test_queued_sell_defers_record_and_schedules_pending_fill(
     assert save_kwargs["source"] == "manager"
     logged_entry = mock_log.call_args[0][0]
     assert logged_entry["trades_executed"][0]["queued"] is True
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_trim_explicit_null_target_weight_pct_is_skipped_not_crashed(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    """An explicit JSON null (key present, value None) must be treated the
+    same as a missing key — not passed through into float arithmetic."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[{"symbol": "NVDA", "qty": 10.0, "avg_entry_price": 400.0,
+                       "current_price": 450.0, "unrealized_pl": 500.0, "unrealized_plpc": 12.5}]
+    )
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [{"action": "TRIM", "ticker": "NVDA", "target_weight_pct": None, "reasoning": "trim a bit"}],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()  # must not raise TypeError
+
+    mock_rh.sell_shares_async.assert_not_called()
+    logged_entry = mock_log.call_args[0][0]
+    assert logged_entry["status"] == "completed"
+    assert any(t["reason"] == "missing target_weight_pct" for t in logged_entry["trades_skipped"])
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "SPY"})
+@patch("app.claude_inspection.rh_client")
+async def test_spy_excluded_trade_reasoning_still_captured_in_notes(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    """A SPY proposal is never executed, but its reasoning should still be
+    recorded so next week's thesis map isn't silently missing continuity."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[{"symbol": "SPY", "qty": 10.0, "avg_entry_price": 400.0,
+                       "current_price": 450.0, "unrealized_pl": 500.0, "unrealized_plpc": 12.5}]
+    )
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [{"action": "SELL", "ticker": "SPY", "reasoning": "should never execute but should be noted"}],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    logged_entry = mock_log.call_args[0][0]
+    assert logged_entry["notes"]["SPY"] == "should never execute but should be noted"

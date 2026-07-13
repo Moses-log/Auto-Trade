@@ -77,3 +77,57 @@ async def test_inspection_skips_on_holiday(mock_date, mock_was_open, mock_inspec
     await _weekly_inspection()
 
     mock_inspection.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch("app.scheduler.run_weekly_inspection", new_callable=AsyncMock)
+@patch("app.scheduler._inspection_already_completed_this_week", return_value=True)
+@patch("app.scheduler.is_first_trading_day_of")
+@patch("app.scheduler.was_market_open_today", return_value=True)
+@patch("app.scheduler._date")
+async def test_inspection_skips_when_log_shows_already_completed(
+    mock_date, mock_was_open, mock_is_first, mock_already_completed, mock_inspection,
+):
+    """is_first_trading_day_of() fails open (returns True) on a transient
+    Alpaca API error — if Monday already completed for real, the log-based
+    idempotency guard must still block a Tuesday/Wednesday duplicate run."""
+    from app.scheduler import _weekly_inspection
+    tuesday = date(2026, 7, 7)
+    mock_date.today.return_value = tuesday
+    mock_is_first.side_effect = [True, False]
+
+    await _weekly_inspection()
+
+    mock_inspection.assert_not_awaited()
+
+
+def test_inspection_already_completed_detects_finalized_status(tmp_path, monkeypatch):
+    import json
+    from datetime import date as real_date
+
+    today = real_date.today()
+    week_start = today - timedelta(days=today.weekday())
+    log_path = tmp_path / "claude_inspection_log.json"
+    log_path.write_text(json.dumps([
+        {"timestamp": f"{week_start.isoformat()}T09:35:00", "status": "completed"},
+    ]))
+    monkeypatch.setattr("app.scheduler._INSPECTION_LOG_PATH", str(log_path))
+
+    from app.scheduler import _inspection_already_completed_this_week
+    assert _inspection_already_completed_this_week() is True
+
+
+def test_inspection_already_completed_ignores_rh_unavailable_skip(tmp_path, monkeypatch):
+    import json
+    from datetime import date as real_date
+
+    today = real_date.today()
+    week_start = today - timedelta(days=today.weekday())
+    log_path = tmp_path / "claude_inspection_log.json"
+    log_path.write_text(json.dumps([
+        {"timestamp": f"{week_start.isoformat()}T09:35:00", "status": "skipped_rh_unavailable"},
+    ]))
+    monkeypatch.setattr("app.scheduler._INSPECTION_LOG_PATH", str(log_path))
+
+    from app.scheduler import _inspection_already_completed_this_week
+    assert _inspection_already_completed_this_week() is False

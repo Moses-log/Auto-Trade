@@ -176,6 +176,19 @@ async def run_weekly_inspection() -> None:
             ))
             return
 
+        # Capture reasoning for every proposed non-HOLD trade up front, before any
+        # filtering below — so a SPY-excluded or unrecognized-action proposal still
+        # leaves its reasoning on record for next week's thesis continuity, same as
+        # a trade that actually executes.
+        for t in trade_block["trades"]:
+            if t.get("action") == "HOLD":
+                continue
+            _ticker = t.get("ticker", "").upper()
+            if not _ticker:
+                continue
+            _reasoning = t.get("reasoning", "")
+            log_entry["notes"][_ticker] = _reasoning or f"{t.get('action', '?')} — see full analysis in Discord."
+
         _EXCLUDED = {"SPY"}  # managed by Kimi — Inspection must never touch this
         pending_trades = [
             t for t in trade_block["trades"]
@@ -201,12 +214,16 @@ async def run_weekly_inspection() -> None:
             _CLR_ORANGE, footer=_timestamp(),
         ))
 
+        _next_trading_day = None  # cached across calls within this run — same value every time
+
         def _schedule_pending_inspection_sell(order_id: str, ticker: str, entry_px: float, qty_sold: float) -> None:
+            nonlocal _next_trading_day
             from app.pending_orders import save_pending_order
             from app.scheduler import scheduler
-            from app.trading.alpaca_client import get_next_trading_day
-            next_day = get_next_trading_day()
-            run_dt = _ET_TZ.localize(datetime.combine(next_day, _dtime(9, 31)))
+            if _next_trading_day is None:
+                from app.trading.alpaca_client import get_next_trading_day
+                _next_trading_day = get_next_trading_day()
+            run_dt = _ET_TZ.localize(datetime.combine(_next_trading_day, _dtime(9, 31)))
             scheduler.add_job(
                 notify_claude_pending_sell_fill, "date", run_date=run_dt,
                 args=[order_id, ticker, entry_px, qty_sold, "manager"],
@@ -228,7 +245,7 @@ async def run_weekly_inspection() -> None:
             _pos_val = _pos["qty"] * _pos.get("current_price", 0)
             if _t["action"] == "SELL":
                 expected_sell_proceeds += _pos_val
-            elif _t["action"] == "TRIM" and "target_weight_pct" in _t:
+            elif _t["action"] == "TRIM" and _t.get("target_weight_pct") is not None:
                 _target_val = portfolio_value * _t["target_weight_pct"] / 100
                 expected_sell_proceeds += max(0.0, _pos_val - _target_val)
         available_budget = buying_power + expected_sell_proceeds
@@ -322,7 +339,7 @@ async def run_weekly_inspection() -> None:
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "no position"})
                 continue
 
-            if "target_weight_pct" not in trade:
+            if trade.get("target_weight_pct") is None:
                 log.error("Inspection TRIM for %s missing required target_weight_pct — skipping", ticker)
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "missing target_weight_pct"})
                 continue
@@ -391,6 +408,7 @@ async def run_weekly_inspection() -> None:
                     "TRIM", ticker,
                     [_field("Sold", f"{qty_sold:g} shares @ ${fill or 0:,.2f}"),
                      _field("→ Target", f"{target_wt}%"),
+                     _field("Record", f"{wins}W — {losses}L"),
                      _field("Reasoning", reasoning or "—", inline=False),
                      _field("P&L", pnl_str, inline=False)],
                     _timestamp(),
@@ -410,7 +428,7 @@ async def run_weekly_inspection() -> None:
                 log_entry["trades_skipped"].append({"action": "DOUBLE_DOWN", "ticker": ticker, "reason": "no position"})
                 continue
 
-            if "target_weight_pct" not in trade:
+            if trade.get("target_weight_pct") is None:
                 log.error("Inspection DOUBLE_DOWN for %s missing required target_weight_pct — skipping", ticker)
                 log_entry["trades_skipped"].append({"action": "DOUBLE_DOWN", "ticker": ticker, "reason": "missing target_weight_pct"})
                 continue
@@ -421,10 +439,11 @@ async def run_weekly_inspection() -> None:
             invest_dollars = min(delta_dollars, available_budget * 0.95)
 
             if invest_dollars < 1:
-                log_entry["trades_skipped"].append({
-                    "action": "DOUBLE_DOWN", "ticker": ticker,
-                    "reason": f"needed ${delta_dollars:,.0f}, only ${available_budget:,.0f} available",
-                })
+                if current_val >= target_dollars * 0.95:
+                    reason = f"already at target ({current_val / portfolio_value * 100:.1f}% vs {target_wt}% target)" if portfolio_value else "already at target"
+                else:
+                    reason = f"needed ${delta_dollars:,.0f} more, only ${available_budget:,.0f} available"
+                log_entry["trades_skipped"].append({"action": "DOUBLE_DOWN", "ticker": ticker, "reason": reason})
                 continue
 
             result = await rh_client.buy_dollars_async(ticker, invest_dollars)
@@ -458,6 +477,7 @@ async def run_weekly_inspection() -> None:
                     [_field("Status", "⏳ Queued for market open"),
                      _field("Est. Qty", f"{qty:g} shares ≈ ${est:,.2f}"),
                      _field("Target Weight", f"{target_wt}%"),
+                     _field("Investing", f"${invest_dollars:,.2f}"),
                      _field("Reasoning", reasoning or "—", inline=False)],
                     _timestamp(),
                 ))
@@ -466,6 +486,7 @@ async def run_weekly_inspection() -> None:
                     "DOUBLE_DOWN", ticker,
                     [_field("Qty", f"{qty:g} shares @ ${fill or 0:,.2f}"),
                      _field("Target Weight", f"{target_wt}%"),
+                     _field("Invested", f"${invest_dollars:,.2f}"),
                      _field("Reasoning", reasoning or "—", inline=False)],
                     _timestamp(),
                 ))

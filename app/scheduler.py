@@ -44,35 +44,60 @@ except Exception as exc:
     log.error("app.claude_inspection failed to import at startup — weekly inspection disabled: %s", exc)
     run_weekly_inspection = None
 
-_REBALANCE_LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
+# Reuse claude_manager's canonical log-path constant when it imported successfully
+# above (avoids a second, driftable copy of the env var name/default), falling back
+# to the same literal if claude_manager failed to import — this constant alone
+# carries no meaningful extra startup blast radius since it's a plain os.getenv().
+try:
+    from app.claude_manager import _LOG_PATH as _REBALANCE_LOG_PATH
+except Exception:
+    _REBALANCE_LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
+
+_INSPECTION_LOG_PATH = os.getenv("CLAUDE_INSPECTION_LOG_PATH", "/data/claude_inspection_log.json")
 _COMPLETED_REBALANCE_STATUSES = {"completed", "no_changes", "no_trades"}
+_COMPLETED_INSPECTION_STATUSES = {"completed", "no_changes", "no_holdings"}
 
 
-def _rebalance_already_completed_this_month() -> bool:
-    """True if claude_rebalance_log.json's last entry already finalized a
-    decision for the current month.
+def _already_decided_this_period(log_path: str, period_start, completed_statuses: set) -> bool:
+    """True if the log's most recent entry already finalized a decision for
+    a period starting on/after period_start.
 
     Belt-and-suspenders guard: is_first_trading_day_of() fails open (returns
-    True) on a transient Alpaca API error, which could let day 2-4 of the
-    cron window re-fire a full duplicate real-money run after day 1 already
-    completed. Pre-decision failures (fetch/API/parse errors) are excluded
-    from _COMPLETED_REBALANCE_STATUSES so the window can still retry them.
+    True) on a transient Alpaca API error, which could let a later day in a
+    cron window re-fire a full duplicate real-money run after an earlier day
+    already completed. Pre-decision failures (fetch/API/parse errors, RH
+    session down) are excluded from completed_statuses so the window can
+    still retry them.
     """
     try:
-        with open(_REBALANCE_LOG_PATH) as f:
+        with open(log_path) as f:
             records = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
+    except (FileNotFoundError, json.JSONDecodeError, OSError) as exc:
+        log.warning("Could not read %s for idempotency check — treating as not yet run: %s", log_path, exc)
         return False
     if not records:
         return False
     last = records[-1]
-    if last.get("status") not in _COMPLETED_REBALANCE_STATUSES:
+    if last.get("status") not in completed_statuses:
         return False
     try:
         entry_date = datetime.fromisoformat(last.get("timestamp", "")).date()
-    except ValueError:
+    except ValueError as exc:
+        log.warning("Could not parse timestamp in %s for idempotency check: %s", log_path, exc)
         return False
-    return entry_date >= _date.today().replace(day=1)
+    return entry_date >= period_start
+
+
+def _rebalance_already_completed_this_month() -> bool:
+    return _already_decided_this_period(
+        _REBALANCE_LOG_PATH, _date.today().replace(day=1), _COMPLETED_REBALANCE_STATUSES,
+    )
+
+
+def _inspection_already_completed_this_week() -> bool:
+    today = _date.today()
+    week_start = today - timedelta(days=today.weekday())
+    return _already_decided_this_period(_INSPECTION_LOG_PATH, week_start, _COMPLETED_INSPECTION_STATUSES)
 
 
 # Singleton — imported and started in main.py lifespan.
@@ -234,6 +259,9 @@ async def _weekly_inspection() -> None:
         return
     if is_first_trading_day_of(today.replace(day=1)):
         log.info("_weekly_inspection: coincides with monthly rebalance day — skipping")
+        return
+    if _inspection_already_completed_this_week():
+        log.warning("_weekly_inspection: log shows this week already completed — skipping duplicate run")
         return
     if run_weekly_inspection is None:
         log.error("_weekly_inspection: claude_inspection failed to import at startup — skipping")
