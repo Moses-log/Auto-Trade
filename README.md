@@ -786,7 +786,7 @@ Same three non-BUY actions as Kimi Portfolio Manager, evaluated weekly against c
 |---|---|---|
 | `SELL` | — | Closes the entire position |
 | `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. **Blocked if position qty < 1 share.** |
-| `DOUBLE_DOWN` | `target_weight_pct` | Adds to the position — signals elevated conviction, same delta-buy sizing as the monthly rebalance, capped at 95% of buying power |
+| `DOUBLE_DOWN` | `target_weight_pct` | Adds to the position — signals elevated conviction, same delta-buy sizing as the monthly rebalance, funded from buying power plus this run's own SELL/TRIM proceeds, capped at 95% of that combined budget |
 | `HOLD` | — | No trade executed — the default unless a specific trigger is documented in the reasoning |
 
 `BUY` is never a valid action here — a response containing one anywhere has its entire trade block rejected before execution.
@@ -978,6 +978,8 @@ Same embed-sequence pattern as Kimi Manager, scaled down. Fires weekly; the comm
 ┃        Qty                Target Weight
 ┃        0.834 shares @     22%
 ┃        $601.00
+┃        Invested
+┃        $501.23
 ┃        Reasoning
 ┃        Ad business reaccelerated on Q2 print — raising conviction.
 ┃                                    🕐 9:38 AM CT — July 6, 2026
@@ -1047,6 +1049,7 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `idempotency.json` | Every webhook hit | Duplicate alert suppression (5-min TTL) |
 | `claude_portfolio.json` | `/claude-signal`, Kimi Manager | Kimi positions + W-L record |
 | `claude_rebalance_log.json` | Monthly rebalance | Full audit log — macro context, analysis, positions before, trades executed/skipped, SPY price (capped at 36 entries) |
+| `claude_inspection_log.json` | Weekly Inspection | Audit log for weekly Inspection runs — holdings reviewed, trades executed/skipped, reasoning notes (capped at 36 entries) |
 | `rh_positions_cache.json` | Every successful RH fetch | Last-known positions for pie chart fallback when API is down |
 | `early_access.json` | `/whop-webhook` (Whop events) | Kimi Invest spot counter — starts at 15, decrements on new Whop member, increments on cancellation |
 | `rh_equity_history.json` | Daily 4 PM ET scheduler | RH portfolio equity + SPY price snapshots — used for all RH P&L period comparisons (replaces retired RH historicals API) |
@@ -1255,13 +1258,30 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Recent Changes
 
+### Kimi Inspection — money-safety bug-fix pass (July 11, 2026)
+
+A focused code review of the newly-shipped Inspection feature (above) surfaced 15 correctness/hazard findings, all fixed and covered by new tests:
+
+| Change | Details |
+|---|---|
+| **Cash-aware position sizing** | Inspection's `portfolio_value` previously counted only stock holdings, excluding buying power — every TRIM/DOUBLE_DOWN target-weight calculation was sized against an understated portfolio. Now includes cash, matching the monthly rebalance. |
+| **Phased execution + real funding** | Trades now execute SELL → TRIM → DOUBLE_DOWN in that order (was a single unordered loop), so sale proceeds from earlier in the same run can fund a same-run DOUBLE_DOWN instead of relying on a single live buying-power snapshot fetched mid-loop. |
+| **SPY exclusion enforced in code** | Added the same `_EXCLUDED = {"SPY"}` guard the monthly rebalance already has — SPY is Kimi-managed and must never be touched by Claude-driven trades, now enforced structurally rather than by prompt instruction alone. |
+| **Required-field validation** | TRIM/DOUBLE_DOWN now reject a proposal missing (or explicitly `null`) `target_weight_pct` instead of silently defaulting to an arbitrary size. |
+| **Queued/after-hours order handling** | A SELL/TRIM that queues instead of filling immediately now defers win/loss-ledger recording to a scheduled pending-fill job (mirroring the monthly rebalance's existing pattern) instead of recording against an unknown price right away. |
+| **Duplicate-run guards** | Both the monthly rebalance and weekly Inspection now cross-check their own audit log before running — belt-and-suspenders protection against a transient Alpaca calendar-API error causing a second real-money run for a period that already completed. |
+| **Scheduling window widened** | Monthly rebalance and quarterly tax report cron windows widened from days 1–3 to 1–4, covering the case where the 1st of the month is a Friday holiday (Fri + Sat + Sun pushes the first trading day to the 4th — e.g. January 2027). |
+| **Reduced startup blast radius** | Scheduler's imports of the rebalance/Inspection entry points are now wrapped so an import-time failure in either module disables only that cron job instead of crashing the whole app at boot. |
+| **Test hygiene** | Fixed a gap where two Inspection tests were missing mocks and writing real entries to the production log paths on every local test run. |
+| **UX fixes** | Corrected a sign bug that rendered losses as `+$-412.50`; corrected a misleading "needed $5, only $50,000 available" skip message that should have said "already at target"; added the missing `Invested`/`Record` fields to DOUBLE_DOWN/TRIM Discord embeds. |
+
 ### Kimi Inspection — weekly holdings check-in (July 10, 2026)
 
 | Change | Details |
 |---|---|
 | **New weekly review** | `app/claude_inspection.py` — runs on the first trading day of each week (skipped on rebalance weeks) with SELL/TRIM/DOUBLE_DOWN authority over current holdings only. Never opens new positions — BUY is rejected in code, not just prompted against. Lighter agentic loop than the monthly rebalance (30-turn cap, 15-search budget vs. 80/30) doing a delta-check against the last known thesis instead of a full 5-section rebuild. |
 | **Shared history** | The monthly rebalance now reads recent Inspection activity as part of its own context (`_load_recent_history`), so it builds on decisions Inspection already made that month instead of re-deriving them. |
-| **Scheduling bug fix** | The monthly rebalance's cron previously fired only on a hardcoded `day=1` with no holiday guard — if the 1st fell on a weekend/holiday, the whole month was silently skipped. Now covers days 1–3 with the same first-trading-day check Inspection itself uses (`is_first_trading_day_of`), matching the pattern already used by the quarterly tax report. |
+| **Scheduling bug fix** | The monthly rebalance's cron previously fired only on a hardcoded `day=1` with no holiday guard — if the 1st fell on a weekend/holiday, the whole month was silently skipped. Now covers days 1–4 with the same first-trading-day check Inspection itself uses (`is_first_trading_day_of`), matching the pattern already used by the quarterly tax report (also widened to 1–4 for the same reason). |
 | **New log file** | `/data/claude_inspection_log.json` — kept separate from `claude_rebalance_log.json`. |
 
 ### Live web search + Discord reliability (July 4, 2026)
