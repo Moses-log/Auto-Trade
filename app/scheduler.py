@@ -184,8 +184,10 @@ async def _robinhood_keep_alive() -> None:
 async def _quarterly_tax_report() -> None:
     """Post Alpaca + RH tax summaries to their respective channels.
 
-    Fires on the first trading day of Jan/Apr/Jul/Oct (cron covers days 1–3
-    to handle cases where the 1st is a holiday or weekend).
+    Fires on the first trading day of Jan/Apr/Jul/Oct (cron covers days 1-4
+    to handle cases where the 1st is a holiday or weekend — widened from 1-3
+    to also cover a Friday New Year's Day, where Fri holiday + Sat + Sun
+    pushes the first trading day to the 4th, e.g. Jan 2027).
 
     Jan: reports the just-completed year (year - 1).
     Apr/Jul/Oct: reports the current year YTD.
@@ -296,7 +298,7 @@ def setup_jobs() -> None:
     )
     scheduler.add_job(
         _quarterly_tax_report,
-        CronTrigger(month="1,4,7,10", day="1-3", hour=8, minute=0, timezone=ET),
+        CronTrigger(month="1,4,7,10", day="1-4", hour=8, minute=0, timezone=ET),
         id="quarterly_tax_report",
         replace_existing=True,
     )
@@ -321,7 +323,7 @@ def setup_jobs() -> None:
     log.info(
         "Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), "
         "robinhood_keep_alive (daily check, runs every ~3 days), "
-        "quarterly_tax_report (Jan/Apr/Jul/Oct 1), "
+        "quarterly_tax_report (first trading day of Jan/Apr/Jul/Oct), "
         "claude_monthly_rebalance (first trading day of each month, 9:35 AM ET), "
         "weekly_inspection (first trading day of week, 9:35 AM ET, skipped on rebalance weeks), "
         "nightly_backup (daily midnight ET)"
