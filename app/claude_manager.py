@@ -25,6 +25,10 @@ import yfinance as yf
 
 from app.config import settings
 from app.decision_review import build_live_scorecard, format_scorecard_embed
+from app.risk_guardrails import (
+    clamp_position_weights, resolve_sectors, _yf_sector_fetch,
+    compute_sector_exposure, sector_warnings, format_guardrail_embed,
+)
 
 _CT = pytz.timezone("America/Chicago")
 _LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
@@ -1108,6 +1112,26 @@ async def run_monthly_rebalance() -> None:
         _EXCLUDED = {"SPY"}  # managed by Kimi — Claude must never touch these
 
         trades = [t for t in trade_block.get("trades", []) if t.get("ticker", "").upper() not in _EXCLUDED]
+
+        # Risk guardrails: clamp any position to <=25% (safety-critical, always),
+        # then best-effort sector-concentration alert (>50%, no auto-scale).
+        _clamps = clamp_position_weights(trades)
+        _warnings: list = []
+        _unknown: list = []
+        try:
+            # Offload the (bounded, blocking) yfinance sector lookups off the
+            # event loop, matching the run_in_executor pattern used above.
+            _sector_map, _unknown = await loop.run_in_executor(
+                None, resolve_sectors, enriched, trades, _yf_sector_fetch
+            )
+            _warnings = sector_warnings(
+                compute_sector_exposure(positions, trades, portfolio_value, _sector_map.get)
+            )
+        except Exception as exc:
+            log.warning("Rebalance sector guardrail check failed: %s", exc)
+        _guardrail_embed = format_guardrail_embed(_clamps, _warnings, _unknown)
+        if _guardrail_embed:
+            await notify_claude_manager_embed(_guardrail_embed)
 
         # KI Server: research sections then decisions card — single task, guaranteed ordering
         _ki_month = datetime.now(_CT).strftime("%B %Y").upper()

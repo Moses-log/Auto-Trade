@@ -25,6 +25,10 @@ from app.claude_manager import _trade_embed, _field, _CLR_RED, notify_claude_pen
 from app.claude_portfolio import open_position, close_position, trim_position, get_record
 from app.notifications import notify_claude_manager_embed, notify_claude_signal_feed
 from app.trading.robinhood_client import rh_client
+from app.risk_guardrails import (
+    clamp_position_weights, resolve_sectors, _yf_sector_fetch,
+    compute_sector_exposure, sector_warnings, format_guardrail_embed,
+)
 
 _ET_TZ = pytz.timezone("America/New_York")
 
@@ -221,6 +225,26 @@ async def run_weekly_inspection() -> None:
         buying_power = await rh_client.get_buying_power_async() or 0.0
         holdings_value = sum(p["qty"] * p.get("current_price", 0) for p in positions)
         portfolio_value = holdings_value + buying_power
+
+        # Risk guardrails: clamp DOUBLE_DOWN/TRIM to <=25% (always), then
+        # best-effort sector-concentration alert (>50%, no auto-scale).
+        _clamps = clamp_position_weights(pending_trades)
+        _warnings: list = []
+        _unknown: list = []
+        try:
+            # Offload the (bounded, blocking) yfinance sector lookups off the
+            # event loop, matching the run_in_executor pattern used above.
+            _sector_map, _unknown = await loop.run_in_executor(
+                None, resolve_sectors, enriched, pending_trades, _yf_sector_fetch
+            )
+            _warnings = sector_warnings(
+                compute_sector_exposure(positions, pending_trades, portfolio_value, _sector_map.get)
+            )
+        except Exception as exc:
+            log.warning("Inspection sector guardrail check failed: %s", exc)
+        _guardrail_embed = format_guardrail_embed(_clamps, _warnings, _unknown)
+        if _guardrail_embed:
+            await notify_claude_manager_embed(_guardrail_embed)
 
         await notify_claude_manager_embed(_embed(
             f"🔍 KIMI INSPECTION — {len(pending_trades)} action(s) this week",

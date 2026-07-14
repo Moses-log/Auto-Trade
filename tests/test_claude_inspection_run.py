@@ -163,7 +163,9 @@ async def test_trim_action_executes_and_notifies_both_channels(
     from app.claude_inspection import run_weekly_inspection
     await run_weekly_inspection()
 
-    mock_rh.sell_shares_async.assert_awaited_once_with("NVDA", 7.0)
+    # target_weight_pct=30 is clamped to the 25% guardrail ceiling before sizing,
+    # so the sell qty reflects trimming down to 25%, not the raw 30% ask.
+    mock_rh.sell_shares_async.assert_awaited_once_with("NVDA", 7.5)
     mock_trim_position.assert_called_once()
     mock_record_rh_trade.assert_awaited_once_with(True, "NVDA", 350.0)
     assert mock_notify_private.await_count >= 1   # Private Server gets full detail
