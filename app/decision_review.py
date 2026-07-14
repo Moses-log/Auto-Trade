@@ -51,7 +51,8 @@ def _read_log(path: str) -> list:
         with open(path) as f:
             data = json.load(f)
         return data if isinstance(data, list) else []
-    except Exception:
+    except Exception as exc:
+        log.debug("decision_review: could not read log %s: %s", path, exc)
         return []
 
 
@@ -173,7 +174,8 @@ def format_scorecard_embed(sc) -> dict:
 def _yf_price_fn(ticker: str, start_date: str):
     """Return (first_close, latest_close) auto-adjusted since start_date, or None."""
     try:
-        hist = yf.Ticker(ticker).history(start=start_date, auto_adjust=True)
+        from app.pnl import _yf_fetch
+        hist = _yf_fetch(lambda: yf.Ticker(ticker).history(start=start_date, auto_adjust=True))
         if hist is None or hist.empty:
             return None
         closes = hist["Close"].dropna()
