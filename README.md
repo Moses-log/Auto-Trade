@@ -260,7 +260,8 @@ On the **1st of each month at 9:35 AM ET**, the system:
    - **SELL** — close an entire position
    - **TRIM** — reduce a position to a lower target weight without closing it (blocked if qty < 1 share — Robinhood cannot partially sell fractional positions)
    - **HOLD** — no trade, maintain target weight
-8. Sells execute first; buy budget = cash + expected sell proceeds (handles after-hours queued-sell lag)
+8. **Risk guardrails run before execution** (`app/risk_guardrails.py`): any BUY/DOUBLE_DOWN/TRIM over 25% is hard-clamped down to 25% in place, and a `⚠️ RISK GUARDRAIL` Discord alert fires if any single sector's post-trade weight would exceed 50% (alert-only — no auto-scaling). Enforces the stated policy in code rather than trusting the prompt alone
+9. Sells execute first; buy budget = cash + expected sell proceeds (handles after-hours queued-sell lag)
 9. After-hours sells are saved as pending orders and resolved at market open with actual fill price and P&L
 10. Full analysis + each trade posted to Discord; full audit log saved to `/data/claude_rebalance_log.json`
 11. **Benchmark comparison** posted at completion (and on no-change months): portfolio % vs SPY % month-over-month and since inception
@@ -277,7 +278,7 @@ The strategy is defined entirely in the system prompt at `app/claude_manager.py`
 **Portfolio Constraints:**
 - 5–10 stocks. No ETFs, options, leverage, or short positions. U.S.-listed only, market cap above $2 billion.
 - Cash below 10% unless market conditions are exceptionally unfavorable.
-- Position sizes up to 25%. No single sector above 50%.
+- Position sizes up to 25%. No single sector above 50%. **Both are enforced in code** (`app/risk_guardrails.py`) — a position over 25% is hard-clamped before execution; a sector over 50% raises a Discord alert — not just requested in the prompt.
 - SPY is permanently excluded — managed by the Kimi DCA strategy.
 
 **Scoring Framework — every stock scored 0–100:**
@@ -344,7 +345,8 @@ On the **first trading day of each week** at **9:35 AM ET** — skipped on any w
 4. Defaults to **HOLD** unless there's a specific, nameable trigger — earnings surprise, guidance change, major company-specific news, a macro shock tied to the name, or a meaningful technical breakdown. Routine price noise is not a trigger.
 5. Can act immediately with three trade actions — **SELL** (close the position), **TRIM** (reduce to a lower target weight, same 1-share-minimum rule as the monthly rebalance), or **DOUBLE_DOWN** (add to an existing position with elevated conviction)
 6. **Never opens a new position.** BUY is disallowed in the prompt *and* rejected in code — a response containing a BUY anywhere has its entire trade block discarded, nothing executes
-7. Posts full analysis + every trade to Discord (`CLAUDE_MANAGER_WEBHOOK_URL`); posts an actioned-holdings-only summary to the paid subscriber channel (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`); realized SELL/TRIM P&L is recorded to the same win/loss ledger the monthly rebalance uses
+7. **Same risk guardrails as the monthly rebalance** (`app/risk_guardrails.py`): a DOUBLE_DOWN/TRIM over 25% is hard-clamped to 25% before execution, and a `⚠️ RISK GUARDRAIL` alert fires if a sector would exceed 50% post-trade
+8. Posts full analysis + every trade to Discord (`CLAUDE_MANAGER_WEBHOOK_URL`); posts an actioned-holdings-only summary to the paid subscriber channel (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`); realized SELL/TRIM P&L is recorded to the same win/loss ledger the monthly rebalance uses
 8. Audit log saved to `/data/claude_inspection_log.json` (separate file from the monthly rebalance's log). The next monthly rebalance reads recent Inspection activity as part of its own history context, so it builds on what Inspection already decided instead of re-deriving a thesis
 
 ---
@@ -377,7 +379,8 @@ app/
 │
 ├── claude_manager.py     # Autonomous monthly portfolio manager (Anthropic API)
 ├── claude_inspection.py  # Weekly holdings-only check between monthly rebalances (SELL/TRIM/DOUBLE_DOWN, never BUY)
-├── decision_review.py    # Scores past executed trades vs SPY since decision → scorecard for prompts + monthly Discord review (derived live from logs + yfinance, no persisted state)
+├── decision_review.py    # Scores past executed trades vs SPY since decision → monthly Discord review (monitoring-only, derived live from logs + yfinance, no persisted state)
+├── risk_guardrails.py    # Code-enforced position hard-cap (25%) + sector alert (50%) between parsed trades and execution — shared by rebalance + Inspection
 ├── claude_portfolio.py   # Kimi position tracker — open/close/trim/W-L for both Kimi systems
 │
 ├── investors.py          # Investor data model, equity math, Discord report formatting
@@ -1260,6 +1263,16 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Code-enforced risk guardrails (July 14, 2026)
+
+| Change | Details |
+|---|---|
+| **Root cause** | Kimi's risk policy — *max 25% per position, max 50% per sector* — lived only as English in the system prompt. Nothing in the execution path enforced it: each trade was sized as `portfolio_value × target_weight_pct / 100` and executed, capped only by available cash. A single miscalculated `target_weight_pct` of 32, or several 20% names stacking one sector past 60%, would execute against real money unchecked. Same silent-trust class as the earlier Finviz and deposit bugs. |
+| **New module** | `app/risk_guardrails.py` — a mostly-pure, unit-tested guardrail layer that sits between the parsed trade block and execution. Constants `MAX_POSITION_PCT = 25.0`, `MAX_SECTOR_PCT = 50.0` (no env vars — single source of truth matching the prompt). |
+| **Position hard-cap (always)** | Any `BUY`/`DOUBLE_DOWN`/`TRIM` with `target_weight_pct > 25` is clamped down to exactly 25% **in place**, before the existing sizing code reads it — so no sizing math changed. Clamp-not-reject: an over-sized good idea is kept at a safe size, never dropped. `SELL`/`HOLD` are untouched. This is the safety-critical half and always runs first. |
+| **Sector alert (alert-only)** | If post-trade exposure in any single sector would exceed 50%, a `⚠️ RISK GUARDRAIL` embed is posted to Discord. **No auto-scaling** — which name to trim is a judgment call left to the operator/next rebalance, not a blind rule that could clip a high-conviction winner. Sectors for brand-new BUY candidates are resolved via a bounded (15s), off-the-event-loop yfinance lookup; anything unresolved buckets to `Unknown` and never triggers a false alert. |
+| **Scope & safety** | Wired into both the monthly rebalance and the weekly Inspection's DOUBLE_DOWN path from one shared module. The whole guardrail step is failure-contained — on any unexpected error it logs and proceeds to execution *with the position clamp already applied* (clamp runs first, sector alerting is best-effort), so it can never break a run. |
 
 ### Decision → outcome feedback loop (July 13, 2026)
 
