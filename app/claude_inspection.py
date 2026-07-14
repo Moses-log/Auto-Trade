@@ -232,7 +232,11 @@ async def run_weekly_inspection() -> None:
         _warnings: list = []
         _unknown: list = []
         try:
-            _sector_map, _unknown = resolve_sectors(enriched, pending_trades, _yf_sector_fetch)
+            # Offload the (bounded, blocking) yfinance sector lookups off the
+            # event loop, matching the run_in_executor pattern used above.
+            _sector_map, _unknown = await loop.run_in_executor(
+                None, resolve_sectors, enriched, pending_trades, _yf_sector_fetch
+            )
             _warnings = sector_warnings(
                 compute_sector_exposure(positions, pending_trades, portfolio_value, _sector_map.get)
             )

@@ -1119,7 +1119,11 @@ async def run_monthly_rebalance() -> None:
         _warnings: list = []
         _unknown: list = []
         try:
-            _sector_map, _unknown = resolve_sectors(enriched, trades, _yf_sector_fetch)
+            # Offload the (bounded, blocking) yfinance sector lookups off the
+            # event loop, matching the run_in_executor pattern used above.
+            _sector_map, _unknown = await loop.run_in_executor(
+                None, resolve_sectors, enriched, trades, _yf_sector_fetch
+            )
             _warnings = sector_warnings(
                 compute_sector_exposure(positions, trades, portfolio_value, _sector_map.get)
             )
