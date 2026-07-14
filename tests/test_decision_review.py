@@ -41,3 +41,68 @@ def test_caps_at_max_decisions(tmp_path):
     result = load_executed_decisions(now=date(2026, 7, 13))
     assert len(result) == min(12, MAX_DECISIONS)
     assert result[0].date == "2026-07-12"  # newest first
+
+
+# append to tests/test_decision_review.py
+from app.decision_review import score_decision, build_scorecard, DecisionOutcome
+
+
+def _price_fn_factory(table):
+    # table: {ticker: (start_close, latest_close) or None}
+    def fn(ticker, start_date):
+        return table.get(ticker)
+    return fn
+
+
+def test_sell_that_dodged_a_drop_is_good():
+    d = Decision("2026-06-01", "XYZ", "SELL")
+    # stock fell 10%, SPY rose 2% -> rel = -0.12 -> good sell
+    fn = _price_fn_factory({"XYZ": (100.0, 90.0), "SPY": (100.0, 102.0)})
+    o = score_decision(d, fn)
+    assert o.verdict == "good" and round(o.rel, 2) == -0.12
+
+
+def test_sell_that_missed_a_rally_is_bad():
+    d = Decision("2026-06-01", "XYZ", "SELL")
+    fn = _price_fn_factory({"XYZ": (100.0, 115.0), "SPY": (100.0, 103.0)})
+    assert score_decision(d, fn).verdict == "bad"
+
+
+def test_buy_that_beat_spy_is_good():
+    d = Decision("2026-06-01", "XYZ", "BUY")
+    fn = _price_fn_factory({"XYZ": (100.0, 120.0), "SPY": (100.0, 105.0)})
+    assert score_decision(d, fn).verdict == "good"
+
+
+def test_buy_that_lagged_spy_is_bad():
+    d = Decision("2026-06-01", "XYZ", "DOUBLE_DOWN")
+    fn = _price_fn_factory({"XYZ": (100.0, 101.0), "SPY": (100.0, 110.0)})
+    assert score_decision(d, fn).verdict == "bad"
+
+
+def test_within_neutral_band_is_neutral():
+    fn = _price_fn_factory({"XYZ": (100.0, 101.0), "SPY": (100.0, 100.5)})  # rel = +0.005
+    assert score_decision(Decision("2026-06-01", "XYZ", "SELL"), fn).verdict == "neutral"
+    assert score_decision(Decision("2026-06-01", "XYZ", "BUY"), fn).verdict == "neutral"
+
+
+def test_missing_price_returns_none():
+    fn = _price_fn_factory({"XYZ": None, "SPY": (100.0, 102.0)})
+    assert score_decision(Decision("2026-06-01", "XYZ", "SELL"), fn) is None
+
+
+def test_build_scorecard_aggregates_and_counts_skipped():
+    decisions = [
+        Decision("2026-06-01", "AAA", "SELL"),   # good
+        Decision("2026-06-02", "BBB", "BUY"),    # bad
+        Decision("2026-06-03", "CCC", "SELL"),   # skipped (no data)
+    ]
+    fn = _price_fn_factory({
+        "AAA": (100.0, 80.0), "BBB": (100.0, 90.0), "CCC": None,
+        "SPY": (100.0, 100.0),
+    })
+    sc = build_scorecard(decisions, fn)
+    assert sc.skipped == 1
+    assert sc.by_action["SELL"] == (1, 0, 0)
+    assert sc.by_action["BUY"] == (0, 1, 0)
+    assert len(sc.outcomes) == 2

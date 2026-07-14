@@ -80,3 +80,43 @@ def load_executed_decisions(now: date | None = None) -> list:
                     decisions.append(Decision(date=d.isoformat(), ticker=ticker.upper(), action=action))
     decisions.sort(key=lambda x: x.date, reverse=True)
     return decisions[:MAX_DECISIONS]
+
+
+def score_decision(decision, price_fn):
+    """Return a DecisionOutcome, or None when price data is unusable."""
+    stock = price_fn(decision.ticker, decision.date)
+    spy = price_fn("SPY", decision.date)
+    if not stock or not spy:
+        return None
+    s0, s1 = stock
+    p0, p1 = spy
+    if not s0 or not p0:
+        return None
+    stock_return = s1 / s0 - 1
+    spy_return = p1 / p0 - 1
+    rel = stock_return - spy_return
+    if decision.action in ("SELL", "TRIM"):
+        verdict = "good" if rel < -NEUTRAL_BAND else "bad" if rel > NEUTRAL_BAND else "neutral"
+    else:  # BUY, DOUBLE_DOWN
+        verdict = "good" if rel > NEUTRAL_BAND else "bad" if rel < -NEUTRAL_BAND else "neutral"
+    return DecisionOutcome(decision, round(stock_return, 4), round(spy_return, 4), round(rel, 4), verdict)
+
+
+def build_scorecard(decisions, price_fn):
+    """Score all decisions; aggregate good/bad/neutral counts by action."""
+    outcomes = []
+    skipped = 0
+    by_action: dict = {}
+    for d in decisions:
+        o = score_decision(d, price_fn)
+        if o is None:
+            skipped += 1
+            continue
+        outcomes.append(o)
+        g, b, n = by_action.get(d.action, (0, 0, 0))
+        by_action[d.action] = (
+            g + (o.verdict == "good"),
+            b + (o.verdict == "bad"),
+            n + (o.verdict == "neutral"),
+        )
+    return Scorecard(outcomes=outcomes, skipped=skipped, by_action=by_action)
