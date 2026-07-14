@@ -376,6 +376,20 @@ _FUNDAMENTAL_KEYS: frozenset[str] = frozenset({
 })
 _TECHNICAL_KEYS: frozenset[str] = frozenset({"sma200_pct", "short_pct_float", "perf_qtd", "rsi"})
 
+_CRITICAL_DATA_FIELDS: tuple[str, ...] = (
+    "rsi", "sma200_pct", "perf_qtd",      # technicals
+    "forward_pe", "revenue_growth_yoy",   # core fundamentals
+)
+
+
+def compute_data_gaps(holding: dict) -> list[str]:
+    """Return the sorted critical fields missing (None or absent) for a holding.
+
+    Pure — no I/O. Empty list means the holding has full critical coverage.
+    Minor/optional fields (e.g. short_pct_float) are intentionally not tracked.
+    """
+    return sorted(f for f in _CRITICAL_DATA_FIELDS if holding.get(f) is None)
+
 
 def _fetch_technical_data(ticker: str) -> dict:
     """Compute Section 4 technical indicators from yfinance price history.
