@@ -120,3 +120,51 @@ def build_scorecard(decisions, price_fn):
             n + (o.verdict == "neutral"),
         )
     return Scorecard(outcomes=outcomes, skipped=skipped, by_action=by_action)
+
+
+_ACTION_ORDER = ("BUY", "DOUBLE_DOWN", "SELL", "TRIM")
+
+
+def format_scorecard_prompt(sc) -> str:
+    if not sc.outcomes:
+        return ""
+    parts = []
+    for action in _ACTION_ORDER:
+        if action in sc.by_action:
+            g, b, n = sc.by_action[action]
+            total = g + b + n
+            piece = f"{action}: {g}/{total} good"
+            if n:
+                piece += f", {n} neutral"
+            parts.append(piece)
+    return (
+        f"Last {len(sc.outcomes)} executed decisions scored vs SPY since each decision: "
+        + "; ".join(parts)
+        + ". Calibrate: repeat what worked, reconsider what didn't."
+    )
+
+
+def format_scorecard_embed(sc) -> dict:
+    from app.claude_manager import _embed, _field, _CLR_YELLOW, _timestamp
+    lines = []
+    for action in _ACTION_ORDER:
+        if action in sc.by_action:
+            g, b, n = sc.by_action[action]
+            line = f"**{action}** — {g} good / {b} bad"
+            if n:
+                line += f" / {n} neutral"
+            lines.append(line)
+    fields = [_field("By action", "\n".join(lines) or "—", inline=False)]
+    recent = sc.outcomes[:5]
+    if recent:
+        rlines = [
+            f"{o.decision.date} {o.decision.action} {o.decision.ticker}: "
+            f"{o.rel * 100:+.1f}% vs SPY ({o.verdict})"
+            for o in recent
+        ]
+        fields.append(_field("Most recent", "\n".join(rlines), inline=False))
+    desc = f"Scored {len(sc.outcomes)} executed decision(s) vs SPY"
+    if sc.skipped:
+        desc += f"; {sc.skipped} skipped (no price data)"
+    desc += "."
+    return _embed("📅 KIMI DECISION REVIEW", _CLR_YELLOW, description=desc, fields=fields, footer=_timestamp())

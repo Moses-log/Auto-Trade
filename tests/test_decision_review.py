@@ -106,3 +106,43 @@ def test_build_scorecard_aggregates_and_counts_skipped():
     assert sc.by_action["SELL"] == (1, 0, 0)
     assert sc.by_action["BUY"] == (0, 1, 0)
     assert len(sc.outcomes) == 2
+
+
+# append to tests/test_decision_review.py
+from app.decision_review import format_scorecard_prompt, format_scorecard_embed, Scorecard, DecisionOutcome
+
+
+def _oc(dt, tk, ac, rel, verdict):
+    return DecisionOutcome(Decision(dt, tk, ac), rel, 0.0, rel, verdict)
+
+
+def test_prompt_empty_when_no_outcomes():
+    assert format_scorecard_prompt(Scorecard()) == ""
+
+
+def test_prompt_text_is_deterministic():
+    sc = Scorecard(
+        outcomes=[_oc("2026-07-01", "AAA", "SELL", -0.1, "good")] * 4,
+        skipped=0,
+        by_action={"SELL": (2, 1, 1), "BUY": (1, 0, 0)},
+    )
+    text = format_scorecard_prompt(sc)
+    assert text == (
+        "Last 4 executed decisions scored vs SPY since each decision: "
+        "BUY: 1/1 good; SELL: 2/4 good, 1 neutral. "
+        "Calibrate: repeat what worked, reconsider what didn't."
+    )
+
+
+def test_embed_has_title_and_counts():
+    sc = Scorecard(
+        outcomes=[_oc("2026-07-01", "AAA", "SELL", -0.1, "good"),
+                  _oc("2026-07-02", "BBB", "BUY", 0.05, "good")],
+        skipped=1,
+        by_action={"SELL": (1, 0, 0), "BUY": (1, 0, 0)},
+    )
+    embed = format_scorecard_embed(sc)
+    assert embed["title"] == "📅 KIMI DECISION REVIEW"
+    assert "Scored 2" in embed["description"]
+    assert "1 skipped" in embed["description"]
+    assert embed["fields"]  # has at least the aggregate field
