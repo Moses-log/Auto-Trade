@@ -406,6 +406,14 @@ def annotate_and_collect_gaps(enriched: list[dict]) -> dict[str, list[str]]:
     return gaps_by_ticker
 
 
+def format_data_gap_field(gaps_by_ticker: dict[str, list[str]]) -> dict | None:
+    """Return an embed field summarizing per-ticker data gaps, or None if empty."""
+    if not gaps_by_ticker:
+        return None
+    parts = [f"{tk} ({', '.join(gaps)})" for tk, gaps in sorted(gaps_by_ticker.items())]
+    return _field("⚠️ Data gaps", "; ".join(parts), inline=False)
+
+
 def _fetch_technical_data(ticker: str) -> dict:
     """Compute Section 4 technical indicators from yfinance price history.
 

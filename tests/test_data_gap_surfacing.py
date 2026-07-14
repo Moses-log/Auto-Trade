@@ -57,3 +57,18 @@ def test_annotate_empty_when_all_complete():
                  "forward_pe": 30.0, "revenue_growth_yoy": 0.15}]
     assert annotate_and_collect_gaps(enriched) == {}
     assert "_data_gaps" not in enriched[0]
+
+
+from app.claude_manager import format_data_gap_field
+
+
+def test_format_returns_none_when_empty():
+    assert format_data_gap_field({}) is None
+
+
+def test_format_builds_sorted_field():
+    field = format_data_gap_field({"NVDA": ["rsi"], "META": ["forward_pe", "revenue_growth_yoy"]})
+    assert field["name"] == "⚠️ Data gaps"
+    # tickers sorted deterministically; META before NVDA
+    assert field["value"] == "META (forward_pe, revenue_growth_yoy); NVDA (rsi)"
+    assert field["inline"] is False
