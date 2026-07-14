@@ -34,3 +34,26 @@ def test_minor_field_none_not_flagged():
 
 def test_total_failure_flags_all_sorted():
     assert compute_data_gaps({"ticker": "X"}) == sorted(_CRITICAL_DATA_FIELDS)
+
+
+from app.claude_manager import annotate_and_collect_gaps
+
+
+def test_annotate_sets_field_and_returns_map():
+    enriched = [
+        {"ticker": "MSFT", "rsi": 55.0, "sma200_pct": 0.1, "perf_qtd": 0.05,
+         "forward_pe": 30.0, "revenue_growth_yoy": 0.15},
+        {"ticker": "NVDA", "rsi": None, "sma200_pct": 0.2, "perf_qtd": 0.1,
+         "forward_pe": 40.0, "revenue_growth_yoy": 0.5},
+    ]
+    result = annotate_and_collect_gaps(enriched)
+    assert result == {"NVDA": ["rsi"]}
+    assert "_data_gaps" not in enriched[0]           # complete holding untouched
+    assert enriched[1]["_data_gaps"] == ["rsi"]      # gap holding annotated
+
+
+def test_annotate_empty_when_all_complete():
+    enriched = [{"ticker": "MSFT", "rsi": 55.0, "sma200_pct": 0.1, "perf_qtd": 0.05,
+                 "forward_pe": 30.0, "revenue_growth_yoy": 0.15}]
+    assert annotate_and_collect_gaps(enriched) == {}
+    assert "_data_gaps" not in enriched[0]

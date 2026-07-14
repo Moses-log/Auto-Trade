@@ -391,6 +391,21 @@ def compute_data_gaps(holding: dict) -> list[str]:
     return sorted(f for f in _CRITICAL_DATA_FIELDS if holding.get(f) is None)
 
 
+def annotate_and_collect_gaps(enriched: list[dict]) -> dict[str, list[str]]:
+    """Tag each holding that has critical data gaps and return {ticker: gaps}.
+
+    Sets holding["_data_gaps"] in place (so it serializes into the prompt and
+    is captured in the run log). Only holdings with >=1 gap appear in the map.
+    """
+    gaps_by_ticker: dict[str, list[str]] = {}
+    for holding in enriched:
+        gaps = compute_data_gaps(holding)
+        if gaps:
+            holding["_data_gaps"] = gaps
+            gaps_by_ticker[holding.get("ticker", "?")] = gaps
+    return gaps_by_ticker
+
+
 def _fetch_technical_data(ticker: str) -> dict:
     """Compute Section 4 technical indicators from yfinance price history.
 
