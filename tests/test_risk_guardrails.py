@@ -63,3 +63,36 @@ def test_sector_warnings_only_over_cap_excluding_unknown():
     assert sector_warnings({"Technology": 68.0, "Energy": 40.0, "Unknown": 90.0}) == \
         ["Technology 68% (> 50% cap)"]
     assert sector_warnings({"Technology": 50.0}) == []   # not strictly over
+
+
+# append to tests/test_risk_guardrails.py
+from app.risk_guardrails import resolve_sectors, format_guardrail_embed, ClampEvent
+
+
+def test_resolve_sectors_uses_enriched_then_fetch():
+    enriched = [{"ticker": "NVDA", "sector": "Technology"}]
+    trades = [
+        {"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 25},  # known from enriched
+        {"action": "BUY", "ticker": "AVGO", "target_weight_pct": 20},          # needs fetch -> ok
+        {"action": "BUY", "ticker": "ZZZ", "target_weight_pct": 10},           # fetch -> None
+    ]
+    calls = {"AVGO": "Technology", "ZZZ": None}
+    sector_map, unknown = resolve_sectors(enriched, trades, lambda t: calls.get(t))
+    assert sector_map["NVDA"] == "Technology"
+    assert sector_map["AVGO"] == "Technology"
+    assert unknown == ["ZZZ"]
+
+
+def test_embed_none_when_nothing_fired():
+    assert format_guardrail_embed([], [], []) is None
+
+
+def test_embed_has_clamp_and_sector_fields():
+    embed = format_guardrail_embed(
+        [ClampEvent("NVDA", 32.0, 25.0)],
+        ["Technology 68% (> 50% cap)"],
+        ["ZZZ"],
+    )
+    assert embed["title"] == "⚠️ RISK GUARDRAIL"
+    joined = " ".join(f["value"] for f in embed["fields"])
+    assert "NVDA" in joined and "Technology 68%" in joined and "ZZZ" in joined

@@ -75,3 +75,55 @@ def sector_warnings(exposure: dict) -> list:
     over = [(s, p) for s, p in exposure.items() if s != "Unknown" and p > MAX_SECTOR_PCT]
     over.sort(key=lambda x: x[1], reverse=True)
     return [f"{s} {p:.0f}% (> {MAX_SECTOR_PCT:.0f}% cap)" for s, p in over]
+
+
+def resolve_sectors(enriched, trades, fetch_sector):
+    """Build {ticker: sector|None} from enriched holdings, filling any BUY/DOUBLE_DOWN
+    candidate not already known via fetch_sector. Returns (sector_map, unknown_tickers)."""
+    sector_map: dict = {}
+    for h in enriched:
+        tk = (h.get("ticker") or "").upper()
+        if tk:
+            sector_map[tk] = h.get("sector")
+    unknown: list = []
+    for t in trades:
+        if t.get("action") not in ("BUY", "DOUBLE_DOWN"):
+            continue
+        tk = (t.get("ticker") or "").upper()
+        if not tk:
+            continue
+        if sector_map.get(tk) is None:
+            sec = fetch_sector(tk)
+            sector_map[tk] = sec
+            if sec is None and tk not in unknown:
+                unknown.append(tk)
+    return sector_map, unknown
+
+
+def _yf_sector_fetch(ticker: str):
+    """Bounded yfinance sector lookup for a single ticker, or None on failure."""
+    try:
+        import yfinance as yf
+        from app.pnl import _yf_fetch
+        info = _yf_fetch(lambda: yf.Ticker(ticker).info)
+        return info.get("sector") if info else None
+    except Exception as exc:
+        log.warning("risk_guardrails sector fetch failed for %s: %s", ticker, exc)
+        return None
+
+
+def format_guardrail_embed(clamps, warnings, unknown_tickers):
+    """Combined ⚠️ RISK GUARDRAIL embed, or None when nothing fired."""
+    if not clamps and not warnings:
+        return None
+    from app.claude_manager import _embed, _field, _CLR_ORANGE, _timestamp
+    fields = []
+    if clamps:
+        lines = [f"{c.ticker}: {c.original_pct:.0f}% → clamped to {c.clamped_pct:.0f}%" for c in clamps]
+        fields.append(_field("Position cap (25%)", "\n".join(lines), inline=False))
+    if warnings:
+        note = "\n".join(warnings)
+        if unknown_tickers:
+            note += f"\n(sector unresolved: {', '.join(unknown_tickers)})"
+        fields.append(_field("Sector concentration (> 50%)", note, inline=False))
+    return _embed("⚠️ RISK GUARDRAIL", _CLR_ORANGE, fields=fields, footer=_timestamp())
