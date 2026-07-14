@@ -135,6 +135,7 @@ PORTFOLIO CONSTRAINTS
 - Rebalance monthly only when superior opportunities exist.
 - Pay attention to earnings dates: avoid initiating or significantly increasing positions within 3 days of an earnings report unless conviction is very high.
 - Use macro context (VIX, 10Y yield, CPI) to calibrate overall risk appetite. High VIX favors defensiveness; rising yields pressure growth multiples.
+- If a holding's JSON includes a "_data_gaps" field, those listed metrics were unavailable this run — weight your analysis toward the available data and note the limitation in your reasoning.
 
 ========================
 FUTURE DOMINANCE THEMES
@@ -973,6 +974,7 @@ async def run_monthly_rebalance() -> None:
 
         log_entry["portfolio_value"] = portfolio_value
         log_entry["buying_power"] = buying_power
+        data_gaps_by_ticker = annotate_and_collect_gaps(enriched)
         log_entry["positions_before"] = enriched
         log_entry["spy_price_at_rebalance"] = spy_price
 
@@ -1037,6 +1039,7 @@ async def run_monthly_rebalance() -> None:
         log_entry["analysis_body"] = analysis_body  # persisted for next month's history lookback
         spy_str = f"${spy_price:,.2f}" if spy_price else "—"
         cash_pct = buying_power / portfolio_value * 100 if portfolio_value > 0 else 0
+        _gap_field = format_data_gap_field(data_gaps_by_ticker)
         analysis_header = _embed(
             "📊 KIMI MONTHLY PORTFOLIO ANALYSIS",
             _CLR_YELLOW,
@@ -1047,6 +1050,7 @@ async def run_monthly_rebalance() -> None:
                 f"**SPY** `{spy_str}`  ·  "
                 f"**Holdings** `{len(positions)}`"
             ),
+            fields=[_gap_field] if _gap_field else None,
             footer=_timestamp(),
         )
         await asyncio.sleep(0.8)
