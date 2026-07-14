@@ -19,6 +19,7 @@ import pytz
 from app.claude_manager import (
     _embed, _timestamp, _fetch_yf_data, _fetch_technical_data,
     _CLR_ORANGE, _CLR_GREEN, _CLR_GRAY, _LOG_PATH,
+    annotate_and_collect_gaps, format_data_gap_field,
 )
 from app.claude_manager import _trade_embed, _field, _CLR_RED, notify_claude_pending_sell_fill
 from app.claude_portfolio import open_position, close_position, trim_position, get_record
@@ -119,6 +120,18 @@ async def run_weekly_inspection() -> None:
                 "current_price": pos.get("current_price"),
                 "unrealized_pnl_pct": round(pos.get("unrealized_plpc", 0), 2),
             })
+        data_gaps_by_ticker = annotate_and_collect_gaps(enriched)
+        _gap_field = format_data_gap_field(data_gaps_by_ticker)
+        if _gap_field:
+            await notify_claude_manager_embed(_embed(
+                "⚠️ DATA GAPS THIS RUN",
+                _CLR_ORANGE,
+                description="Some holdings were reviewed with incomplete data (see fields). "
+                            "Claude was told to weight toward available metrics.",
+                fields=[_gap_field],
+                footer=_timestamp(),
+            ))
+
         log_entry["holdings_reviewed"] = [e["ticker"] for e in enriched if e.get("ticker")]
 
         rebalance_records = _load_recent_rebalance_records(limit=3)
@@ -555,6 +568,9 @@ opened exclusively by the monthly rebalance's candidate screening — that is ou
 Position-sizing constraints (same as the monthly rebalance): maximum position size 25%, no single \
 sector above 50%, and a DOUBLE_DOWN that would push a position above 10% requires you to explicitly \
 state why the existing bear case is still resolved. SPY is permanently excluded — never mention it.
+
+If a holding's JSON includes a "_data_gaps" field, those listed metrics were unavailable this run — \
+weight your analysis toward the available data and note the limitation.
 
 REQUIRED OUTPUT FORMAT: end your response with a JSON block in exactly this format:
 
