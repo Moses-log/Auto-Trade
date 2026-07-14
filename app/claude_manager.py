@@ -24,7 +24,7 @@ import pytz
 import yfinance as yf
 
 from app.config import settings
-from app.decision_review import build_live_scorecard, format_scorecard_prompt, format_scorecard_embed
+from app.decision_review import build_live_scorecard, format_scorecard_embed
 
 _CT = pytz.timezone("America/Chicago")
 _LOG_PATH = os.getenv("CLAUDE_REBALANCE_LOG_PATH", "/data/claude_rebalance_log.json")
@@ -136,7 +136,6 @@ PORTFOLIO CONSTRAINTS
 - Rebalance monthly only when superior opportunities exist.
 - Pay attention to earnings dates: avoid initiating or significantly increasing positions within 3 days of an earnings report unless conviction is very high.
 - Use macro context (VIX, 10Y yield, CPI) to calibrate overall risk appetite. High VIX favors defensiveness; rising yields pressure growth multiples.
-- A "Decision Track Record (vs SPY)" section may be provided showing how your past executed trades fared against SPY since each decision — use it to calibrate: repeat what worked, reconsider what didn't.
 - If a holding's JSON includes a "_data_gaps" field, those listed metrics were unavailable this run — weight your analysis toward the available data and note the limitation in your reasoning.
 
 ========================
@@ -980,9 +979,10 @@ async def run_monthly_rebalance() -> None:
         log_entry["positions_before"] = enriched
         log_entry["spy_price_at_rebalance"] = spy_price
 
+        # Decision Review is monitoring-only: score past trades and post the
+        # monthly Discord review, but do NOT feed the scorecard back into the
+        # prompt — Claude decides without reference to its own track record.
         scorecard = await loop.run_in_executor(None, build_live_scorecard)
-        scorecard_text = format_scorecard_prompt(scorecard)
-        scorecard_block = f"Decision Track Record (vs SPY):\n{scorecard_text}\n\n" if scorecard_text else ""
         if scorecard.outcomes:
             await notify_claude_manager_embed(format_scorecard_embed(scorecard))
 
@@ -994,7 +994,6 @@ async def run_monthly_rebalance() -> None:
             f"({buying_power / portfolio_value * 100:.1f}% of portfolio)\n\n"
             f"{macro_text}\n\n"
             f"{history_text}\n\n"
-            f"{scorecard_block}"
             f"Current Holdings:\n{json.dumps(enriched, indent=2)}\n\n"
             f"Please run the full research framework for each stock:\n\n"
             f"1. SCORE CURRENT HOLDINGS — For each position, apply the full 5-section research "

@@ -23,7 +23,6 @@ from app.claude_manager import (
 )
 from app.claude_manager import _trade_embed, _field, _CLR_RED, notify_claude_pending_sell_fill
 from app.claude_portfolio import open_position, close_position, trim_position, get_record
-from app.decision_review import build_live_scorecard, format_scorecard_prompt
 from app.notifications import notify_claude_manager_embed, notify_claude_signal_feed
 from app.trading.robinhood_client import rh_client
 
@@ -139,9 +138,6 @@ async def run_weekly_inspection() -> None:
         inspection_records = _load_recent_inspection_entries(limit=5)
         thesis_map = _build_prior_thesis_map(rebalance_records, inspection_records)
 
-        scorecard_text = format_scorecard_prompt(await loop.run_in_executor(None, build_live_scorecard))
-        scorecard_block = f"Decision Track Record (vs SPY):\n{scorecard_text}\n\n" if scorecard_text else ""
-
         holdings_json = _json.dumps(enriched, indent=2)
         thesis_lines = "\n\n".join(
             f"### {ticker}\n{thesis_map.get(ticker, 'No prior thesis on record — treat conservatively.')}"
@@ -149,7 +145,6 @@ async def run_weekly_inspection() -> None:
         )
         prompt = (
             f"Weekly Inspection — review current holdings for anything material since the last check-in.\n\n"
-            f"{scorecard_block}"
             f"Current Holdings:\n{holdings_json}\n\n"
             f"Most Recent Thesis Per Ticker:\n{thesis_lines}\n\n"
             f"For each holding, decide HOLD / SELL / TRIM / DOUBLE_DOWN per the rules in your system prompt. "
@@ -573,7 +568,6 @@ opened exclusively by the monthly rebalance's candidate screening — that is ou
 Position-sizing constraints (same as the monthly rebalance): maximum position size 25%, no single \
 sector above 50%, and a DOUBLE_DOWN that would push a position above 10% requires you to explicitly \
 state why the existing bear case is still resolved. SPY is permanently excluded — never mention it.
-A "Decision Track Record (vs SPY)" section may be provided showing how past executed trades fared against SPY since each decision — use it to calibrate: repeat what worked, reconsider what didn't.
 
 If a holding's JSON includes a "_data_gaps" field, those listed metrics were unavailable this run — \
 weight your analysis toward the available data and note the limitation.
