@@ -249,9 +249,9 @@ Positions tracked in `/data/claude_portfolio.json` with entry price, qty, W-L re
 On the **1st of each month at 9:35 AM ET**, the system:
 
 1. Fetches all RH positions + buying power
-2. Enriches each holding with **yfinance fundamentals** (Forward P/E, PEG, EV/EBITDA, ROE, margins, short interest, earnings date) and **yfinance-computed technical indicators** (200-day MA position, RSI(14), calendar-QTD performance, RS vs SPY) — fundamentals and technicals fetched in parallel for all tickers
+2. Enriches each holding with **yfinance fundamentals** (Forward P/E, PEG, EV/EBITDA, ROE, margins, short interest, earnings date) and **yfinance-computed technical indicators** (200-day MA position, RSI(14), calendar-QTD performance, RS vs SPY) — fundamentals and technicals fetched in parallel for all tickers. Any holding missing a **critical metric** (RSI, 200-day MA, QTD performance, Forward P/E, or revenue growth) is tagged inline with a `_data_gaps` marker so Claude knows it's judging that name on partial data — the gaps are also surfaced to Discord (silent when every holding is complete)
 3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
-4. Loads **last 3 rebalance log entries** (date, portfolio value, SPY price, trade counts) + the **full 5-section research from the most recent entry** so Claude can track thesis evolution month-over-month
+4. Loads **last 3 rebalance log entries** (date, portfolio value, SPY price, trade counts) + the **full 5-section research from the most recent entry** so Claude can track thesis evolution month-over-month — plus a **Decision Track Record scorecard**: every executed trade from the last 6 months (up to 20) scored by the stock's return **vs SPY since the decision** (good / bad / neutral, grouped by action), so Claude calibrates from its own results instead of guessing statelessly
 5. Calls **claude-opus-4-8** via the Anthropic API using an **agentic loop** (up to 80 turns, 16,000 token responses). Claude has access to **live internet search** (`web_search_20250305`, up to 30 searches per rebalance) — used to verify news, earnings surprises, analyst estimate revisions, SEC filings, short interest updates, and macro context. Each search is handled server-side by Anthropic; results are embedded in the response and cited inline.
 6. The system scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage — using macro conditions and upcoming earnings dates to inform timing
 7. The system proposes an optimal portfolio using five trade actions:
@@ -264,6 +264,7 @@ On the **1st of each month at 9:35 AM ET**, the system:
 9. After-hours sells are saved as pending orders and resolved at market open with actual fill price and P&L
 10. Full analysis + each trade posted to Discord; full audit log saved to `/data/claude_rebalance_log.json`
 11. **Benchmark comparison** posted at completion (and on no-change months): portfolio % vs SPY % month-over-month and since inception
+12. **Decision Review** card posted monthly (`📅 KIMI DECISION REVIEW`) — the scorecard from step 4 summarized for you: good/bad/neutral counts by action plus the most recent decisions and their return vs SPY. Derived live from the decision logs + yfinance; no new persisted state
 
 Can also be triggered on-demand via `/rebalance` Discord slash command or `POST /run-rebalance`.
 
@@ -337,8 +338,8 @@ Every Friday at 4:00 PM ET (and via `/portfolio` slash command), the system:
 
 On the **first trading day of each week** at **9:35 AM ET** — skipped on any week that coincides with the monthly rebalance — the system runs a lighter, holdings-only check-in between Kimi Portfolio Manager's monthly rebalances:
 
-1. Fetches current RH positions only — **no new candidate screening**
-2. Loads the most recent thesis per ticker (from the last monthly rebalance's research, or a more recent weekly Inspection note if one exists)
+1. Fetches current RH positions only — **no new candidate screening**. Each holding gets the same critical-metric **data-gap** check as the monthly rebalance (missing metrics tagged inline for Claude + a standalone Discord alert when any gap exists)
+2. Loads the most recent thesis per ticker (from the last monthly rebalance's research, or a more recent weekly Inspection note if one exists), plus the same **Decision Track Record scorecard** the monthly rebalance uses — so weekly SELL/TRIM/DOUBLE_DOWN calls calibrate against past results too (the Inspection injects the scorecard into its prompt but does not post the monthly Discord review card)
 3. Calls **claude-opus-4-8** via a lighter agentic loop (up to 30 turns, 8,000-token responses, up to **15 live searches** — about half the monthly rebalance's budget) asking only: has anything material happened to this holding in the last 7 days?
 4. Defaults to **HOLD** unless there's a specific, nameable trigger — earnings surprise, guidance change, major company-specific news, a macro shock tied to the name, or a meaningful technical breakdown. Routine price noise is not a trigger.
 5. Can act immediately with three trade actions — **SELL** (close the position), **TRIM** (reduce to a lower target weight, same 1-share-minimum rule as the monthly rebalance), or **DOUBLE_DOWN** (add to an existing position with elevated conviction)
@@ -375,6 +376,8 @@ app/
 ├── macro_context.py      # Macro indicators for the rebalance prompt (VIX, 10Y yield, CPI via FRED)
 │
 ├── claude_manager.py     # Autonomous monthly portfolio manager (Anthropic API)
+├── claude_inspection.py  # Weekly holdings-only check between monthly rebalances (SELL/TRIM/DOUBLE_DOWN, never BUY)
+├── decision_review.py    # Scores past executed trades vs SPY since decision → scorecard for prompts + monthly Discord review (derived live from logs + yfinance, no persisted state)
 ├── claude_portfolio.py   # Kimi position tracker — open/close/trim/W-L for both Kimi systems
 │
 ├── investors.py          # Investor data model, equity math, Discord report formatting
@@ -1257,6 +1260,25 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Decision → outcome feedback loop (July 13, 2026)
+
+| Change | Details |
+|---|---|
+| **New module** | `app/decision_review.py` — scores every past executed trade (`BUY`/`SELL`/`TRIM`/`DOUBLE_DOWN`) from both the rebalance and Inspection logs by the stock's return **vs SPY since the decision date** (yfinance auto-adjusted closes). Window: last 6 months, capped at the 20 most recent. |
+| **Verdict rule** | `rel = stock_return − spy_return`. SELL/TRIM → *good* if `rel < −1.5%` (dodged relative downside), *bad* if `rel > +1.5%`; BUY/DOUBLE_DOWN → *good* if `rel > +1.5%`, *bad* if `rel < −1.5%`; within the ±1.5% neutral band → *neutral*. |
+| **Prompt injection** | A compact scorecard (good/bad/neutral counts by action) is injected into **both** the monthly rebalance and weekly Inspection prompts, so Claude calibrates from its own track record instead of deciding statelessly. Empty scorecard → nothing injected. |
+| **Monthly Discord review** | The rebalance posts a `📅 KIMI DECISION REVIEW` embed (aggregates + most-recent decisions vs SPY). Inspection injects the scorecard into its prompt but does not post the embed (avoids weekly noise). |
+| **No new state** | Everything is derived live from `claude_rebalance_log.json` + `claude_inspection_log.json` + yfinance on each run — no new data file, no migration. yfinance calls run through the bounded-fetch helper (`pnl._yf_fetch`) and the whole layer degrades to "no scorecard this run" rather than ever breaking a rebalance. |
+
+### Per-holding data-gap surfacing (July 13, 2026)
+
+| Change | Details |
+|---|---|
+| **Root cause** | The per-holding data fetch fails silently — a single holding losing its RSI, 200-day MA, or Forward P/E while others succeed flowed into Claude's context with no signal, and only an *all-empty* case ever warned. Same silent-failure class that let the earlier Finviz outage run undetected for a full rebalance. |
+| **Detection** | New shared helpers in `claude_manager.py` flag any holding missing a **critical field** (`rsi`, `sma200_pct`, `perf_qtd`, `forward_pe`, `revenue_growth_yoy`). Routinely-absent fields (e.g. `short_pct_float`) are intentionally not flagged, to keep signal high. |
+| **Surfacing** | Missing metrics are tagged inline with a `_data_gaps` field on the holding (so Claude weights toward available data, per a new prompt line) and shown in Discord — a field on the rebalance's analysis embed, a standalone embed in the Inspection. Silent when every holding is complete. |
+| **Scope** | Wired into both the monthly rebalance and the weekly Inspection from one shared implementation; purely additive and non-blocking (the existing all-empty warning is unchanged). |
 
 ### Kimi Inspection — money-safety bug-fix pass (July 11, 2026)
 
