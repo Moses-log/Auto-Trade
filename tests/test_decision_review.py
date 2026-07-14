@@ -146,3 +146,25 @@ def test_embed_has_title_and_counts():
     assert "Scored 2" in embed["description"]
     assert "1 skipped" in embed["description"]
     assert embed["fields"]  # has at least the aggregate field
+
+
+# append to tests/test_decision_review.py
+import app.decision_review as dr
+
+
+def test_build_live_scorecard_never_raises(monkeypatch):
+    # If loading blows up, we must degrade to an empty scorecard, not raise.
+    def boom(*a, **k):
+        raise RuntimeError("disk gone")
+    monkeypatch.setattr(dr, "load_executed_decisions", boom)
+    sc = dr.build_live_scorecard()
+    assert sc.outcomes == [] and sc.skipped == 0 and sc.by_action == {}
+
+
+def test_build_live_scorecard_uses_yf_adapter(monkeypatch):
+    monkeypatch.setattr(dr, "load_executed_decisions",
+                        lambda now=None: [dr.Decision("2026-06-01", "AAA", "SELL")])
+    monkeypatch.setattr(dr, "_yf_price_fn",
+                        lambda t, s: (100.0, 80.0) if t == "AAA" else (100.0, 100.0))
+    sc = dr.build_live_scorecard()
+    assert len(sc.outcomes) == 1 and sc.outcomes[0].verdict == "good"

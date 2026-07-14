@@ -168,3 +168,28 @@ def format_scorecard_embed(sc) -> dict:
         desc += f"; {sc.skipped} skipped (no price data)"
     desc += "."
     return _embed("📅 KIMI DECISION REVIEW", _CLR_YELLOW, description=desc, fields=fields, footer=_timestamp())
+
+
+def _yf_price_fn(ticker: str, start_date: str):
+    """Return (first_close, latest_close) auto-adjusted since start_date, or None."""
+    try:
+        hist = yf.Ticker(ticker).history(start=start_date, auto_adjust=True)
+        if hist is None or hist.empty:
+            return None
+        closes = hist["Close"].dropna()
+        if len(closes) < 2:
+            return None
+        return float(closes.iloc[0]), float(closes.iloc[-1])
+    except Exception as exc:
+        log.warning("decision_review price fetch failed for %s: %s", ticker, exc)
+        return None
+
+
+def build_live_scorecard():
+    """Load decisions and score them with the live yfinance adapter. Never raises —
+    a feedback-layer failure degrades to an empty scorecard."""
+    try:
+        return build_scorecard(load_executed_decisions(), _yf_price_fn)
+    except Exception as exc:
+        log.warning("build_live_scorecard failed, empty scorecard: %s", exc)
+        return Scorecard()
