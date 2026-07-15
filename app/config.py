@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # enabled AND the symbol supports it.
     allow_fractional_shares: bool = False
 
+    # ── Storage backend ───────────────────────────────────────────────────────
+    # When True, the investor ledger (investors / pending withdrawals / audit /
+    # rh deposits) is stored in SQLite (/data/kimi.db) and the JSON files become
+    # derived read-only exports. Default False = pure-JSON behavior (unchanged).
+    use_sqlite: bool = False
+
     # ── Robinhood ─────────────────────────────────────────────────────────────
     rh_username: Optional[str] = None
     rh_password: Optional[str] = None
