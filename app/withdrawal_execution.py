@@ -9,6 +9,7 @@ import pytz
 
 from apscheduler.jobstores.base import JobLookupError
 
+from app import db
 from app.backup import push_backup
 from app.config import settings
 from app.investors import (
@@ -159,6 +160,7 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
 
     discord_msg = None
     error_reason = None
+    _executed_atomically = False
 
     async with investors_lock:
         investors = load_investors()
@@ -186,19 +188,34 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
                             date=date.today().isoformat(),
                         )
                     )
-                    save_investors(investors)
+                    if settings.use_sqlite:
+                        # Atomic: ledger + pending removal + audit commit together.
+                        with db.transaction():
+                            save_investors(investors)
+                            remove_pending_withdrawal(withdrawal_id)
+                            append_withdrawal_audit(
+                                withdrawal_id=record["id"], investor=record["investor"],
+                                amount=record["amount"], requested_at=record["requested_at"],
+                                run_at=record["run_at"], status="executed",
+                                completed_at=datetime.now(_CT).isoformat(),
+                            )
+                        _executed_atomically = True
+                    else:
+                        save_investors(investors)
+                        _executed_atomically = False
                 except Exception as exc:
                     log.exception(
-                        "execute_pending_withdrawal: save_investors failed for %s — no funds moved, marking failed",
+                        "execute_pending_withdrawal: atomic write failed for %s — no funds moved, marking failed",
                         withdrawal_id,
                     )
                     error_reason = f"Internal error while recording withdrawal: {exc}"
                     discord_msg = None
 
-    try:
-        remove_pending_withdrawal(withdrawal_id)
-    except Exception:
-        log.exception("execute_pending_withdrawal: failed to remove pending record %s after processing", withdrawal_id)
+    if not settings.use_sqlite:
+        try:
+            remove_pending_withdrawal(withdrawal_id)
+        except Exception:
+            log.exception("execute_pending_withdrawal: failed to remove pending record %s after processing", withdrawal_id)
 
     if error_reason:
         try:
@@ -217,17 +234,18 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
             log.exception("execute_pending_withdrawal: failed to send failure notification for %s", withdrawal_id)
         return
 
-    try:
-        append_withdrawal_audit(
-            withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
-            requested_at=record["requested_at"], run_at=record["run_at"],
-            status="executed", completed_at=datetime.now(_CT).isoformat(),
-        )
-    except Exception:
-        log.exception(
-            "execute_pending_withdrawal: withdrawal %s WAS EXECUTED (funds moved) but audit write failed — manual reconciliation needed",
-            withdrawal_id,
-        )
+    if not settings.use_sqlite:
+        try:
+            append_withdrawal_audit(
+                withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
+                requested_at=record["requested_at"], run_at=record["run_at"],
+                status="executed", completed_at=datetime.now(_CT).isoformat(),
+            )
+        except Exception:
+            log.exception(
+                "execute_pending_withdrawal: withdrawal %s WAS EXECUTED (funds moved) but audit write failed — manual reconciliation needed",
+                withdrawal_id,
+            )
 
     try:
         await notify_investors(discord_msg)
