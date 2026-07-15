@@ -160,7 +160,6 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
 
     discord_msg = None
     error_reason = None
-    _executed_atomically = False
 
     async with investors_lock:
         investors = load_investors()
@@ -199,13 +198,11 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
                                 run_at=record["run_at"], status="executed",
                                 completed_at=datetime.now(_CT).isoformat(),
                             )
-                        _executed_atomically = True
                     else:
                         save_investors(investors)
-                        _executed_atomically = False
                 except Exception as exc:
                     log.exception(
-                        "execute_pending_withdrawal: atomic write failed for %s — no funds moved, marking failed",
+                        "execute_pending_withdrawal: recording withdrawal failed for %s — no funds moved, marking failed",
                         withdrawal_id,
                     )
                     error_reason = f"Internal error while recording withdrawal: {exc}"
