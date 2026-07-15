@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS withdrawal_audit (
     extra_json    TEXT,
     created_at    TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS rh_deposits (
+    id     INTEGER PRIMARY KEY,
+    date   TEXT NOT NULL,
+    amount REAL NOT NULL
+);
 """
 
 
