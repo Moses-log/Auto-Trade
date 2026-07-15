@@ -38,6 +38,10 @@ def test_roundtrip_returns_identical_dataclasses(sqlite_env):
     loaded = investors.load_investors()
     assert investors.serialize_investors(loaded) == investors.serialize_investors(orig)
 
+    from app import db
+    assert db.get_conn().execute("SELECT COUNT(*) FROM deposits").fetchone()[0] == 3
+    assert db.get_conn().execute("SELECT COUNT(*) FROM withdrawals").fetchone()[0] == 1
+
 
 def test_deposit_order_preserved(sqlite_env):
     investors, _ = sqlite_env
@@ -49,6 +53,16 @@ def test_deposit_order_preserved(sqlite_env):
     investors.save_investors([inv])
     loaded = investors.load_investors()[0]
     assert [d.amount for d in loaded.deposits] == [1.0, 2.0, 3.0]
+
+
+def test_data_readable_from_sqlite_without_json_file(sqlite_env):
+    investors, tmp_path = sqlite_env
+    investors.save_investors([investors.Investor(
+        name="Eve", deposits=[investors.Deposit(amount=1.0, entry_spy=100.0, date="2025-01-01")])])
+    (tmp_path / "investors.json").unlink()   # remove the JSON export entirely
+    reloaded = investors.load_investors()     # must still work — DB is the source of truth
+    assert reloaded[0].name == "Eve"
+    assert reloaded[0].deposits[0].amount == 1.0
 
 
 def test_write_exports_json_snapshot(sqlite_env):
