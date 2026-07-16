@@ -1077,6 +1077,19 @@ All data files live on Render's persistent disk at `/data/`. They survive deploy
 | `visits.json` | `GET /public-visit-count` | Cumulative visitor count for kimiinvest.com displayed in the corner widget |
 | `kimi_trades.json` | Every SPY sell fill (auto) + `/run-backup` seed | Verified SPY round-trip history powering `/public-stats`. Seeded from repo on first deploy; auto-appended on every SPY sell. Also included in nightly Gist backup. |
 
+### Gist Backup Coverage
+
+The nightly Gist backup (`app/backup.py`, midnight ET + after every `/deposit`) pushes every **non-regenerable** file above to a private GitHub Gist:
+
+- `investors.json`, `pending_withdrawals.json`, `withdrawal_audit.json`, `rh_deposits.json` — the investor ledger (and, when `USE_SQLITE=true`, `kimi.db` itself as `kimi.db.base64`, after a WAL checkpoint so the snapshot is never stale)
+- `trade_record.json`, `rh_trade_record.json`, `leverage_entry.json`, `claude_portfolio.json` — trade/W-L/tax records
+- `claude_rebalance_log.json`, `claude_inspection_log.json` — the monthly rebalance and weekly Inspection audit logs (both feed the monthly decision review)
+- `rh_equity_history.json`, `kimi_trades.json`, `early_access.json`, `visits.json`, `rh_keep_alive_state.json` — historical/stat state
+
+**Deliberately excluded** (regenerable, ephemeral, or self-expiring, so backing them up buys nothing): `robinhood.pickle` (session expires; regenerate with `rh_login.py`), `idempotency.json` (5-min TTL cache), `rh_positions_cache.json` (rebuilt on next RH fetch), and `pending_orders.json` (short-lived, rescheduled from disk on restart).
+
+Recovery: JSON entries restore as-is; any entry ending in `.base64` (i.e. `kimi.db.base64`) must be base64-decoded and written without the suffix — see the docstring at the top of `app/backup.py` for a ready-to-run recovery snippet.
+
 ---
 
 ## P&L Reports
