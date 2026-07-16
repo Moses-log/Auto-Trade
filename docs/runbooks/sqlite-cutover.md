@@ -24,3 +24,10 @@
 - `/data/kimi.db` is the source of truth while `USE_SQLITE=true`; the JSON files are
   regenerated after every committed write and are safe to read but not to hand-edit.
 - Backups now include `kimi.db.base64` in the Gist alongside the JSON snapshots.
+
+### Restore from backup
+- The JSON files in the Gist are the primary recovery source — they are always
+  current (regenerated after every committed write), so restore from them first.
+- To restore the binary `kimi.db` as well: fetch the Gist, then decode the base64
+  entry back into the data dir:
+  `base64 -d kimi.db.base64 > /data/kimi.db`

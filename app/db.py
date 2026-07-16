@@ -90,6 +90,18 @@ def init_schema() -> None:
     get_conn().executescript(_SCHEMA)
 
 
+def checkpoint() -> None:
+    """Flush the WAL into the main db file so a raw-bytes copy of kimi.db is complete.
+    Safe no-op if no connection/db exists yet."""
+    global _conn
+    if _conn is None:
+        return
+    try:
+        _conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+    except Exception:
+        log.warning("db.checkpoint: wal_checkpoint failed", exc_info=True)
+
+
 def register_exporter(fn: Callable[[], None]) -> None:
     if fn not in _exporters:
         _exporters.append(fn)
@@ -109,6 +121,11 @@ def transaction():
     with _write_lock:
         conn = get_conn()
         token = _in_txn.set(True)
+        # Plain BEGIN (deferred) is safe here only because this process has a
+        # single shared connection serialized by _write_lock, with no `await`
+        # between BEGIN and COMMIT — nothing else can interleave a write. A
+        # future multi-worker deployment (e.g. gunicorn -w 2) would need
+        # BEGIN IMMEDIATE or per-process connections to stay safe.
         conn.execute("BEGIN")
         try:
             yield conn

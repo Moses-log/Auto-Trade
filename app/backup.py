@@ -13,10 +13,26 @@ Setup
 
 Recovery
 --------
+The JSON snapshots are the authoritative, always-current recovery source —
+restore from them first. `kimi.db.base64` is a convenience binary copy of the
+SQLite db; entries whose filename ends in `.base64` must be base64-DECODED
+and written WITHOUT the `.base64` suffix (e.g. `kimi.db.base64` -> `kimi.db`),
+while the plain JSON entries are written out as-is:
+
   curl -H "Authorization: token $GITHUB_GIST_TOKEN" \
        https://api.github.com/gists/$GITHUB_GIST_ID \
-       | python3 -c "import sys,json; d=json.load(sys.stdin)['files']; \
-         [open(k,'w').write(v['content']) for k,v in d.items()]"
+       | python3 -c "
+import sys, json, base64
+files = json.load(sys.stdin)['files']
+for name, f in files.items():
+    content = f['content']
+    if name.endswith('.base64'):
+        with open(name[:-len('.base64')], 'wb') as fh:
+            fh.write(base64.b64decode(content))
+    else:
+        with open(name, 'w') as fh:
+            fh.write(content)
+"
 """
 
 import base64
@@ -78,6 +94,11 @@ async def push_backup() -> dict:
     if settings.use_sqlite:
         db_path = Path(os.getenv("KIMI_DB_PATH", "/data/kimi.db"))
         if db_path.exists():
+            try:
+                from app import db as _db
+                _db.checkpoint()
+            except Exception:
+                log.warning("Backup: WAL checkpoint before db read failed", exc_info=True)
             try:
                 files["kimi.db.base64"] = {
                     "content": base64.b64encode(db_path.read_bytes()).decode("ascii")
