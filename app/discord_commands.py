@@ -385,6 +385,12 @@ async def handle_rebalance(token: str) -> None:
     await run_monthly_rebalance()
 
 
+async def handle_inspection(token: str) -> None:
+    await _edit_original(token, "🔍 **KIMI INSPECTION STARTED**\nReviewing current holdings — watch this channel for updates...")
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+
 async def handle_portfolio(token: str) -> None:
     await _edit_original(token, "📊 Generating portfolio snapshot — check the snapshot channel...")
     from app.portfolio_report import send_portfolio_snapshot
@@ -497,6 +503,8 @@ async def dispatch_command(command: str, options: dict, token: str) -> None:
             )
         elif command == "rebalance":
             await handle_rebalance(token=token)
+        elif command == "inspection":
+            await handle_inspection(token=token)
         elif command == "portfolio":
             await handle_portfolio(token=token)
         elif command == "tax":

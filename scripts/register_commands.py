@@ -229,6 +229,11 @@ COMMANDS: list = [
         "options": [],
     },
     {
+        "name": "inspection",
+        "description": "Trigger the weekly Kimi holdings inspection now",
+        "options": [],
+    },
+    {
         "name": "portfolio",
         "description": "Post a Robinhood portfolio pie chart with valuation ratings",
         "options": [],

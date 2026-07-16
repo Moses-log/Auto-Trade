@@ -603,9 +603,9 @@ REQUIRED OUTPUT FORMAT: end your response with a JSON block in exactly this form
   "no_changes": false,
   "trades": [
     {"action": "HOLD", "ticker": "MSFT"},
-    {"action": "SELL", "ticker": "NOW"},
-    {"action": "TRIM", "ticker": "NVDA", "target_weight_pct": 8},
-    {"action": "DOUBLE_DOWN", "ticker": "META", "target_weight_pct": 22}
+    {"action": "SELL", "ticker": "NOW", "reasoning": "Q3 guidance cut on softening RPO; growth thesis broken."},
+    {"action": "TRIM", "ticker": "NVDA", "target_weight_pct": 8, "reasoning": "Position ran to 14% of book; trimming back to target on valuation."},
+    {"action": "DOUBLE_DOWN", "ticker": "META", "target_weight_pct": 22, "reasoning": "Earnings beat + raised guide; original bear case on ad softness now resolved."}
   ]
 }
 ```
@@ -615,7 +615,8 @@ Rules for the JSON block:
 - action must be exactly "HOLD", "SELL", "TRIM", or "DOUBLE_DOWN" — never "BUY".
 - Every current holding must appear exactly once in "trades".
 - target_weight_pct is required for TRIM and DOUBLE_DOWN; omit for SELL and HOLD.
-- Do not include markdown, comments, or extra fields in the JSON block."""
+- reasoning is required for SELL, TRIM, and DOUBLE_DOWN — one or two sentences naming the specific trigger (earnings, guidance, news, macro, technical) that justifies acting. Omit for HOLD.
+- Do not include markdown, comments, or other extra fields in the JSON block."""
 
 
 def _call_claude_inspection_sync(user_message: str) -> str:
