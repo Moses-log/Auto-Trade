@@ -52,6 +52,7 @@ _GIST_API = "https://api.github.com/gists"
 _BACKUP_FILES: list[tuple[str, Path]] = [
     ("investors.json",            Path(os.getenv("INVESTORS_FILE",           "/data/investors.json"))),
     ("claude_rebalance_log.json", Path(os.getenv("REBALANCE_LOG_FILE",       "/data/claude_rebalance_log.json"))),
+    ("claude_inspection_log.json", Path(os.getenv("CLAUDE_INSPECTION_LOG_PATH", "/data/claude_inspection_log.json"))),
     ("rh_equity_history.json",    Path(os.getenv("RH_EQUITY_HISTORY_FILE",   "/data/rh_equity_history.json"))),
     ("rh_trade_record.json",      Path(os.getenv("RH_TRADE_RECORD_FILE",     "/data/rh_trade_record.json"))),
     ("claude_portfolio.json",     Path(os.getenv("CLAUDE_PORTFOLIO_FILE",    "/data/claude_portfolio.json"))),
