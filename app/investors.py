@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytz
 
+from app.config import settings
+
 log = logging.getLogger(__name__)
 
 # Serialises all load-modify-save sequences across async coroutines
@@ -43,7 +45,7 @@ class Investor:
     withdrawals: list[Withdrawal] = field(default_factory=list)
 
 
-def load_investors(path: Path = INVESTORS_FILE) -> list[Investor]:
+def _load_investors_json(path: Path = INVESTORS_FILE) -> list[Investor]:
     if not path.exists():
         if _REPO_FILE != path and _REPO_FILE.exists():
             try:
@@ -94,10 +96,70 @@ def serialize_investors(investors: list[Investor]) -> str:
     return json.dumps(data, indent=2)
 
 
-def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> None:
+def _save_investors_json(investors: list[Investor], path: Path = INVESTORS_FILE) -> None:
     tmp = path.with_suffix(".tmp")
     tmp.write_text(serialize_investors(investors), encoding="utf-8")
     tmp.replace(path)
+
+
+def _load_investors_sqlite() -> list[Investor]:
+    from app import db
+    conn = db.get_conn()
+    result: list[Investor] = []
+    for irow in conn.execute("SELECT id, name FROM investors ORDER BY id").fetchall():
+        deps = [
+            Deposit(amount=d["amount"], entry_spy=d["entry_spy"], date=d["date"])
+            for d in conn.execute(
+                "SELECT amount, entry_spy, date FROM deposits "
+                "WHERE investor_id=? ORDER BY seq", (irow["id"],)).fetchall()
+        ]
+        wds = [
+            Withdrawal(units=w["units"], exit_spy=w["exit_spy"], cost_basis=w["cost_basis"],
+                       proceeds=w["proceeds"], date=w["date"])
+            for w in conn.execute(
+                "SELECT units, exit_spy, cost_basis, proceeds, date FROM withdrawals "
+                "WHERE investor_id=? ORDER BY seq", (irow["id"],)).fetchall()
+        ]
+        result.append(Investor(name=irow["name"], deposits=deps, withdrawals=wds))
+    return result
+
+
+def _save_investors_sqlite(investors: list[Investor]) -> None:
+    from app import db
+    with db.writer() as conn:
+        conn.execute("DELETE FROM withdrawals")
+        conn.execute("DELETE FROM deposits")
+        conn.execute("DELETE FROM investors")
+        for inv in investors:
+            cur = conn.execute("INSERT INTO investors(name) VALUES(?)", (inv.name,))
+            iid = cur.lastrowid
+            for seq, d in enumerate(inv.deposits):
+                conn.execute(
+                    "INSERT INTO deposits(investor_id, amount, entry_spy, date, seq) "
+                    "VALUES(?,?,?,?,?)", (iid, d.amount, d.entry_spy, d.date, seq))
+            for seq, w in enumerate(inv.withdrawals):
+                conn.execute(
+                    "INSERT INTO withdrawals(investor_id, units, exit_spy, cost_basis, "
+                    "proceeds, date, seq) VALUES(?,?,?,?,?,?,?)",
+                    (iid, w.units, w.exit_spy, w.cost_basis, w.proceeds, w.date, seq))
+
+
+def _export_investors_json() -> None:
+    """Regenerate investors.json from the SQLite source of truth."""
+    _save_investors_json(_load_investors_sqlite())
+
+
+def load_investors(path: Path = INVESTORS_FILE) -> list[Investor]:
+    if settings.use_sqlite:
+        return _load_investors_sqlite()
+    return _load_investors_json(path)
+
+
+def save_investors(investors: list[Investor], path: Path = INVESTORS_FILE) -> None:
+    if settings.use_sqlite:
+        _save_investors_sqlite(investors)
+    else:
+        _save_investors_json(investors, path)
 
 
 def get_total_deposited(investor: Investor) -> float:
@@ -452,3 +514,11 @@ def format_discord_message(breakdown: InvestorBreakdown, date_str: str) -> str:
         f"**Overall P&L: {pnl_str}**",
     ]
     return "\n".join(lines)
+
+
+# Regenerate investors.json after every committed SQLite write batch.
+try:
+    from app import db as _db
+    _db.register_exporter(_export_investors_json)
+except Exception:  # pragma: no cover - db import optional in some tooling
+    pass
