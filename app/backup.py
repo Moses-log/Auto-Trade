@@ -19,6 +19,7 @@ Recovery
          [open(k,'w').write(v['content']) for k,v in d.items()]"
 """
 
+import base64
 import logging
 import os
 from pathlib import Path
@@ -72,6 +73,17 @@ async def push_backup() -> dict:
             files[name] = {"content": path.read_text(encoding="utf-8")}
         except Exception as exc:
             log.warning("Backup: could not read %s: %s", path, exc)
+
+    # Include the SQLite source-of-truth DB (binary → base64) when enabled.
+    if settings.use_sqlite:
+        db_path = Path(os.getenv("KIMI_DB_PATH", "/data/kimi.db"))
+        if db_path.exists():
+            try:
+                files["kimi.db.base64"] = {
+                    "content": base64.b64encode(db_path.read_bytes()).decode("ascii")
+                }
+            except Exception as exc:
+                log.warning("Backup: could not read %s: %s", db_path, exc)
 
     if not files:
         log.warning("Backup: no /data/ files found — nothing pushed to Gist")
