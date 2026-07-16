@@ -47,6 +47,7 @@ from app.investors import (
 from app.logging_config import setup_logging
 from app.models import AlertPayload, DepositRequest, WithdrawRequest, TradingAction
 from app.notifications import notify, close_http_client, notify_rh_session
+from app.sqlite_guard import ensure_sqlite_ready
 from app.rh_trade_notifier import notify_rh_trade
 from app.pnl import (
     ET,
@@ -112,6 +113,11 @@ async def lifespan(app: FastAPI):
         "TradingView → Alpaca webhook server starting",
         extra={"paper_trading": "paper" in settings.alpaca_base_url, "rh_enabled": settings.rh_enabled},
     )
+    # Settle the storage backend before anything reads/writes the ledger:
+    # creates the SQLite schema when USE_SQLITE is on, and falls back to JSON
+    # (with a CRITICAL alert) if the flag is on but the DB was never migrated.
+    log.info("Startup checkpoint: ensuring SQLite readiness")
+    await ensure_sqlite_ready()
     if settings.rh_enabled:
         log.info("Startup checkpoint: attempting Robinhood login")
         loop = asyncio.get_running_loop()
