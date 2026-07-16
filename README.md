@@ -357,6 +357,8 @@ On the **first trading day of each week** at **9:35 AM ET** — skipped on any w
 app/
 ├── main.py               # FastAPI app — all HTTP endpoints, app lifespan
 ├── config.py             # All settings via pydantic-settings (env vars / .env)
+├── db.py                 # SQLite backend — single WAL connection, transaction()/writer() unit-of-work, JSON exporter registry (active when USE_SQLITE=true)
+├── sqlite_guard.py       # Startup readiness guard — falls back to JSON + alerts if USE_SQLITE=true but the ledger was never migrated
 ├── models.py             # Pydantic models: AlertPayload, DepositRequest, WithdrawRequest, TradingAction
 ├── security.py           # Shared-secret webhook validation (constant-time hmac.compare_digest)
 ├── idempotency.py        # Duplicate-alert suppression — disk-backed TTL store
@@ -404,7 +406,10 @@ app/
     └── robinhood_client.py # Robinhood auth, session, fractional orders, dollar-amount buys, partial sells
 
 scripts/
-└── register_commands.py    # One-time: register all Discord slash commands via API
+├── register_commands.py    # One-time: register all Discord slash commands via API
+└── migrate_to_sqlite.py    # One-time cutover: copy the four JSON ledger stores into /data/kimi.db, verify to the cent, back up JSON
+
+rh_login.py               # Local helper — regenerate ~/.tokens/robinhood.pickle interactively (SMS prompt), then upload via upload_pickle.py
 ```
 
 ---
@@ -522,6 +527,13 @@ Uses the same `ANTHROPIC_API_KEY`, `CLAUDE_MANAGER_WEBHOOK_URL`, and `CLAUDE_SUB
 | `CLAUDE_REBALANCE_LOG_PATH` | `/data/claude_rebalance_log.json` |
 | `PENDING_WITHDRAWALS_PATH` | `/data/pending_withdrawals.json` |
 | `WITHDRAWAL_AUDIT_PATH` | `/data/withdrawal_audit.json` |
+| `KIMI_DB_PATH` | `/data/kimi.db` (SQLite ledger — only read when `USE_SQLITE=true`) |
+
+### Investor Ledger Backend (SQLite)
+
+| Variable | Default | Description |
+|---|---|---|
+| `USE_SQLITE` | `false` | When `true`, the four money-critical stores (`investors.json`, `pending_withdrawals.json`, `withdrawal_audit.json`, `rh_deposits.json`) are read/written from `/data/kimi.db` (SQLite, WAL) as the source of truth; the JSON files become derived exports regenerated after every committed write, so the Gist backup and JSON rollback still work. With the flag off, behavior is byte-identical to the old pure-JSON path. **Do not flip to `true` before running the migration** — see [Investor Ledger — SQLite Migration](#investor-ledger--sqlite-migration). |
 
 ### Other
 
@@ -1044,9 +1056,12 @@ Per position:
 
 All data files live on Render's persistent disk at `/data/`. They survive deploys and restarts.
 
+> **When `USE_SQLITE=true`:** `investors.json`, `pending_withdrawals.json`, `withdrawal_audit.json`, and `rh_deposits.json` are backed by `/data/kimi.db` (SQLite) as the source of truth. Those four JSON files are still written — regenerated as derived exports after every committed DB write — so everything below (and the nightly Gist backup) continues to work unchanged. See [Investor Ledger — SQLite Migration](#investor-ledger--sqlite-migration).
+
 | File | Updated by | Purpose |
 |---|---|---|
 | `robinhood.pickle` | Auth endpoints, keep-alive | RH session token |
+| `kimi.db` | Investor ledger writes (when `USE_SQLITE=true`) | SQLite source of truth for investors, deposits, withdrawals, pending withdrawals, audit log, and RH deposits — mirrored back out to the JSON files as exports |
 | `investors.json` | `/deposit`, `/withdraw` | Investor deposit lots + withdrawal history (immutable deposits, separate withdrawals list) |
 | `trade_record.json` | Every Alpaca sell | Alpaca win/loss record |
 | `rh_trade_record.json` | Every RH sell (all strategies) | Robinhood win/loss + tax record |
@@ -1152,6 +1167,34 @@ If the scheduled job can't fetch a live SPY price when it fires, it automaticall
 
 ---
 
+## Investor Ledger — SQLite Migration
+
+The four money-critical stores — `investors.json`, `pending_withdrawals.json`, `withdrawal_audit.json`, `rh_deposits.json` — can be backed by a single SQLite database (`/data/kimi.db`) instead of loose JSON files. This is gated behind the `USE_SQLITE` env var (default `false`).
+
+**Why:** a single withdrawal touches multiple files (ledger + pending + audit). With JSON, there's no way to make those writes atomic — a crash between them leaves the ledger inconsistent. SQLite gives a real transaction: `execute_pending_withdrawal` wraps the ledger update, the pending-record removal, and the audit append in one `db.transaction()`, so it's all-or-nothing.
+
+**How it works when `USE_SQLITE=true`:**
+- `app/db.py` holds a single WAL-mode connection with `PRAGMA foreign_keys=ON`, plus a `transaction()` / `writer()` unit-of-work and an exporter registry.
+- SQLite is the **source of truth**. After every committed write, the affected JSON file is regenerated as a **derived export** — so the nightly Gist backup, the JSON-based rollback, and anything else that reads those files keep working with zero changes.
+- The Gist backup additionally includes a base64 copy of `kimi.db` itself (after a `wal_checkpoint(TRUNCATE)` so the snapshot is never stale).
+- With the flag **off**, behavior is byte-identical to the old pure-JSON path — none of the SQLite code runs.
+
+**Startup guard (`app/sqlite_guard.py`):** runs once at the top of the app lifespan.
+- It always calls `init_schema()` (idempotent) so a migrated or genuinely-fresh system never throws "no such table".
+- If `USE_SQLITE=true` but the ledger is empty **while `investors.json` still has investors** — i.e. the flag was flipped before the migration ran — it falls back to JSON for that process (`settings.use_sqlite=False`, no data touched) and fires a CRITICAL Discord alert telling you to run the migration. Any unexpected error in the check also falls back. It never crashes startup and never clobbers JSON.
+
+**Cutover procedure:**
+1. Deploy with `USE_SQLITE=false` (the guard is a no-op in this state — safe).
+2. In the Render shell, run `python -m scripts.migrate_to_sqlite`. It copies all four stores into `/data/kimi.db`, backs the JSON up to `/data/backup_pre_sqlite/`, and runs `verify_migration()`, which compares every field plus `compute_breakdown` **to the cent** and aborts on any mismatch.
+3. Confirm the `✅ VERIFIED` line in the output. Do not proceed without it.
+4. Set `USE_SQLITE=true` and redeploy.
+
+**Rollback:** set `USE_SQLITE=false` and redeploy. Because the JSON exports stay current on every write, this is lossless — the JSON files are always a faithful mirror of the DB.
+
+Discord slash commands, HTTP endpoints, and scheduler jobs were **not** changed — only the persistence layer underneath them.
+
+---
+
 ## Win/Loss Record
 
 Three separate records updated on every sell:
@@ -1190,14 +1233,17 @@ Same flow, but the pending entry has `broker="claude_sell"` and resolves via `no
 
 Robinhood requires SMS 2FA. The session token is stored at `/data/robinhood.pickle` and auto-refreshed on a randomized schedule every 1–2 days at a random time between 1:00–4:59 AM ET.
 
-**First-time setup:**
+**First-time setup / manual re-auth:**
 ```powershell
-# Step 1 — Generate pickle locally
-py -c "import robin_stocks.robinhood as r; r.login('YOUR_EMAIL', 'YOUR_PASSWORD', store_session=True)"
+# Step 1 — Generate a fresh session pickle locally (prompts for email, password,
+#          and the SMS/MFA code; verifies the session with load_account_profile).
+py rh_login.py
 
-# Step 2 — Upload to Render
+# Step 2 — Upload it to Render (watch Discord for "📦 ROBINHOOD SESSION RESTORED")
 py upload_pickle.py
 ```
+
+`rh_login.py` must be run in your own terminal, not through an automated tool, because Robinhood prompts for the SMS/MFA code interactively. It writes `~/.tokens/robinhood.pickle` and confirms the session works for data calls before you upload — the same verification the server does on `login_from_pickle`, which is what prevents the "connected but `/portfolio` shows no positions" split-brain (an `available=True` flag on a session that can't actually make data calls).
 
 **Session expiry** — re-run the two steps above, or:
 ```bash
@@ -1263,6 +1309,17 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Investor ledger migrated to SQLite (July 15, 2026)
+
+| Change | Details |
+|---|---|
+| **What** | The four money-critical stores — `investors.json`, `pending_withdrawals.json`, `withdrawal_audit.json`, `rh_deposits.json` — now live in a single SQLite database at `/data/kimi.db`, gated behind the new `USE_SQLITE` env var (default `false`). When on, SQLite is the source of truth and the JSON files become derived exports, regenerated after every committed write so the Gist backup and JSON rollback keep working unchanged. |
+| **Why** | JSON read-modify-write of the whole ledger on every deposit/withdrawal has no transactional guarantee across the multiple files a single withdrawal touches. SQLite gives atomic multi-store writes: `execute_pending_withdrawal` wraps the ledger update + pending-removal + audit append in one `db.transaction()` — all-or-nothing. |
+| **New modules** | `app/db.py` (single WAL connection, `transaction()`/`writer()` unit-of-work, JSON exporter registry), `app/sqlite_guard.py` (startup readiness guard), `scripts/migrate_to_sqlite.py` (one-time cutover with cent-level verification). No Discord command, endpoint, or scheduler behavior changed — only the persistence layer. |
+| **Startup guard** | `sqlite_guard.ensure_sqlite_ready()` runs at the top of the app lifespan. If `USE_SQLITE=true` but the ledger was never migrated (SQLite empty while `investors.json` still has data), it falls back to JSON for that process and fires a CRITICAL Discord alert instead of clobbering data or crashing — makes flipping the flag foolproof. |
+| **Cutover** | Deploy with the flag off → run `python -m scripts.migrate_to_sqlite` in the Render shell → confirm the `✅ VERIFIED` line (it compares every field + `compute_breakdown` to the cent and aborts on mismatch) → set `USE_SQLITE=true` and redeploy. **Rollback = set `USE_SQLITE=false`** — the JSON exports stay current, so it's lossless. See [Investor Ledger — SQLite Migration](#investor-ledger--sqlite-migration). |
+| **RH session helper** | Added `rh_login.py` — a local helper that regenerates a fresh `~/.tokens/robinhood.pickle` interactively (SMS/MFA prompt) and verifies it with `load_account_profile` before you `py upload_pickle.py`. This is the reliable fix for the "RH connected but `/portfolio` shows no positions" split-brain. See [Robinhood Session Setup](#robinhood-session-setup). |
 
 ### Code-enforced risk guardrails (July 14, 2026)
 
