@@ -144,7 +144,10 @@ def writer():
 
 
 def reset_for_tests() -> None:
-    """Close and forget the connection (tests repoint KIMI_DB_PATH)."""
+    """Close and forget the connection (tests repoint KIMI_DB_PATH), and clear
+    the exporter registry so stale exporters from a previous test (bound to
+    that test's tmp paths/db) don't linger and run against the next test's
+    state. Production code never calls this."""
     global _conn
     if _conn is not None:
         try:
@@ -152,3 +155,4 @@ def reset_for_tests() -> None:
         except Exception:
             pass
     _conn = None
+    _exporters.clear()
