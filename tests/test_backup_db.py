@@ -8,7 +8,6 @@ import pytest
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("KIMI_DB_PATH", str(tmp_path / "kimi.db"))
     import app.config as config
-    importlib.reload(config)
     monkeypatch.setattr(config.settings, "use_sqlite", True)
     (tmp_path / "kimi.db").write_bytes(b"SQLITE_FAKE_BINARY_\x00\x01\x02")
     import app.backup as backup

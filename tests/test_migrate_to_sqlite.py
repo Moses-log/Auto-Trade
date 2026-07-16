@@ -24,7 +24,6 @@ def env(tmp_path, monkeypatch):
     # already reset above) -> store modules (re-register exporters against
     # the freshly-reset db and this test's tmp paths).
     import app.config as config
-    importlib.reload(config)
     importlib.reload(db)
 
     import app.investors as investors

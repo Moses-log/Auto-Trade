@@ -11,7 +11,6 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("PENDING_WITHDRAWALS_PATH", str(tmp_path / "pending.json"))
     monkeypatch.setenv("WITHDRAWAL_AUDIT_PATH", str(tmp_path / "audit.json"))
     import app.config as config
-    importlib.reload(config)
     monkeypatch.setattr(config.settings, "use_sqlite", True)
     import app.db as db
     importlib.reload(db)

@@ -18,7 +18,6 @@ def test_breakdown_identical_across_backends(tmp_path, monkeypatch):
     # JSON backend
     monkeypatch.setenv("INVESTORS_PATH", str(tmp_path / "investors.json"))
     import app.config as config
-    importlib.reload(config)
     monkeypatch.setattr(config.settings, "use_sqlite", False)
     import app.investors as inv_json
     importlib.reload(inv_json)

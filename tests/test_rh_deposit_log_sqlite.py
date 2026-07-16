@@ -9,7 +9,6 @@ def sqlite_env(tmp_path, monkeypatch):
     monkeypatch.setenv("KIMI_DB_PATH", str(tmp_path / "kimi.db"))
     monkeypatch.setenv("RH_DEPOSIT_LOG_PATH", str(tmp_path / "rh_deposits.json"))
     import app.config as config
-    importlib.reload(config)
     monkeypatch.setattr(config.settings, "use_sqlite", True)
     import app.db as db
     importlib.reload(db)
