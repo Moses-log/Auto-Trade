@@ -22,6 +22,7 @@ from app.claude_manager import (
     annotate_and_collect_gaps, format_data_gap_field,
 )
 from app.claude_manager import _trade_embed, _field, _CLR_RED, notify_claude_pending_sell_fill
+from app.claude_manager import _realized_sell_proceeds
 from app.claude_portfolio import open_position, close_position, trim_position, get_record
 from app.notifications import notify_claude_manager_embed, notify_claude_signal_feed
 from app.trading.robinhood_client import rh_client
@@ -271,13 +272,6 @@ async def run_weekly_inspection() -> None:
                 run_dt.isoformat(), broker="claude_sell", qty=qty_sold, source="manager",
             )
 
-        # DOUBLE_DOWN is funded by real cash plus the proceeds of SELL/TRIM that
-        # actually execute this run — each credited to the budget as it completes
-        # below. A queued after-hours sell still counts (its proceeds are expected
-        # to settle), but a skipped or failed sell contributes nothing, so phantom
-        # proceeds can never over-size a same-run buy.
-        available_budget = buying_power
-
         # ── Phase 1: SELL ────────────────────────────────────────────────────
         for trade in (t for t in pending_trades if t["action"] == "SELL"):
             ticker = trade["ticker"].upper()
@@ -313,7 +307,6 @@ async def run_weekly_inspection() -> None:
             fill = result.get("fill_price") or result.get("price_est")
             queued = result.get("queued", False)
             entry_px = pos.get("avg_entry_price", 0.0)
-            available_budget += qty * (fill or 0.0)  # credit realized/queued proceeds
 
             _, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
 
@@ -401,7 +394,6 @@ async def run_weekly_inspection() -> None:
             fill = result.get("fill_price") or result.get("price_est")
             queued = result.get("queued", False)
             entry_px = pos.get("avg_entry_price", 0.0)
-            available_budget += qty_sold * (fill or 0.0)  # credit realized/queued proceeds
 
             _, dollar_pnl, pct_pnl = trim_position(ticker, qty_sold, fill or 0.0)
 
@@ -448,7 +440,10 @@ async def run_weekly_inspection() -> None:
                     f"→ target {target_wt}% · {_timestamp()}"
                 )
 
-        # ── Phase 3: DOUBLE_DOWN — funded by buying_power + expected_sell_proceeds ─
+        # ── Phase 3: DOUBLE_DOWN — funded by real cash + realized sell/trim proceeds ─
+        # Budget is derived from the sells/trims that actually executed above, so a
+        # skipped/failed sell never inflates it (shared with the monthly rebalance).
+        available_budget = buying_power + _realized_sell_proceeds(log_entry["trades_executed"])
         for trade in (t for t in pending_trades if t["action"] == "DOUBLE_DOWN"):
             ticker = trade["ticker"].upper()
             reasoning = trade.get("reasoning", "")

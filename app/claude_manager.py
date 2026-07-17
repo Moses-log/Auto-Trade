@@ -112,6 +112,22 @@ def _section_ticker(section: str) -> str:
             return first_word.upper()
     return ""
 
+
+def _realized_sell_proceeds(executed_trades: list) -> float:
+    """Cash actually raised by the SELL/TRIM trades that executed this run.
+
+    Only executed trades are recorded in log_entry["trades_executed"], so a
+    proposed sell that skipped or failed contributes nothing — a same-run buy
+    can never be funded by proceeds that never materialized. Queued after-hours
+    sells store their estimated fill as fill_price, so they still count (their
+    proceeds are expected to settle by market open). Shared by the monthly
+    rebalance and the weekly Inspection so both fund buys the same way."""
+    return sum(
+        (t.get("qty") or 0.0) * (t.get("fill_price") or 0.0)
+        for t in executed_trades
+        if t.get("action") in ("SELL", "TRIM")
+    )
+
 _SYSTEM_PROMPT = """You are an institutional-grade portfolio manager whose objective is to outperform the S&P 500 over rolling 3-, 5-, and 10-year periods by identifying the companies most likely to dominate the future economy.
 
 ========================
@@ -1186,23 +1202,6 @@ async def run_monthly_rebalance() -> None:
                 run_dt.isoformat(), broker="claude_sell", qty=qty_sold, source="manager",
             )
 
-        # Pre-calculate expected sell proceeds so buys can be funded even when
-        # sells are queued after-hours. SELL = full position; TRIM = only the
-        # portion being sold (full position value − target value).
-        expected_sell_proceeds = 0.0
-        for _t in trades:
-            _action = _t["action"]
-            _tk = _t["ticker"].upper()
-            _pos = next((p for p in positions if p["symbol"] == _tk), None)
-            if _pos is None:
-                continue
-            _pos_val = _pos["qty"] * _pos.get("current_price", 0)
-            if _action == "SELL":
-                expected_sell_proceeds += _pos_val
-            elif _action == "TRIM":
-                _target_val = portfolio_value * _t.get("target_weight_pct", 5) / 100
-                expected_sell_proceeds += max(0.0, _pos_val - _target_val)
-
         # ── 5. Execute full sells first ───────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "SELL"):
             ticker = trade["ticker"].upper()
@@ -1403,7 +1402,9 @@ async def run_monthly_rebalance() -> None:
                 ))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
-        available_budget = buying_power + expected_sell_proceeds
+        # Fund buys from real cash plus the proceeds of the sells/trims that
+        # actually executed above — never from proposed-but-skipped sells.
+        available_budget = buying_power + _realized_sell_proceeds(log_entry["trades_executed"])
 
         # Build a lookup of current position values for delta-buy calculation
         current_values = {pos["symbol"]: pos["qty"] * pos.get("current_price", 0) for pos in positions}
