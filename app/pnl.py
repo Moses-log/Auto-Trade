@@ -94,43 +94,101 @@ def _deposit_events() -> list[tuple[str, float]]:
     return get_alpaca_deposit_events()
 
 
+_DEPOSIT_ALIGN_WINDOW_DAYS = 5  # how far a recorded deposit date may lag/lead its equity bar
+
+
+def _align_deposits_to_equity(
+    equity: list,
+    timestamps: list,
+    deposit_events: list[tuple[str, float]],
+) -> dict:
+    """Map each deposit to the equity-bar *index* where its cash actually lands.
+
+    A deposit's recorded date is when /deposit was run (or the API's settlement
+    date), which can lag or lead the bar where the cash first shows up in the
+    Alpaca equity series. Subtracting on the recorded bar instead of the jump
+    bar leaves a one-bar spike (recorded late) or dip (recorded early). So for
+    each deposit we search bars within +/- a few days of the recorded date and
+    pick the positive bar-over-bar jump closest in size to the deposit amount —
+    the bar where the cash demonstrably appears. Each bar is claimed at most
+    once. Returns {bar_index: total_amount_to_start_subtracting_there}.
+    """
+    from collections import defaultdict
+    by_index: dict = defaultdict(float)
+    bar_dates = [
+        datetime.fromtimestamp(ts, tz=ET).date() if ts is not None else None
+        for ts in timestamps
+    ]
+    used: set = set()
+    for date_str, amt in sorted(deposit_events):
+        try:
+            d = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        best_i, best_err = None, None
+        for i in range(1, len(equity)):
+            if i in used or bar_dates[i] is None:
+                continue
+            if abs((bar_dates[i] - d).days) > _DEPOSIT_ALIGN_WINDOW_DAYS:
+                continue
+            if equity[i] is None or equity[i - 1] is None:
+                continue
+            jump = equity[i] - equity[i - 1]
+            if jump <= 0:
+                continue
+            err = abs(jump - amt)
+            if best_err is None or err < best_err:
+                best_err, best_i = err, i
+        if best_i is None:
+            # No matching jump — fall back to the first bar on/after the recorded
+            # date *within the window*. Staying inside the window is essential:
+            # a deposit that predates this report's series is already baked into
+            # the baseline and must NOT be subtracted (otherwise a daily report
+            # would strip out months-old deposits). Out-of-window deposits find
+            # no bar here and are correctly skipped.
+            best_i = next(
+                (i for i in range(1, len(equity))
+                 if bar_dates[i] is not None and i not in used
+                 and 0 <= (bar_dates[i] - d).days <= _DEPOSIT_ALIGN_WINDOW_DAYS),
+                None,
+            )
+        if best_i is not None:
+            by_index[best_i] += amt
+            used.add(best_i)
+    return by_index
+
+
 def deposit_adjusted_equity(
     equity: list,
     timestamps: list,
     deposit_events: list[tuple[str, float]],
 ) -> list:
-    """Return equity series with cumulative post-start deposits subtracted.
+    """Return the equity series with external cash deposits subtracted out, so
+    the curve reflects only trading performance.
 
-    Uses explicit deposit_events when available (e.g. from Alpaca activities API).
-    Falls back to auto-detection: any bar-over-bar equity increase >20% is far too
-    large to be a trading gain and is treated as an external capital injection.
-    Each detected deposit date is counted once even in minute-granularity series.
+    Explicit deposit_events (from the investor ledger or the Alpaca activities
+    API) are aligned to the equity bar where the cash actually appears — see
+    _align_deposits_to_equity — which is robust to the recorded date lagging or
+    leading that bar. With no events, falls back to auto-detection: any
+    bar-over-bar increase >20% is far too large to be a trading gain and is
+    treated as a capital injection at that bar.
     """
     from collections import defaultdict
-    by_date: dict[str, float] = defaultdict(float)
-
     if deposit_events:
-        for dt, amt in deposit_events:
-            by_date[dt] += amt
+        by_index = _align_deposits_to_equity(equity, timestamps, deposit_events)
     else:
-        # Auto-detect: flag equity jumps too large to be trading gains as deposits
+        by_index = defaultdict(float)
         for i in range(1, len(equity)):
             prev_eq, curr_eq = equity[i - 1], equity[i]
             if prev_eq is None or curr_eq is None or prev_eq <= 0:
                 continue
             if (curr_eq - prev_eq) / prev_eq > 0.20:
-                date_str = datetime.fromtimestamp(timestamps[i], tz=ET).strftime("%Y-%m-%d")
-                by_date[date_str] += prev_eq * ((curr_eq - prev_eq) / prev_eq)
+                by_index[i] += curr_eq - prev_eq
 
     result = []
     cumulative = 0.0
-    seen_dates: set[str] = set()
-    for i, (eq, ts) in enumerate(zip(equity, timestamps)):
-        if i > 0:
-            date_str = datetime.fromtimestamp(ts, tz=ET).strftime("%Y-%m-%d")
-            if date_str not in seen_dates:
-                cumulative += by_date.get(date_str, 0.0)
-                seen_dates.add(date_str)
+    for i, eq in enumerate(equity):
+        cumulative += by_index.get(i, 0.0)
         result.append((eq - cumulative) if eq is not None else None)
     return result
 
