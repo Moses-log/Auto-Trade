@@ -340,14 +340,44 @@ Every Friday at 4:00 PM ET (and via `/portfolio` slash command), the system:
 On the **first trading day of each week** at **9:35 AM ET** — skipped on any week that coincides with the monthly rebalance — the system runs a lighter, holdings-only check-in between Kimi Portfolio Manager's monthly rebalances:
 
 1. Fetches current RH positions only — **no new candidate screening**. Each holding gets the same critical-metric **data-gap** check as the monthly rebalance (missing metrics tagged inline for Claude + a standalone Discord alert when any gap exists)
-2. Loads the most recent thesis per ticker (from the last monthly rebalance's research, or a more recent weekly Inspection note if one exists)
+2. Loads each holding's **Living Thesis** — the last monthly rebalance's full 5-section research *anchor*, plus any dated Inspection updates layered on since (see [Living Thesis](#living-thesis--the-shared-memory-between-rebalance-and-inspection) below)
 3. Calls **claude-opus-4-8** via a lighter agentic loop (up to 30 turns, 8,000-token responses, up to **15 live searches** — about half the monthly rebalance's budget) asking only: has anything material happened to this holding in the last 7 days?
 4. Defaults to **HOLD** unless there's a specific, nameable trigger — earnings surprise, guidance change, major company-specific news, a macro shock tied to the name, or a meaningful technical breakdown. Routine price noise is not a trigger.
 5. Can act immediately with three trade actions — **SELL** (close the position), **TRIM** (reduce to a lower target weight, same 1-share-minimum rule as the monthly rebalance), or **DOUBLE_DOWN** (add to an existing position with elevated conviction)
 6. **Never opens a new position.** BUY is disallowed in the prompt *and* rejected in code — a response containing a BUY anywhere has its entire trade block discarded, nothing executes
 7. **Same risk guardrails as the monthly rebalance** (`app/risk_guardrails.py`): a DOUBLE_DOWN/TRIM over 25% is hard-clamped to 25% before execution, and a `⚠️ RISK GUARDRAIL` alert fires if a sector would exceed 50% post-trade
 8. Posts full analysis + every trade to Discord (`CLAUDE_MANAGER_WEBHOOK_URL`); posts an actioned-holdings-only summary to the paid subscriber channel (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`); realized SELL/TRIM P&L is recorded to the same win/loss ledger the monthly rebalance uses
-8. Audit log saved to `/data/claude_inspection_log.json` (separate file from the monthly rebalance's log). The next monthly rebalance reads recent Inspection activity as part of its own history context, so it builds on what Inspection already decided instead of re-deriving a thesis
+9. Audit log saved to `/data/claude_inspection_log.json` (separate file from the monthly rebalance's log). The next monthly rebalance reads recent Inspection activity as part of its own history context, so it builds on what Inspection already decided instead of re-deriving a thesis
+
+Can also be triggered on-demand via the `/inspection` Discord slash command.
+
+---
+
+### Living Thesis — the shared memory between rebalance and Inspection
+
+Kimi Portfolio Manager (monthly) and Kimi Inspection (weekly) reason over the **same evolving thesis** for each holding, so the two loops build on one another instead of each starting cold. That shared memory is the **Living Thesis**, assembled per ticker in `_build_prior_thesis_map` (`app/claude_inspection.py`).
+
+**The anchor.** Every monthly rebalance writes a durable, per-ticker *anchor thesis* — the full 5-section research (Foundation, Valuation/Rule of 40, Bear Case, Technicals, Verdict) — to `/data/claude_rebalance_log.json`. This is the "why we own this," and it stands until the next rebalance rewrites it.
+
+**The deltas.** Each weekly Inspection that *acts* on a holding (SELL / TRIM / DOUBLE_DOWN) records a one-line, dated reasoning note to `/data/claude_inspection_log.json`. Those notes are layered *beneath* the anchor as an `Updates since last rebalance:` log — they **never replace** it. A HOLD records no note, so a quietly-held stock keeps its full anchor untouched.
+
+**What Inspection sees each week.** For every current holding, the Living Thesis is reconstructed as the most recent rebalance anchor followed by the most recent Inspection updates (oldest → newest), capped at the last **4 per ticker** (`_MAX_THESIS_DELTAS` — roughly one rebalance cycle of weekly checks, so no in-cycle update is dropped before the next rebalance folds it in). Inspection then delta-checks against that combined thesis: *has anything material changed since this?* Notes logged before or during the anchor rebalance are stale and ignored, so a fresh rebalance always wins over an older note.
+
+**What the next rebalance sees.** The following monthly rebalance loads the full prior 5-section research **plus** a summary of every Inspection action taken since — so it explicitly builds on (and can revise) what Inspection already decided, then writes a **fresh anchor** that absorbs all of it. The cycle then resets: the new anchor supersedes the old, and post-rebalance Inspection notes begin a new delta log.
+
+**On sells and re-entry.** Nothing is deleted when a stock is sold — the logs are append-only (Inspection capped at the last 36 runs). But a sold stock drops out of Inspection's review (Inspection only looks at current holdings), so its thesis simply stops surfacing. If it is later re-bought via a rebalance, that rebalance writes a brand-new anchor and the Living Thesis self-heals — it never resurrects stale notes from the stock's previous life.
+
+Example of the assembled thesis Inspection receives for a holding it has acted on twice since the last rebalance:
+
+```
+## NVDA — NVIDIA Corp
+Dominant AI-infra moat; Rule of 40: 82. Bull: data-center demand. Bear: China export risk.
+  ...full 5-section anchor research...
+
+Updates since last rebalance:
+  • 2026-07-08: DOUBLE_DOWN → 20%: Blackwell ramp ahead of schedule, bear case on supply eased.
+  • 2026-07-15: TRIM → 16%: position ran to 22% of book on the rally, trimming to target.
+```
 
 ---
 
