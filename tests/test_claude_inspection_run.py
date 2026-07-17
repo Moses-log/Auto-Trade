@@ -585,6 +585,116 @@ async def test_trim_explicit_null_target_weight_pct_is_skipped_not_crashed(
 @patch("app.claude_inspection._append_inspection_log")
 @patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
 @patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection.open_position")
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_skipped_sell_does_not_inflate_double_down_budget(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_open_position, mock_notify_private, mock_notify_public, mock_log,
+):
+    """A SELL that skips (no position) must NOT contribute phantom proceeds to
+    a same-run DOUBLE_DOWN's budget — the buy is sized against real cash only."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[
+            {"symbol": "NVDA", "qty": 1.0, "avg_entry_price": 80.0,
+             "current_price": 100.0, "unrealized_pl": 20.0, "unrealized_plpc": 25.0},
+            {"symbol": "ARM", "qty": 10.0, "avg_entry_price": 150.0,
+             "current_price": 200.0, "unrealized_pl": 500.0, "unrealized_plpc": 33.3},
+        ]
+    )
+    mock_rh.get_buying_power_async = AsyncMock(return_value=500.0)
+    # The ARM SELL skips — no proceeds actually materialize.
+    mock_rh.close_ticker_async = AsyncMock(
+        return_value={"status": "error", "note": "no open position to close"}
+    )
+    mock_rh.buy_dollars_async = AsyncMock(
+        return_value={"status": "ok", "qty": 1.0, "fill_price": 100.0}
+    )
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [
+            {"action": "SELL", "ticker": "ARM", "reasoning": "thesis broken"},
+            {"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 25,
+             "reasoning": "still bullish"},
+        ],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    # portfolio_value = 100 (NVDA) + 2000 (ARM) + 500 cash = 2600; NVDA target 25%
+    # = 650, delta = 550. Real budget is 500 only (ARM sell skipped), so the buy
+    # is capped at 500 * 0.95 = 475 — NOT 550 funded by phantom ARM cash.
+    mock_rh.buy_dollars_async.assert_awaited_once_with("NVDA", 475.0)
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.rh_trade_record.record_rh_trade", new_callable=AsyncMock)
+@patch("app.claude_inspection.get_record", return_value=(5, 2))
+@patch("app.claude_inspection.open_position")
+@patch("app.claude_inspection.close_position", return_value=(0.0, 500.0, 33.3))
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_executed_sell_proceeds_still_fund_double_down(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_close_position, mock_open_position, mock_get_record,
+    mock_record_rh_trade, mock_notify_private, mock_notify_public, mock_log,
+):
+    """Guard against over-correction: a SELL that actually executes must still
+    credit its proceeds so a same-run DOUBLE_DOWN can be funded by them."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[
+            {"symbol": "NVDA", "qty": 1.0, "avg_entry_price": 80.0,
+             "current_price": 100.0, "unrealized_pl": 20.0, "unrealized_plpc": 25.0},
+            {"symbol": "ARM", "qty": 10.0, "avg_entry_price": 150.0,
+             "current_price": 200.0, "unrealized_pl": 500.0, "unrealized_plpc": 33.3},
+        ]
+    )
+    mock_rh.get_buying_power_async = AsyncMock(return_value=100.0)
+    # The ARM SELL fills immediately for 10 * $200 = $2000 of proceeds.
+    mock_rh.close_ticker_async = AsyncMock(
+        return_value={"status": "ok", "qty": 10.0, "fill_price": 200.0, "queued": False}
+    )
+    mock_rh.buy_dollars_async = AsyncMock(
+        return_value={"status": "ok", "qty": 4.5, "fill_price": 100.0}
+    )
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [
+            {"action": "SELL", "ticker": "ARM", "reasoning": "thesis broken"},
+            {"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 25,
+             "reasoning": "still bullish"},
+        ],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    # portfolio_value = 100 + 2000 + 100 = 2200; NVDA target 25% = 550, delta = 450.
+    # Budget = 100 cash + 2000 realized ARM proceeds = 2100; 2100*0.95 = 1995 >= 450,
+    # so the full 450 delta is invested — the executed sell funded it.
+    mock_rh.buy_dollars_async.assert_awaited_once_with("NVDA", 450.0)
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
 @patch("app.claude_inspection._parse_inspection_trade_block")
 @patch("app.claude_inspection._call_claude_inspection_sync")
 @patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])

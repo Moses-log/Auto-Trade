@@ -271,21 +271,12 @@ async def run_weekly_inspection() -> None:
                 run_dt.isoformat(), broker="claude_sell", qty=qty_sold, source="manager",
             )
 
-        # Pre-calculate expected sell proceeds so a same-run DOUBLE_DOWN can be
-        # funded even when a SELL/TRIM queues after-hours instead of filling
-        # immediately — mirrors claude_manager's phased sell-then-buy funding.
-        expected_sell_proceeds = 0.0
-        for _t in pending_trades:
-            _pos = position_by_ticker.get(_t["ticker"].upper())
-            if _pos is None:
-                continue
-            _pos_val = _pos["qty"] * _pos.get("current_price", 0)
-            if _t["action"] == "SELL":
-                expected_sell_proceeds += _pos_val
-            elif _t["action"] == "TRIM" and _t.get("target_weight_pct") is not None:
-                _target_val = portfolio_value * _t["target_weight_pct"] / 100
-                expected_sell_proceeds += max(0.0, _pos_val - _target_val)
-        available_budget = buying_power + expected_sell_proceeds
+        # DOUBLE_DOWN is funded by real cash plus the proceeds of SELL/TRIM that
+        # actually execute this run — each credited to the budget as it completes
+        # below. A queued after-hours sell still counts (its proceeds are expected
+        # to settle), but a skipped or failed sell contributes nothing, so phantom
+        # proceeds can never over-size a same-run buy.
+        available_budget = buying_power
 
         # ── Phase 1: SELL ────────────────────────────────────────────────────
         for trade in (t for t in pending_trades if t["action"] == "SELL"):
@@ -322,6 +313,7 @@ async def run_weekly_inspection() -> None:
             fill = result.get("fill_price") or result.get("price_est")
             queued = result.get("queued", False)
             entry_px = pos.get("avg_entry_price", 0.0)
+            available_budget += qty * (fill or 0.0)  # credit realized/queued proceeds
 
             _, dollar_pnl, pct_pnl = close_position(ticker, fill or 0.0)
 
@@ -409,6 +401,7 @@ async def run_weekly_inspection() -> None:
             fill = result.get("fill_price") or result.get("price_est")
             queued = result.get("queued", False)
             entry_px = pos.get("avg_entry_price", 0.0)
+            available_budget += qty_sold * (fill or 0.0)  # credit realized/queued proceeds
 
             _, dollar_pnl, pct_pnl = trim_position(ticker, qty_sold, fill or 0.0)
 
