@@ -942,7 +942,7 @@ async def run_monthly_rebalance() -> None:
         spy_fv_task = loop.run_in_executor(None, _fetch_technical_data, "SPY")
 
         all_results = await asyncio.gather(
-            *yf_tasks, *fv_tasks, spy_task, spy_fv_task, fetch_macro_context(),
+            *yf_tasks, *fv_tasks, spy_task, spy_fv_task, fetch_macro_context(include_geopolitical=True),
             return_exceptions=True,
         )
         n           = len(positions)
@@ -998,6 +998,7 @@ async def run_monthly_rebalance() -> None:
         data_gaps_by_ticker = annotate_and_collect_gaps(enriched)
         log_entry["positions_before"] = enriched
         log_entry["spy_price_at_rebalance"] = spy_price
+        log_entry["macro_context"] = macro_text  # includes the geopolitical brief for audit
 
         # Decision Review is monitoring-only: score past trades and post the
         # monthly Discord review, but do NOT feed the scorecard back into the
