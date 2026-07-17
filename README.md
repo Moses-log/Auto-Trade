@@ -381,6 +381,25 @@ Updates since last rebalance:
 
 ---
 
+### Deposit handling in the P&L charts
+
+The Alpaca P&L charts show **return %**, so external cash deposits must be stripped out — otherwise adding capital looks like a gain (a spike) or, if mis-handled, a crater. This is done by `deposit_adjusted_equity` in `app/pnl.py`, and it rests on three rules:
+
+**1 — Deposits are sourced from Alpaca *orders*, not the ledger or the cash-activity API.**
+A deposit is invested as a manual **dollar-based (`notional`) BUY** of SPY (from the Alpaca dashboard), whereas the Kimi SPY strategy always trades in **share quantities**. So `get_deposit_events_from_orders()` (`app/trading/alpaca_client.py`) treats every filled BUY carrying a `notional` amount as a deposit — with the exact amount and the exact date the cash was invested, which is precisely the equity-jump bar. This is immediately available (no settlement-activity lag) and correctly dated (no `/deposit` command-date lag). The account-activities API (`get_alpaca_deposit_events`, CSD/JNLC) remains a fallback if the order source returns nothing.
+
+**2 — A deposit is stripped only where its cash actually lands, and only inside the report window.**
+Each deposit is aligned to the in-window equity **jump** closest in size to its amount (within 50%), and subtracted from there. Two consequences:
+- **No transient spike** — the subtraction happens on the same bar the equity rises, even if the recorded date is a bar off.
+- **Baseline capital is never stripped** — a deposit that predates the report's window (the fund's founding capital) leaves no in-window jump, so it is left in the baseline. *This is the rule whose absence once cratered the Since-Inception chart to −88% by subtracting the April founding capital.*
+
+**3 — A guardrail makes a crater impossible.**
+If the adjustment ever produces negative equity (an over-subtraction bug), it is abandoned and the **raw** equity is returned, with a logged warning. The worst a future bug can do is leave a small cosmetic blip (which self-heals via the fallback source) — never a catastrophic drop shown to investors.
+
+**Practical note:** this is automatic for any future deposit made the usual way (a dollar-amount SPY buy). If a deposit is ever added differently — bought by share quantity, split across trades, or left uninvested — the order-based detector may miss it; the activities-API fallback then catches it within a day or two, and the guardrail still prevents a crater. Behaviour is covered by `tests/test_pnl_deposit_sourcing.py`.
+
+---
+
 ## Project Structure
 
 ```
@@ -1352,6 +1371,14 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Deposit-adjusted P&L charts, rebuilt (July 17, 2026)
+
+| Change | Details |
+|---|---|
+| **Problem** | Investor deposits mishandled on the Alpaca P&L charts: a same-day deposit spiked the curve (the cash-activity API lags), and an interim fix over-corrected — stripping the fund's founding capital and cratering the Since-Inception chart to **−88%**. |
+| **Fix** | Deposits are now sourced from Alpaca **orders** (a manual dollar/`notional` BUY = a deposit, exactly dated to the equity-jump bar), stripped **only** where a matching in-window jump exists — so baseline capital is never touched — with a **guardrail** that returns raw equity if the adjustment ever goes negative. See [Deposit handling in the P&L charts](#deposit-handling-in-the-pl-charts). |
+| **Verification** | Reconstructed the Since-Inception curve from the real order history before deploying: raw **+48.6%** → adjusted **+4.5%**, smooth, no spikes, never negative, only the Jun 18 ($1,500) and Jul 17 ($842.68) post-inception deposits stripped. Covered by `tests/test_pnl_deposit_sourcing.py`. |
 
 ### Investor ledger migrated to SQLite (July 15, 2026)
 
