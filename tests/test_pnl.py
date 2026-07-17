@@ -146,29 +146,36 @@ async def test_send_weekly_report_alpaca_error(mock_notify, mock_get_history, mo
 # ── scheduler.py tests ────────────────────────────────────────────────────────
 
 def test_scheduler_jobs_registered():
-    """setup_jobs() must register weekday, friday, and robinhood_keep_alive jobs."""
+    """setup_jobs() must register the core recurring jobs. Asserts membership
+    rather than an exact count so adding a new job doesn't break this test."""
     from app.scheduler import scheduler, setup_jobs
     scheduler.remove_all_jobs()
     setup_jobs()
     job_ids = {job.id for job in scheduler.get_jobs()}
-    assert "weekday_jobs" in job_ids
-    assert "friday_jobs" in job_ids
-    assert "robinhood_keep_alive" in job_ids
-    assert len(job_ids) == 3
+    expected = {
+        "weekday_jobs",
+        "friday_jobs",
+        "robinhood_keep_alive",
+        "claude_monthly_rebalance",
+        "nightly_backup",
+        "quarterly_tax_report",
+    }
+    assert expected <= job_ids, f"missing jobs: {expected - job_ids}"
 
 
 # ── scheduler.py — _robinhood_keep_alive gating ───────────────────────────────
 #
-# robinhood_keep_alive is checked daily (cron, wall-clock anchored — immune to
-# restart drift) but should only actually run every ~3 days. These tests pin
-# down the gating logic against app.rh_keep_alive_state.
+# robinhood_keep_alive is checked on a cron (wall-clock anchored — immune to
+# restart drift) but only actually runs once its scheduled next-run time has
+# arrived. Gating is now driven by get_next_run_ts(): a future timestamp means
+# "not due yet, skip"; a past timestamp or None means "run now".
 
 @pytest.mark.asyncio
 @patch("app.scheduler.record_run")
-@patch("app.scheduler.get_last_run_ts")
+@patch("app.scheduler.get_next_run_ts")
 @patch("app.trading.robinhood_client.rh_client")
 async def test_robinhood_keep_alive_skips_when_rh_disabled(
-    mock_rh_client, mock_get_last_run_ts, mock_record_run
+    mock_rh_client, mock_get_next_run_ts, mock_record_run
 ):
     """RH_ENABLED=false — don't run keep_alive or touch the state file at all."""
     from app.scheduler import _robinhood_keep_alive
@@ -179,17 +186,18 @@ async def test_robinhood_keep_alive_skips_when_rh_disabled(
         await _robinhood_keep_alive()
 
     mock_rh_client.keep_alive.assert_not_called()
-    mock_get_last_run_ts.assert_not_called()
+    mock_get_next_run_ts.assert_not_called()
     mock_record_run.assert_not_called()
 
 
 @pytest.mark.asyncio
 @patch("app.scheduler.record_run")
-@patch("app.scheduler.get_last_run_ts", return_value=None)
+@patch("app.scheduler.get_next_run_ts", return_value=None)
 @patch("app.trading.robinhood_client.rh_client")
 async def test_robinhood_keep_alive_runs_when_never_run_before(
-    mock_rh_client, mock_get_last_run_ts, mock_record_run
+    mock_rh_client, mock_get_next_run_ts, mock_record_run
 ):
+    """No next-run recorded yet (first run or /data wiped) — fire immediately."""
     from app.scheduler import _robinhood_keep_alive
     mock_rh_client.keep_alive = AsyncMock()
 
@@ -201,16 +209,16 @@ async def test_robinhood_keep_alive_runs_when_never_run_before(
 
 @pytest.mark.asyncio
 @patch("app.scheduler.record_run")
-@patch("app.scheduler.get_last_run_ts")
+@patch("app.scheduler.get_next_run_ts")
 @patch("app.trading.robinhood_client.rh_client")
 async def test_robinhood_keep_alive_skips_when_recently_run(
-    mock_rh_client, mock_get_last_run_ts, mock_record_run
+    mock_rh_client, mock_get_next_run_ts, mock_record_run
 ):
-    """Last run was <3 days ago — today's daily check is a no-op."""
+    """Next run is still in the future — today's check is a no-op."""
     from app.scheduler import _robinhood_keep_alive, ET
     from datetime import datetime
     mock_rh_client.keep_alive = AsyncMock()
-    mock_get_last_run_ts.return_value = int(datetime.now(ET).timestamp()) - 60 * 60  # 1h ago
+    mock_get_next_run_ts.return_value = int(datetime.now(ET).timestamp()) + 24 * 60 * 60  # 1d from now
 
     await _robinhood_keep_alive()
 
@@ -220,16 +228,16 @@ async def test_robinhood_keep_alive_skips_when_recently_run(
 
 @pytest.mark.asyncio
 @patch("app.scheduler.record_run")
-@patch("app.scheduler.get_last_run_ts")
+@patch("app.scheduler.get_next_run_ts")
 @patch("app.trading.robinhood_client.rh_client")
 async def test_robinhood_keep_alive_runs_when_overdue(
-    mock_rh_client, mock_get_last_run_ts, mock_record_run
+    mock_rh_client, mock_get_next_run_ts, mock_record_run
 ):
-    """Last run was >=3 days ago — today's daily check catches up."""
+    """Next run time has already passed — the check catches up and runs."""
     from app.scheduler import _robinhood_keep_alive, ET
     from datetime import datetime
     mock_rh_client.keep_alive = AsyncMock()
-    mock_get_last_run_ts.return_value = int(datetime.now(ET).timestamp()) - 4 * 24 * 60 * 60  # 4d ago
+    mock_get_next_run_ts.return_value = int(datetime.now(ET).timestamp()) - 60 * 60  # 1h ago
 
     await _robinhood_keep_alive()
 
