@@ -22,8 +22,8 @@ from app.notifications import notify, notify_investors, notify_investors_with_ch
 import yfinance as yf
 
 from app.trading.alpaca_client import (
-    get_account, get_alpaca_deposit_events, get_latest_price,
-    get_portfolio_history, get_next_trading_day,
+    get_account, get_alpaca_deposit_events, get_deposit_events_from_orders,
+    get_latest_price, get_portfolio_history, get_next_trading_day,
 )
 
 log = logging.getLogger(__name__)
@@ -75,44 +75,116 @@ def _fund_inception_idx(timestamps, equity) -> int:
     return _first_nonzero_idx(equity)
 
 
+def _deposit_events() -> list[tuple[str, float]]:
+    """External cash-in events for the Alpaca fund P&L deposit adjustment.
+
+    Deposits are sourced from Alpaca **orders** (a manual dollar/notional BUY),
+    which carry the exact amount and the exact date the cash was invested — i.e.
+    the equity-jump bar — with no settlement-activity lag and no ledger
+    command-date lag. Falls back to the account-activities API only if the
+    order-based source returns nothing (e.g. a permissions/API hiccup)."""
+    try:
+        orders = get_deposit_events_from_orders()
+        if orders:
+            return orders
+    except Exception as exc:
+        log.warning("Order-based deposit source failed: %s", exc)
+    return get_alpaca_deposit_events()
+
+
+_DEPOSIT_ALIGN_WINDOW_DAYS = 3  # a deposit's date may sit within a few bars of its jump
+
+
+def _align_deposits_to_equity(
+    equity: list,
+    timestamps: list,
+    deposit_events: list[tuple[str, float]],
+) -> dict:
+    """Map each deposit to the equity-bar *index* where its cash actually lands.
+
+    For each deposit we look only at bars AFTER the first bar (index >= 1) and
+    within a few days of the recorded date, and take the positive bar-over-bar
+    jump closest in size to the deposit amount — the bar where the cash visibly
+    arrives. A deposit is subtracted ONLY if such a jump exists and is plausibly
+    that deposit (within 50% of its size). Deposits that predate the window (the
+    fund's baseline capital) leave no in-window jump and are therefore never
+    stripped — this is the rule whose absence cratered the chart. Returns
+    {bar_index: total_amount}."""
+    from collections import defaultdict
+    by_index: dict = defaultdict(float)
+    bar_dates = [
+        datetime.fromtimestamp(ts, tz=ET).date() if ts is not None else None
+        for ts in timestamps
+    ]
+    used: set = set()
+    for date_str, amt in sorted(deposit_events):
+        try:
+            d = datetime.strptime(str(date_str)[:10], "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            continue
+        best_i, best_err = None, None
+        for i in range(1, len(equity)):
+            if i in used or bar_dates[i] is None:
+                continue
+            if abs((bar_dates[i] - d).days) > _DEPOSIT_ALIGN_WINDOW_DAYS:
+                continue
+            if equity[i] is None or equity[i - 1] is None:
+                continue
+            jump = equity[i] - equity[i - 1]
+            if jump <= 0:
+                continue
+            err = abs(jump - amt)
+            if best_err is None or err < best_err:
+                best_err, best_i = err, i
+        # Only strip when a real in-window jump plausibly IS this deposit. No jump
+        # -> baseline capital or masked -> skip (never a blind subtraction).
+        if best_i is not None and best_err <= amt * 0.5:
+            by_index[best_i] += amt
+            used.add(best_i)
+    return by_index
+
+
 def deposit_adjusted_equity(
     equity: list,
     timestamps: list,
     deposit_events: list[tuple[str, float]],
 ) -> list:
-    """Return equity series with cumulative post-start deposits subtracted.
+    """Return the equity series with external deposits subtracted, so the curve
+    reflects only trading performance.
 
-    Uses explicit deposit_events when available (e.g. from Alpaca activities API).
-    Falls back to auto-detection: any bar-over-bar equity increase >20% is far too
-    large to be a trading gain and is treated as an external capital injection.
-    Each detected deposit date is counted once even in minute-granularity series.
+    Explicit deposit_events are aligned to the equity bar where the cash actually
+    appears (see _align_deposits_to_equity) and only in-window jumps are stripped
+    — baseline capital is never touched. With no events, falls back to
+    auto-detection: any bar-over-bar increase >20% is treated as a deposit.
+
+    Guardrail: if the result would ever go negative (an over-subtraction bug),
+    the adjustment is abandoned and the raw equity is returned, so a broken
+    deposit calc can never render a catastrophic crater to viewers.
     """
     from collections import defaultdict
-    by_date: dict[str, float] = defaultdict(float)
-
     if deposit_events:
-        for dt, amt in deposit_events:
-            by_date[dt] += amt
+        by_index = _align_deposits_to_equity(equity, timestamps, deposit_events)
     else:
-        # Auto-detect: flag equity jumps too large to be trading gains as deposits
+        by_index = defaultdict(float)
         for i in range(1, len(equity)):
             prev_eq, curr_eq = equity[i - 1], equity[i]
             if prev_eq is None or curr_eq is None or prev_eq <= 0:
                 continue
             if (curr_eq - prev_eq) / prev_eq > 0.20:
-                date_str = datetime.fromtimestamp(timestamps[i], tz=ET).strftime("%Y-%m-%d")
-                by_date[date_str] += prev_eq * ((curr_eq - prev_eq) / prev_eq)
+                by_index[i] += curr_eq - prev_eq
 
     result = []
     cumulative = 0.0
-    seen_dates: set[str] = set()
-    for i, (eq, ts) in enumerate(zip(equity, timestamps)):
-        if i > 0:
-            date_str = datetime.fromtimestamp(ts, tz=ET).strftime("%Y-%m-%d")
-            if date_str not in seen_dates:
-                cumulative += by_date.get(date_str, 0.0)
-                seen_dates.add(date_str)
+    for i, eq in enumerate(equity):
+        cumulative += by_index.get(i, 0.0)
         result.append((eq - cumulative) if eq is not None else None)
+
+    if any(a is not None and a < 0 for a in result):
+        log.warning(
+            "Deposit adjustment produced negative equity — abandoning adjustment "
+            "and returning raw equity (guardrail against a crater)."
+        )
+        return list(equity)
     return result
 
 
@@ -125,7 +197,7 @@ def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
     raw_close = next((eq for eq in reversed(equity) if eq is not None), None)
     if raw_close is None:
         raise ValueError(f"No valid close equity for {period} report")
-    adj = deposit_adjusted_equity(equity, timestamps, get_alpaca_deposit_events())
+    adj = deposit_adjusted_equity(equity, timestamps, _deposit_events())
     open_adj = next((eq for eq in adj if eq), None) or equity[0]
     close_adj = next((eq for eq in reversed(adj) if eq is not None), None) or raw_close
     dollar = close_adj - open_adj
@@ -282,7 +354,7 @@ async def send_weekly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for weekly report")
-        _devts = get_alpaca_deposit_events()
+        _devts = _deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -351,7 +423,7 @@ async def send_monthly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for monthly report")
-        _devts = get_alpaca_deposit_events()
+        _devts = _deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -419,7 +491,7 @@ async def send_yearly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for yearly report")
-        _devts = get_alpaca_deposit_events()
+        _devts = _deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -493,7 +565,7 @@ async def send_ytd_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for YTD report")
-        _devts = get_alpaca_deposit_events()
+        _devts = _deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -562,7 +634,7 @@ async def send_alltime_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for all-time report")
-        _devts = get_alpaca_deposit_events()
+        _devts = _deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -644,7 +716,7 @@ async def _send_since_date_report(start_date: _date, label: str, period_key: str
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError(f"No valid close equity for {label} report")
-        _devts = get_alpaca_deposit_events()
+        _devts = _deposit_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
