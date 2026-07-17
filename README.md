@@ -1353,6 +1353,15 @@ python -c "import secrets; print(secrets.token_hex(32))"
 
 ## Recent Changes
 
+### Investor deposits no longer inflate the Alpaca P&L chart (July 17, 2026)
+
+| Change | Details |
+|---|---|
+| **Bug** | A recorded investor deposit (e.g. $842.68) showed up as a **gain spike** on the Alpaca P&L chart. The deposit adjustment (`deposit_adjusted_equity`) was fed only by the Alpaca account-activities API (`get_alpaca_deposit_events`), which lags for same-day deposits — and its >20% auto-detect fallback is both disabled whenever the API returns any events and unable to catch a sub-20% deposit into a multi-investor fund. |
+| **Root cause** | `investors.get_deposit_events()` — the authoritative, immediately-updated record written on every `/deposit`, built specifically to "strip out external cash injections … prevents new capital from inflating P&L charts" — **existed but was never called.** The Alpaca P&L path relied solely on the laggy API. |
+| **Fix** | New `pnl._deposit_events()`: the **investor ledger is the source of truth** (all deposits go through `/deposit`), with the Alpaca API as a fallback only when the ledger is empty. Wired into all 7 deposit-adjustment call sites (daily, weekly, monthly, YTD, 1-year, all-time, inception). Applies to **every investor's deposits**, any size, past and future — stripped the moment the deposit is recorded. |
+| **Tests** | Reproduce the July-17 spike (RED → GREEN): with the ledger consulted the adjusted equity is flat across the deposit; a companion test documents that the old API-only path leaves the sub-20% spike, so it can't silently regress. |
+
 ### Living Thesis, funding-safety fix, and rebalance test harness (July 16, 2026)
 
 | Change | Details |
