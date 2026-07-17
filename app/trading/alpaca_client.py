@@ -375,6 +375,46 @@ def get_next_trading_day() -> date:
     return next_day
 
 
+def get_deposit_events_from_orders() -> list[tuple[str, float]]:
+    """External capital deposits, derived from Alpaca *orders*.
+
+    A deposit is invested as a manual **dollar-based (notional) BUY**, whereas the
+    Kimi SPY strategy always trades in share quantities. So a filled BUY order
+    carrying a notional amount is a deposit — with the exact dollar amount and the
+    exact date the cash was invested, which is precisely the equity-jump bar.
+    This is immediately available (no settlement-activity lag) and correctly
+    dated (no ledger command-date lag), which is what the P&L deposit adjustment
+    needs. Returns [(iso_date, amount), ...] sorted ascending; [] on any error.
+    """
+    try:
+        import pytz  # noqa: PLC0415
+        _et = pytz.timezone("America/New_York")
+        after = datetime(2020, 1, 1)
+        until = datetime.utcnow() + timedelta(days=1)
+        events: list[tuple[str, float]] = []
+        for o in get_orders_filled_range(after, until):
+            try:
+                if getattr(o, "side", None) != OrderSide.BUY:
+                    continue
+                notional = getattr(o, "notional", None)
+                if notional is None:
+                    continue
+                amt = float(notional)
+                if amt <= 0:
+                    continue
+                filled_at = getattr(o, "filled_at", None)
+                if filled_at is None:
+                    continue
+                iso = filled_at.astimezone(_et).date().isoformat()
+                events.append((iso, amt))
+            except Exception:
+                continue
+        return sorted(events)
+    except Exception as exc:
+        log.warning("Could not fetch Alpaca deposit orders: %s", exc)
+        return []
+
+
 def get_alpaca_deposit_events() -> list[tuple[str, float]]:
     """Return [(iso_date, amount), ...] for cash deposits into the Alpaca account.
 

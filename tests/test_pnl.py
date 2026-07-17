@@ -9,6 +9,17 @@ os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
 
 
+@pytest.fixture(autouse=True)
+def _no_network_deposit_sources():
+    """Keep P&L tests hermetic: stub both deposit sources so _compute_pnl and the
+    report functions never reach the Alpaca API (which otherwise retries with
+    backoff on the fake test creds). Deposit-adjustment behaviour itself is
+    covered directly in test_pnl_deposit_sourcing.py."""
+    with patch("app.pnl.get_deposit_events_from_orders", return_value=[]), \
+         patch("app.pnl.get_alpaca_deposit_events", return_value=[]):
+        yield
+
+
 # ── alpaca_client tests ───────────────────────────────────────────────────────
 
 @patch("app.trading.alpaca_client.get_client")
