@@ -179,3 +179,67 @@ async def test_skipped_sell_does_not_inflate_double_down_budget():
     m.rh.buy_dollars_async.assert_awaited_once_with("NVDA", 475.0)
     logged = _logged(m)
     assert any(t["action"] == "SELL" and t["ticker"] == "ARM" for t in logged["trades_skipped"])
+
+
+@pytest.mark.asyncio
+async def test_trim_proceeds_fund_double_down():
+    """A TRIM that executes must credit its proceeds so a same-run DOUBLE_DOWN
+    can be funded by them — cash alone here ($100) is far too little."""
+    with _rebalance_mocks() as m:
+        m.rh.get_all_positions_async.return_value = [
+            _pos("MSFT", 20.0, 300.0),  # value 6000 — the position we trim
+            _pos("NVDA", 1.0, 100.0),   # value 100 — the position we add to
+        ]
+        m.rh.get_buying_power_async.return_value = 100.0
+        m.rh.sell_shares_async.return_value = {"status": "ok", "qty": 15.0, "fill_price": 300.0}
+        m.trim_position.return_value = (15.0, 500.0, 5.0)
+        m.rh.buy_dollars_async.return_value = {"status": "ok", "qty": 14.5, "fill_price": 100.0}
+        m.parse.return_value = {
+            "no_changes": False,
+            "trades": [
+                {"action": "TRIM", "ticker": "MSFT", "target_weight_pct": 25},
+                {"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 25},
+            ],
+        }
+
+        from app.claude_manager import run_monthly_rebalance
+        await run_monthly_rebalance()
+
+    # portfolio = 6000 + 100 + 100 = 6200; NVDA target 25% = 1550, delta = 1450.
+    # Budget = 100 cash + (15 * $300 = 4500) TRIM proceeds = 4600; cap 4370 >= 1450,
+    # so the full 1450 delta is invested — funded by the trim, not the $100 cash.
+    m.rh.sell_shares_async.assert_awaited_once()
+    assert m.rh.sell_shares_async.await_args.args[0] == "MSFT"
+    m.rh.buy_dollars_async.assert_awaited_once_with("NVDA", 1450.0)
+    logged = _logged(m)
+    assert logged["status"] == "completed"
+    assert {t["action"] for t in logged["trades_executed"]} == {"TRIM", "DOUBLE_DOWN"}
+
+
+@pytest.mark.asyncio
+async def test_failed_buy_is_recorded_as_skipped_not_executed():
+    """When the broker rejects a buy, it must be logged as skipped (with the
+    broker's reason) and never recorded as executed or booked to the portfolio."""
+    with _rebalance_mocks() as m:
+        m.rh.get_all_positions_async.return_value = [_pos("NVDA", 1.0, 100.0)]  # value 100
+        m.rh.get_buying_power_async.return_value = 5000.0
+        m.rh.buy_dollars_async.return_value = {"status": "error", "reason": "insufficient buying power"}
+        m.parse.return_value = {
+            "no_changes": False,
+            "trades": [{"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 25}],
+        }
+
+        from app.claude_manager import run_monthly_rebalance
+        await run_monthly_rebalance()
+
+    # portfolio = 100 + 5000 = 5100; NVDA target 25% = 1275, delta = 1175 (budget ample).
+    m.rh.buy_dollars_async.assert_awaited_once_with("NVDA", 1175.0)
+    m.open_position.assert_not_called()          # never booked to the portfolio
+    logged = _logged(m)
+    assert logged["status"] == "completed"
+    assert logged["trades_executed"] == []
+    assert any(
+        t["action"] == "DOUBLE_DOWN" and t["ticker"] == "NVDA"
+        and t["reason"] == "insufficient buying power"
+        for t in logged["trades_skipped"]
+    )
