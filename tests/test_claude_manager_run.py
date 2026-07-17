@@ -20,6 +20,7 @@ os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
 # settings.rh_username/rh_password default to None. See tests/test_config_rh.py.
 
 import contextlib
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -81,6 +82,12 @@ def _rebalance_mocks():
         get_record = p("app.claude_portfolio.get_record", return_value=(0, 0))
         record_rh_trade = p("app.rh_trade_record.record_rh_trade", new=AsyncMock())
 
+        # Queued after-hours sells schedule a pending-fill job — stub the
+        # scheduler, pending-order store, and next-trading-day lookup.
+        scheduler = p("app.scheduler.scheduler", new=MagicMock())
+        save_pending = p("app.pending_orders.save_pending_order", new=MagicMock())
+        p("app.trading.alpaca_client.get_next_trading_day", return_value=date(2026, 8, 3))
+
         # Logging, benchmark, background-task firing, sleeps.
         log = p("app.claude_manager._append_rebalance_log", new=MagicMock())
         p("app.claude_manager._format_benchmark", return_value="")
@@ -92,6 +99,7 @@ def _rebalance_mocks():
             notify_embed=notify_embed, notify_manager=notify_manager, notify_signal=notify_signal,
             open_position=open_position, close_position=close_position,
             trim_position=trim_position, get_record=get_record, record_rh_trade=record_rh_trade,
+            scheduler=scheduler, save_pending=save_pending,
         )
 
 
@@ -243,3 +251,57 @@ async def test_failed_buy_is_recorded_as_skipped_not_executed():
         and t["reason"] == "insufficient buying power"
         for t in logged["trades_skipped"]
     )
+
+
+@pytest.mark.asyncio
+async def test_queued_sell_schedules_pending_fill_and_defers_pnl():
+    """A SELL that queues after-hours must schedule a pending-fill job and save
+    a pending order (source=manager), and must NOT book P&L yet — the fill
+    price isn't known until the order fills at market open."""
+    with _rebalance_mocks() as m:
+        m.rh.get_all_positions_async.return_value = [_pos("NOW", 5.0, 950.0, avg_entry_price=900.0)]
+        m.rh.get_buying_power_async.return_value = 0.0
+        m.rh.close_ticker_async.return_value = {
+            "status": "ok", "qty": 5.0, "price_est": 960.0, "queued": True, "order_id": "ord-xyz",
+        }
+        m.close_position.return_value = (5.0, None, None)  # P&L unknown until fill
+        m.parse.return_value = {
+            "no_changes": False,
+            "trades": [{"action": "SELL", "ticker": "NOW"}],
+        }
+
+        from app.claude_manager import run_monthly_rebalance
+        await run_monthly_rebalance()
+
+    m.scheduler.add_job.assert_called_once()
+    m.save_pending.assert_called_once()
+    assert m.save_pending.call_args.kwargs["broker"] == "claude_sell"
+    assert m.save_pending.call_args.kwargs["source"] == "manager"
+    m.record_rh_trade.assert_not_awaited()       # no P&L booked while queued
+    logged = _logged(m)
+    assert logged["trades_executed"][0]["queued"] is True
+
+
+@pytest.mark.asyncio
+async def test_over_target_weight_is_clamped_to_25pct_before_sizing():
+    """A DOUBLE_DOWN asking for 40% must be clamped to the 25% guardrail before
+    the buy is sized — the invested dollars and the logged weight reflect 25%."""
+    with _rebalance_mocks() as m:
+        m.rh.get_all_positions_async.return_value = [_pos("NVDA", 1.0, 100.0)]  # value 100
+        m.rh.get_buying_power_async.return_value = 5000.0
+        m.rh.buy_dollars_async.return_value = {"status": "ok", "qty": 11.75, "fill_price": 100.0}
+        m.parse.return_value = {
+            "no_changes": False,
+            "trades": [{"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 40}],
+        }
+
+        from app.claude_manager import run_monthly_rebalance
+        await run_monthly_rebalance()
+
+    # portfolio = 100 + 5000 = 5100. Unclamped 40% would target 2040 (delta 1940);
+    # clamped to 25% it targets 1275, delta = 1175 — so the buy fires at 1175, and
+    # the executed record shows the clamped 25% weight.
+    m.rh.buy_dollars_async.assert_awaited_once_with("NVDA", 1175.0)
+    logged = _logged(m)
+    dd = next(t for t in logged["trades_executed"] if t["action"] == "DOUBLE_DOWN")
+    assert dd["target_weight_pct"] == 25
