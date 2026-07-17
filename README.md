@@ -250,7 +250,7 @@ On the **1st of each month at 9:35 AM ET**, the system:
 
 1. Fetches all RH positions + buying power
 2. Enriches each holding with **yfinance fundamentals** (Forward P/E, PEG, EV/EBITDA, ROE, margins, short interest, earnings date) and **yfinance-computed technical indicators** (200-day MA position, RSI(14), calendar-QTD performance, RS vs SPY) — fundamentals and technicals fetched in parallel for all tickers. Any holding missing a **critical metric** (RSI, 200-day MA, QTD performance, Forward P/E, or revenue growth) is tagged inline with a `_data_gaps` marker so Claude knows it's judging that name on partial data — the gaps are also surfaced to Discord (silent when every holding is complete)
-3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured)
+3. Fetches **macro context** in parallel: VIX, 10Y Treasury yield, and CPI YoY (via FRED API if configured), plus a neutral **macro/geopolitical backdrop brief** — one server-side web-search call (Sonnet) summarizing current conflicts, elections, policy/central-bank moves, sanctions, tariffs, and energy shocks. Injected as *situational awareness* with an explicit anti-anchoring instruction (weigh relevance per holding; do **not** default to risk-off), so generic world news has near-zero effect while a holding-specific material event can still move a decision on its merits. Monthly-rebalance-only — the weekly Inspection deliberately never receives it, to avoid news-driven whiplash. Degrades to "unavailable this run" if the key is unset or the call fails
 4. Loads **last 3 rebalance log entries** (date, portfolio value, SPY price, trade counts) + the **full 5-section research from the most recent entry** so Claude can track thesis evolution month-over-month
 5. Calls **claude-opus-4-8** via the Anthropic API using an **agentic loop** (up to 80 turns, 16,000 token responses). Claude has access to **live internet search** (`web_search_20250305`, up to 30 searches per rebalance) — used to verify news, earnings surprises, analyst estimate revisions, SEC filings, short interest updates, and macro context. Each search is handled server-side by Anthropic; results are embedded in the response and cited inline.
 6. The system scores every holding 0–100 across Quality / Growth / Momentum / Valuation / Competitive Advantage — using macro conditions and upcoming earnings dates to inform timing
@@ -301,6 +301,7 @@ AI & infrastructure · Robotics & automation · Space economy · Energy transfor
 **Macro and Timing Rules (injected live into the prompt):**
 - **Earnings avoidance**: Avoid initiating or significantly increasing positions within 3 days of earnings unless conviction is very high.
 - **Macro calibration**: VIX, 10-year Treasury yield, and CPI YoY are provided. High VIX → defensiveness. Rising yields → pressure on growth multiples.
+- **Geopolitical situational awareness**: A neutral macro/geopolitical headline brief is provided as context, not a signal. Framed to avoid a reflexive risk-off tilt from generic world news — but leaves Kimi free to respond fully when an event is genuinely material to a specific holding. Monthly rebalance only.
 
 **Self-awareness (last 3 months of history injected into the prompt):**
 - The system sees its own prior analyses, proposed trades, and portfolio performance vs SPY each month — prevents momentum-chasing and enables course correction.
@@ -426,7 +427,7 @@ app/
 ├── rh_pnl.py             # Robinhood P&L engine (daily/weekly/monthly/yearly)
 ├── chart.py              # Alpaca portfolio vs SPY equity curve chart (cyberpunk style)
 ├── portfolio_report.py   # RH pie chart + valuation rating (Friday snapshot)
-├── macro_context.py      # Macro indicators for the rebalance prompt (VIX, 10Y yield, CPI via FRED)
+├── macro_context.py      # Macro indicators for the rebalance prompt (VIX, 10Y yield, CPI via FRED) + neutral geopolitical brief (rebalance-only, Sonnet web search)
 │
 ├── claude_manager.py     # Autonomous monthly portfolio manager (Anthropic API)
 ├── claude_inspection.py  # Weekly holdings-only check between monthly rebalances (SELL/TRIM/DOUBLE_DOWN, never BUY)
@@ -1371,6 +1372,16 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Geopolitical situational-awareness brief (July 17, 2026)
+
+| Change | Details |
+|---|---|
+| **What** | The monthly rebalance now injects a neutral macro/geopolitical headline brief into Claude's prompt — one server-side web-search call summarizing current conflicts, elections, policy/central-bank moves, sanctions, tariffs, and energy shocks. Lives in `app/macro_context.py` (`_fetch_geopolitical_brief_sync` + `fetch_macro_context(include_geopolitical=...)`). |
+| **Framing** | Provided as *situational awareness*, not a signal. An explicit anti-anchoring instruction ("weigh relevance per holding; do not default to risk-off") keeps generic world news near-zero-effect, while leaving Kimi free to respond fully when an event is genuinely material to a specific holding. Controls **bias, not magnitude**. |
+| **Scope** | Rebalance-only, gated behind `include_geopolitical` (default off). The weekly Inspection deliberately never receives it — a weekly headline feed would fight its DEFAULT-TO-HOLD design and cause news-driven whiplash. Inspection keeps its existing narrow, name-specific macro-shock trigger. |
+| **Model + cost** | Runs on `claude-sonnet-5` (headline summarization needs no Opus-tier reasoning; cheaper + faster). The rebalance decision itself still runs on Opus. One extra short call per month. |
+| **Safety + audit** | Degrades to "unavailable this run" if `ANTHROPIC_API_KEY` is unset or the call fails — never breaks a rebalance. The resolved macro context (brief included) is saved to `log_entry["macro_context"]` for audit. Covered by `tests/test_macro_context.py` (default-excluded, neutral framing, graceful degradation, no-key path). |
 
 ### Deposit-adjusted P&L charts, rebuilt (July 17, 2026)
 
