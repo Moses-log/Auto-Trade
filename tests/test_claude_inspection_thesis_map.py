@@ -25,7 +25,9 @@ def test_returns_empty_map_when_no_rebalance_history():
     assert _build_prior_thesis_map([], []) == {}
 
 
-def test_inspection_entry_overrides_older_rebalance_thesis():
+def test_living_thesis_layers_inspection_update_on_anchor_not_replaces():
+    """Living Thesis: a newer inspection note is appended UNDER the rebalance
+    anchor thesis, not substituted for it. The anchor research survives."""
     from app.claude_inspection import _build_prior_thesis_map
     divider = "══════════════════════════════"
     rebalance_records = [{
@@ -37,7 +39,64 @@ def test_inspection_entry_overrides_older_rebalance_thesis():
         "notes": {"NVDA": "Updated after Inspection: earnings beat, raising conviction."},
     }]
     result = _build_prior_thesis_map(rebalance_records, inspection_records)
-    assert "raising conviction" in result["NVDA"]
+    nvda = result["NVDA"]
+    assert "Original monthly thesis." in nvda          # anchor preserved
+    assert "raising conviction" in nvda                # delta appended
+    assert "Updates since last rebalance:" in nvda     # under a labeled section
+    assert "2026-07-13" in nvda                        # dated
+
+
+def test_living_thesis_caps_deltas_at_three_most_recent():
+    """Only the last 3 inspection updates per ticker are kept; the oldest drops."""
+    from app.claude_inspection import _build_prior_thesis_map
+    divider = "══════════════════════════════"
+    rebalance_records = [{
+        "timestamp": "2026-07-01T09:35:00",
+        "analysis_body": f"{divider}\n## NVDA — NVIDIA Corp\nAnchor thesis.\n",
+    }]
+    inspection_records = [
+        {"timestamp": "2026-07-04T09:35:00", "notes": {"NVDA": "note-one-oldest"}},
+        {"timestamp": "2026-07-11T09:35:00", "notes": {"NVDA": "note-two"}},
+        {"timestamp": "2026-07-18T09:35:00", "notes": {"NVDA": "note-three"}},
+        {"timestamp": "2026-07-25T09:35:00", "notes": {"NVDA": "note-four-newest"}},
+    ]
+    result = _build_prior_thesis_map(rebalance_records, inspection_records)
+    nvda = result["NVDA"]
+    assert "note-one-oldest" not in nvda               # oldest dropped by the cap
+    assert "note-two" in nvda
+    assert "note-three" in nvda
+    assert "note-four-newest" in nvda
+
+
+def test_living_thesis_orders_deltas_oldest_to_newest():
+    """Kept updates read chronologically so thesis evolution is legible."""
+    from app.claude_inspection import _build_prior_thesis_map
+    divider = "══════════════════════════════"
+    rebalance_records = [{
+        "timestamp": "2026-07-01T09:35:00",
+        "analysis_body": f"{divider}\n## NVDA — NVIDIA Corp\nAnchor thesis.\n",
+    }]
+    inspection_records = [
+        {"timestamp": "2026-07-11T09:35:00", "notes": {"NVDA": "earlier-update"}},
+        {"timestamp": "2026-07-18T09:35:00", "notes": {"NVDA": "later-update"}},
+    ]
+    result = _build_prior_thesis_map(rebalance_records, inspection_records)
+    nvda = result["NVDA"]
+    assert nvda.index("earlier-update") < nvda.index("later-update")
+
+
+def test_living_thesis_shows_notes_when_no_anchor_on_record():
+    """A ticker acted on by inspection but absent from the last rebalance body
+    still surfaces its notes rather than vanishing."""
+    from app.claude_inspection import _build_prior_thesis_map
+    rebalance_records = []
+    inspection_records = [{
+        "timestamp": "2026-07-13T09:35:00",
+        "notes": {"ARM": "Trimmed on valuation after a sharp run."},
+    }]
+    result = _build_prior_thesis_map(rebalance_records, inspection_records)
+    assert "ARM" in result
+    assert "Trimmed on valuation" in result["ARM"]
 
 
 def test_stale_inspection_note_does_not_override_newer_rebalance_thesis():

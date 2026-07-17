@@ -699,13 +699,22 @@ def _parse_inspection_trade_block(text: str) -> "dict | None":
     return block
 
 
+_MAX_THESIS_DELTAS = 3  # keep the last N Inspection updates per ticker under the anchor
+
+
 def _build_prior_thesis_map(rebalance_records: list, inspection_records: list) -> dict:
-    """Build {ticker: most_recent_thesis_text}, sourced from the most recent
-    rebalance that actually produced research (skipping over any more recent
-    but failed/empty rebalance attempts), then overlaid with any Inspection
-    notes logged strictly after that rebalance — an Inspection note from
-    before or during that rebalance is stale and must not override it."""
-    thesis_map: dict = {}
+    """Build {ticker: thesis_text} using the Living Thesis model.
+
+    The most recent rebalance that actually produced research (skipping any more
+    recent but failed/empty attempts) provides each ticker's durable ANCHOR
+    thesis. Inspection notes logged strictly after that rebalance are then
+    appended BENEATH the anchor as a dated "Updates since last rebalance" log
+    (the last _MAX_THESIS_DELTAS kept, oldest-to-newest) — they layer on top of
+    the anchor rather than replacing it, so an acted holding keeps its
+    foundational research plus its evolution. An Inspection note from before or
+    during the anchor rebalance is stale and is ignored. A ticker acted on by
+    Inspection but absent from the anchor body still surfaces its notes alone."""
+    anchor_map: dict = {}
     last_rebalance_ts = ""
 
     for record in reversed(rebalance_records):
@@ -719,13 +728,34 @@ def _build_prior_thesis_map(rebalance_records: list, inspection_records: list) -
                 continue
             ticker = _section_ticker(section)
             if ticker:
-                thesis_map[ticker] = section
+                anchor_map[ticker] = section
         break
 
+    # Collect Inspection updates per ticker, chronologically, keeping only those
+    # logged after the anchor rebalance. inspection_records arrives oldest-first.
+    deltas_map: dict = {}
     for entry in inspection_records:
-        if entry.get("timestamp", "") <= last_rebalance_ts:
+        ts = entry.get("timestamp", "")
+        if ts <= last_rebalance_ts:
             continue
         for ticker, note in (entry.get("notes") or {}).items():
-            thesis_map[ticker.upper()] = note
+            deltas_map.setdefault(ticker.upper(), []).append((ts, note))
+
+    thesis_map: dict = {}
+    for ticker in set(anchor_map) | set(deltas_map):
+        parts: list = []
+        anchor = anchor_map.get(ticker)
+        if anchor:
+            parts.append(anchor)
+        deltas = deltas_map.get(ticker, [])[-_MAX_THESIS_DELTAS:]
+        if deltas:
+            header = (
+                "Updates since last rebalance:" if anchor
+                else "Recent Inspection activity (no rebalance thesis on record):"
+            )
+            update_lines = "\n".join(f"  • {ts[:10]}: {note}" for ts, note in deltas)
+            parts.append(f"{header}\n{update_lines}")
+        if parts:
+            thesis_map[ticker] = "\n\n".join(parts)
 
     return thesis_map
