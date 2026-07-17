@@ -261,7 +261,7 @@ On the **1st of each month at 9:35 AM ET**, the system:
    - **TRIM** — reduce a position to a lower target weight without closing it (blocked if qty < 1 share — Robinhood cannot partially sell fractional positions)
    - **HOLD** — no trade, maintain target weight
 8. **Risk guardrails run before execution** (`app/risk_guardrails.py`): any BUY/DOUBLE_DOWN/TRIM over 25% is hard-clamped down to 25% in place, and a `⚠️ RISK GUARDRAIL` Discord alert fires if any single sector's post-trade weight would exceed 50% (alert-only — no auto-scaling). Enforces the stated policy in code rather than trusting the prompt alone
-9. Trades execute in order — SELL → TRIM → DOUBLE_DOWN/BUY — so sale proceeds fund same-run buys. The buy budget is **real cash + the proceeds of the sells/trims that actually executed this run** (computed via `_realized_sell_proceeds` from the recorded executed trades, shared with the weekly Inspection). A proposed sell that skips or fails contributes nothing — so a buy is never sized against phantom cash — while a queued after-hours sell still counts (its estimated fill is credited). Buys are capped at 95% of that combined budget.
+9. Sells execute first; buy budget = cash + expected sell proceeds (handles after-hours queued-sell lag)
 9. After-hours sells are saved as pending orders and resolved at market open with actual fill price and P&L
 10. Full analysis + each trade posted to Discord; full audit log saved to `/data/claude_rebalance_log.json`
 11. **Benchmark comparison** posted at completion (and on no-change months): portfolio % vs SPY % month-over-month and since inception
@@ -834,7 +834,7 @@ Same three non-BUY actions as Kimi Portfolio Manager, evaluated weekly against c
 |---|---|---|
 | `SELL` | — | Closes the entire position |
 | `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. **Blocked if position qty < 1 share.** |
-| `DOUBLE_DOWN` | `target_weight_pct` | Adds to the position — signals elevated conviction, same delta-buy sizing as the monthly rebalance, funded from buying power plus the proceeds of this run's **executed** SELL/TRIM trades (skipped/failed sells add nothing), capped at 95% of that combined budget |
+| `DOUBLE_DOWN` | `target_weight_pct` | Adds to the position — signals elevated conviction, same delta-buy sizing as the monthly rebalance, funded from buying power plus this run's own SELL/TRIM proceeds, capped at 95% of that combined budget |
 | `HOLD` | — | No trade executed — the default unless a specific trigger is documented in the reasoning |
 
 `BUY` is never a valid action here — a response containing one anywhere has its entire trade block rejected before execution.
@@ -1352,17 +1352,6 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
-
-### Living Thesis, funding-safety fix, and rebalance test harness (July 16, 2026)
-
-| Change | Details |
-|---|---|
-| **Living Thesis** | Inspection updates now layer *beneath* the monthly rebalance's per-ticker research anchor instead of replacing it — an acted holding keeps its full 5-section thesis plus a dated `Updates since last rebalance` log (last 4 kept ≈ one rebalance cycle). Fixes "thesis amnesia" where a traded holding's deep research was overwritten by a one-line note. See [Living Thesis](#living-thesis--the-shared-memory-between-rebalance-and-inspection). Lives in `_build_prior_thesis_map`. |
-| **`/inspection` manual trigger** | New Discord slash command to run the weekly holdings Inspection on demand, mirroring `/rebalance`. Requires re-registering commands (`scripts/register_commands.py`). |
-| **Inspection reasoning required** | The Inspection trade JSON now requires a concise `reasoning` on SELL/TRIM/DOUBLE_DOWN, so the previously-blank Discord reasoning fields populate and the Inspection→rebalance handoff carries real substance instead of placeholder text. |
-| **Phantom-proceeds funding fix** | Both the rebalance and Inspection previously pre-summed the *expected* proceeds of all proposed sells into the buy budget — a sell that later skipped/failed left phantom cash that could over-size a same-run buy (RH then rejects it — a missed buy). Now funded from real cash + a new shared `_realized_sell_proceeds()` over the sells/trims that **actually executed** (queued sells still count; skipped ones don't). |
-| **Rebalance test harness** | New `tests/test_claude_manager_run.py` with a `_rebalance_mocks()` context manager stubbing every external seam, enabling deterministic end-to-end tests of `run_monthly_rebalance` (no-change, full execution, skipped-sell funding guard, trim-funds-buy, failed-buy-skipped, queued-sell pending-fill, 25% guardrail clamp). |
-| **Pre-existing test repairs** | Fixed 9 stale/py3.9-incompat test failures unrelated to the above (missing `from __future__ import annotations` in `public_stats.py`; stale scheduler-job count and `get_last_run_ts`→`get_next_run_ts` keep-alive tests; a `filled_price` assertion drift). Full suite: 458 passing. |
 
 ### Investor ledger migrated to SQLite (July 15, 2026)
 
