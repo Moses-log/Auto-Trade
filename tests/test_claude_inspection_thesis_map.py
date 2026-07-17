@@ -46,8 +46,9 @@ def test_living_thesis_layers_inspection_update_on_anchor_not_replaces():
     assert "2026-07-13" in nvda                        # dated
 
 
-def test_living_thesis_caps_deltas_at_three_most_recent():
-    """Only the last 3 inspection updates per ticker are kept; the oldest drops."""
+def test_living_thesis_caps_deltas_at_four_most_recent():
+    """Only the last 4 inspection updates per ticker are kept (≈ one rebalance
+    cycle of weekly inspections); anything older drops."""
     from app.claude_inspection import _build_prior_thesis_map
     divider = "══════════════════════════════"
     rebalance_records = [{
@@ -58,14 +59,16 @@ def test_living_thesis_caps_deltas_at_three_most_recent():
         {"timestamp": "2026-07-04T09:35:00", "notes": {"NVDA": "note-one-oldest"}},
         {"timestamp": "2026-07-11T09:35:00", "notes": {"NVDA": "note-two"}},
         {"timestamp": "2026-07-18T09:35:00", "notes": {"NVDA": "note-three"}},
-        {"timestamp": "2026-07-25T09:35:00", "notes": {"NVDA": "note-four-newest"}},
+        {"timestamp": "2026-07-25T09:35:00", "notes": {"NVDA": "note-four"}},
+        {"timestamp": "2026-07-31T09:35:00", "notes": {"NVDA": "note-five-newest"}},
     ]
     result = _build_prior_thesis_map(rebalance_records, inspection_records)
     nvda = result["NVDA"]
     assert "note-one-oldest" not in nvda               # oldest dropped by the cap
     assert "note-two" in nvda
     assert "note-three" in nvda
-    assert "note-four-newest" in nvda
+    assert "note-four" in nvda
+    assert "note-five-newest" in nvda
 
 
 def test_living_thesis_orders_deltas_oldest_to_newest():

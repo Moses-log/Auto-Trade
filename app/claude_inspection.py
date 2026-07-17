@@ -699,7 +699,9 @@ def _parse_inspection_trade_block(text: str) -> "dict | None":
     return block
 
 
-_MAX_THESIS_DELTAS = 3  # keep the last N Inspection updates per ticker under the anchor
+_MAX_THESIS_DELTAS = 4  # keep the last N Inspection updates per ticker under the anchor
+#                         (≈ one rebalance cycle of weekly inspections, so no
+#                         in-cycle update is dropped before the next rebalance)
 
 
 def _build_prior_thesis_map(rebalance_records: list, inspection_records: list) -> dict:
