@@ -305,3 +305,92 @@ async def test_over_target_weight_is_clamped_to_25pct_before_sizing():
     logged = _logged(m)
     dd = next(t for t in logged["trades_executed"] if t["action"] == "DOUBLE_DOWN")
     assert dd["target_weight_pct"] == 25
+
+
+def _embed_titles(m):
+    return [c.args[0].get("title", "") for c in m.notify_embed.call_args_list]
+
+
+@pytest.mark.asyncio
+async def test_filled_trades_roll_into_single_results_card():
+    """Hybrid batching: two immediately-filled trades must NOT each post their
+    own trade embed — they consolidate into the one COMPLETE results card, and
+    no per-trade execution message goes to the subscriber feed."""
+    with _rebalance_mocks() as m:
+        m.rh.get_all_positions_async.return_value = [
+            _pos("NVDA", 2.0, 450.0),   # value 900
+            _pos("MSFT", 10.0, 300.0),  # value 3000
+        ]
+        m.rh.get_buying_power_async.return_value = 2000.0
+        m.rh.close_ticker_async.return_value = {
+            "status": "ok", "qty": 10.0, "fill_price": 300.0, "queued": False,
+        }
+        m.close_position.return_value = (10.0, 200.0, 7.1)
+        m.rh.buy_dollars_async.return_value = {"status": "ok", "qty": 1.27, "fill_price": 450.0}
+        m.parse.return_value = {
+            "no_changes": False,
+            "trades": [
+                {"action": "SELL", "ticker": "MSFT"},
+                {"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 25},
+            ],
+        }
+
+        from app.claude_manager import run_monthly_rebalance
+        await run_monthly_rebalance()
+
+    titles = _embed_titles(m)
+    # No standalone per-trade success cards for the filled trades.
+    assert not any(t.startswith("🔴 KIMI SELL") or "DOUBLE DOWN" in t for t in titles)
+    # Exactly one results card, carrying one field per filled trade.
+    complete = [c.args[0] for c in m.notify_embed.call_args_list
+                if "REBALANCE COMPLETE" in c.args[0].get("title", "")]
+    assert len(complete) == 1
+    assert len(complete[0]["fields"]) == 2
+    # Subscriber feed still gets the pre-execution decisions card, but no
+    # per-trade execution confirmations were fired inline (those went through
+    # _fire, which the harness closes) — the decisions card is the roll-up.
+
+
+def test_result_card_stays_one_embed_for_a_normal_run():
+    from app.claude_manager import _result_card_embeds, _field
+    fields = [_field(f"🟢 BUY — T{i}", "10 sh @ $100 → 5%\n$1,000 invested", inline=False)
+              for i in range(6)]
+    cards = _result_card_embeds("✅ DONE", 0x00C853, description="**6× BUY**", fields=fields, footer="ts")
+    assert len(cards) == 1
+    assert len(cards[0]["fields"]) == 6
+    assert cards[0]["description"] == "**6× BUY**"
+    assert cards[0]["footer"]["text"] == "ts"
+
+
+def test_result_card_splits_when_over_25_fields():
+    from app.claude_manager import _result_card_embeds, _field
+    fields = [_field(f"🟢 BUY — T{i}", "x", inline=False) for i in range(30)]
+    cards = _result_card_embeds("✅ DONE", 0x00C853, description="d", fields=fields, footer="ts")
+    assert len(cards) == 2
+    assert all(len(c["fields"]) <= 25 for c in cards)
+    assert sum(len(c["fields"]) for c in cards) == 30
+    # description only on the first, footer only on the last, and the second
+    # card is marked a continuation.
+    assert cards[0].get("description") == "d" and "footer" not in cards[0]
+    assert "description" not in cards[1] and cards[1]["footer"]["text"] == "ts"
+    assert "(cont." in cards[1]["title"]
+
+
+def test_result_card_splits_when_over_char_budget():
+    from app.claude_manager import _result_card_embeds, _field
+    # 10 fields of ~800 chars each = ~8000 chars > the 5500 budget → must split.
+    big = "y" * 800
+    fields = [_field(f"🔴 SELL — T{i}", big, inline=False) for i in range(10)]
+    cards = _result_card_embeds("✅ DONE", 0x00C853, fields=fields, footer="ts")
+    assert len(cards) >= 2
+    for c in cards:
+        total = len(c["title"]) + sum(len(f["name"]) + len(f["value"]) for f in c["fields"])
+        assert total <= 6000  # every emitted embed is under Discord's hard cap
+
+
+def test_result_card_empty_fields_is_single_plain_embed():
+    from app.claude_manager import _result_card_embeds
+    cards = _result_card_embeds("✅ DONE", 0x00C853, description="no trades", fields=[], footer="ts")
+    assert len(cards) == 1
+    assert "fields" not in cards[0]
+    assert cards[0]["description"] == "no trades"

@@ -18,11 +18,14 @@ import pytz
 
 from app.claude_manager import (
     _embed, _timestamp, _fetch_yf_data, _fetch_technical_data,
-    _CLR_ORANGE, _CLR_GREEN, _CLR_GRAY, _LOG_PATH,
+    _CLR_ORANGE, _CLR_GREEN, _CLR_GRAY, _CLR_YELLOW, _LOG_PATH,
     annotate_and_collect_gaps, format_data_gap_field,
 )
 from app.claude_manager import _trade_embed, _field, _CLR_RED, notify_claude_pending_sell_fill
-from app.claude_manager import _realized_sell_proceeds
+from app.claude_manager import (
+    _realized_sell_proceeds, _format_benchmark, _fetch_spy_price,
+    _trade_result_field, _result_card_embeds, _send_chunked,
+)
 from app.claude_portfolio import open_position, close_position, trim_position, get_record
 from app.notifications import notify_claude_manager_embed, notify_claude_signal_feed
 from app.trading.robinhood_client import rh_client
@@ -73,12 +76,38 @@ def _load_recent_rebalance_records(limit: int = 3) -> list:
     return records[-limit:]
 
 
+def _build_inspection_ki_summary(actioned: list, date_label: str) -> str:
+    """Decisions card for the KI Server subscriber feed — the action, the target
+    weight, and the reasoning (the "why"), but no dollar amounts, quantities, or
+    P&L (those stay Private). Mirrors how the monthly rebalance already shares
+    its research prose with subscribers, sized to Inspection's lighter format."""
+    _ORDER = ("SELL", "TRIM", "DOUBLE_DOWN")
+    _EMOJI = {"SELL": "🔴", "TRIM": "✂️", "DOUBLE_DOWN": "🔥"}
+    _LABEL = {"SELL": "SELL", "TRIM": "TRIM", "DOUBLE_DOWN": "DOUBLE DOWN"}
+    ordered = sorted(actioned, key=lambda t: _ORDER.index(t["action"]) if t["action"] in _ORDER else 99)
+    lines = [f"**KIMI INSPECTION — {date_label}**"]
+    for t in ordered:
+        emoji = _EMOJI.get(t["action"], "📌")
+        label = f"`{_LABEL.get(t['action'], t['action']):<11}`"
+        ticker = f"**{t['ticker']:<5}**"
+        wt = t.get("target_weight_pct")
+        target = f"→ **{wt}%**" if wt is not None else "→ **EXIT**"
+        lines.append(f"{emoji} {label} {ticker} {target}")
+        reasoning = (t.get("reasoning") or "").strip()
+        if reasoning:
+            lines.append(f"↳ {reasoning}")
+    lines.append("\nWeekly holdings check · delta vs prior thesis")
+    return "\n".join(lines)
+
+
 async def run_weekly_inspection() -> None:
     """Weekly holdings-only review. Never opens a new position — see
     docs/superpowers/specs/2026-07-09-kimi-inspection-design.md."""
     log_entry: dict = {
         "timestamp": datetime.now(_CT).isoformat(),
         "status": "started",
+        "portfolio_value": None,
+        "spy_price_at_rebalance": None,
         "holdings_reviewed": [],
         "trades_executed": [],
         "trades_skipped": [],
@@ -125,6 +154,31 @@ async def run_weekly_inspection() -> None:
                 "current_price": pos.get("current_price"),
                 "unrealized_pnl_pct": round(pos.get("unrealized_plpc", 0), 2),
             })
+
+        # Portfolio context (value / cash / SPY) computed up front so the start
+        # header, the no-changes card, and the benchmark all share one snapshot.
+        buying_power = await rh_client.get_buying_power_async() or 0.0
+        holdings_value = sum(p["qty"] * p.get("current_price", 0) for p in positions)
+        portfolio_value = holdings_value + buying_power
+        spy_price = await loop.run_in_executor(None, _fetch_spy_price)
+        log_entry["portfolio_value"] = portfolio_value
+        log_entry["spy_price_at_rebalance"] = spy_price
+
+        cash_pct = (buying_power / portfolio_value * 100) if portfolio_value else 0.0
+        spy_str = f"${spy_price:,.2f}" if spy_price else "n/a"
+        await notify_claude_manager_embed(_embed(
+            "🔍 KIMI INSPECTION — WEEKLY HOLDINGS CHECK",
+            _CLR_YELLOW,
+            description=(
+                f"Reviewing **{len(positions)} holding(s)** for anything material since last week.\n\n"
+                f"**Portfolio Value** `${portfolio_value:,.2f}`  ·  "
+                f"**Cash** `${buying_power:,.2f} ({cash_pct:.1f}%)`  ·  "
+                f"**SPY** `{spy_str}`  ·  "
+                f"**Holdings** `{len(positions)}`"
+            ),
+            footer=_timestamp(),
+        ))
+
         data_gaps_by_ticker = annotate_and_collect_gaps(enriched)
         _gap_field = format_data_gap_field(data_gaps_by_ticker)
         if _gap_field:
@@ -164,7 +218,7 @@ async def run_weekly_inspection() -> None:
             _append_inspection_log(log_entry)
             await notify_claude_manager_embed(_embed(
                 "❌ INSPECTION FAILED — Anthropic API error",
-                _CLR_ORANGE, description=str(exc), footer=_timestamp(),
+                _CLR_RED, description=str(exc), footer=_timestamp(),
             ))
             return
 
@@ -185,11 +239,19 @@ async def run_weekly_inspection() -> None:
             t for t in trade_block.get("trades", []) if t.get("action") != "HOLD"
         ]:
             log_entry["status"] = "no_changes"
+            reviewed = len(log_entry["holdings_reviewed"])
+            benchmark_str = _format_benchmark(
+                log_entry, _load_recent_inspection_entries(limit=36),
+                period_label="Since last check",
+            )
             _append_inspection_log(log_entry)
+            desc = f"**Reviewed {reviewed} · Held {reviewed} · Acted 0** — every holding's thesis still holds."
+            if benchmark_str:
+                desc += f"\n\n{benchmark_str}"
             await notify_claude_manager_embed(_embed(
                 "🔍 KIMI INSPECTION — no material changes this week",
                 _CLR_GREEN,
-                description=f"Reviewed {len(log_entry['holdings_reviewed'])} holding(s); no action needed.",
+                description=desc,
                 footer=_timestamp(),
             ))
             return
@@ -205,7 +267,7 @@ async def run_weekly_inspection() -> None:
             if not _ticker:
                 continue
             _reasoning = t.get("reasoning", "")
-            log_entry["notes"][_ticker] = _reasoning or f"{t.get('action', '?')} — see full analysis in Discord."
+            log_entry["notes"][_ticker] = _reasoning or f"{t.get('action', '?')} — (no reasoning provided)"
 
         _EXCLUDED = {"SPY"}  # managed by Kimi — Inspection must never touch this
         pending_trades = [
@@ -223,9 +285,8 @@ async def run_weekly_inspection() -> None:
             })
         pending_trades = [t for t in pending_trades if t.get("action") in _VALID_ACTIONS]
 
-        buying_power = await rh_client.get_buying_power_async() or 0.0
-        holdings_value = sum(p["qty"] * p.get("current_price", 0) for p in positions)
-        portfolio_value = holdings_value + buying_power
+        # buying_power / portfolio_value / spy_price were computed up front for the
+        # context header — reused here for guardrail sizing and DOUBLE_DOWN budget.
 
         # Risk guardrails: clamp DOUBLE_DOWN/TRIM to <=25% (always), then
         # best-effort sector-concentration alert (>50%, no auto-scale).
@@ -247,11 +308,6 @@ async def run_weekly_inspection() -> None:
         if _guardrail_embed:
             await notify_claude_manager_embed(_guardrail_embed)
 
-        await notify_claude_manager_embed(_embed(
-            f"🔍 KIMI INSPECTION — {len(pending_trades)} action(s) this week",
-            _CLR_ORANGE, footer=_timestamp(),
-        ))
-
         _next_trading_day = None  # cached across calls within this run — same value every time
 
         def _schedule_pending_inspection_sell(order_id: str, ticker: str, entry_px: float, qty_sold: float) -> None:
@@ -272,11 +328,20 @@ async def run_weekly_inspection() -> None:
                 run_dt.isoformat(), broker="claude_sell", qty=qty_sold, source="manager",
             )
 
+        def _next_fill_label() -> str:
+            """Short 'Mon 7/21' label for the next trading day, for queued-order embeds."""
+            nonlocal _next_trading_day
+            if _next_trading_day is None:
+                from app.trading.alpaca_client import get_next_trading_day
+                _next_trading_day = get_next_trading_day()
+            d = _next_trading_day
+            return f"{d:%a} {d.month}/{d.day}"
+
         # ── Phase 1: SELL ────────────────────────────────────────────────────
         for trade in (t for t in pending_trades if t["action"] == "SELL"):
             ticker = trade["ticker"].upper()
             reasoning = trade.get("reasoning", "")
-            log_entry["notes"][ticker] = reasoning or "SELL — see full analysis in Discord."
+            log_entry["notes"][ticker] = reasoning or "SELL — (no reasoning provided)"
             pos = position_by_ticker.get(ticker)
             if pos is None:
                 log_entry["trades_skipped"].append({"action": "SELL", "ticker": ticker, "reason": "no position"})
@@ -316,46 +381,30 @@ async def run_weekly_inspection() -> None:
                 from app.rh_trade_record import record_rh_trade
                 await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
 
-            wins, losses = get_record()
             log_entry["trades_executed"].append({
                 "action": "SELL", "ticker": ticker, "qty": qty,
                 "fill_price": fill, "queued": queued,
-                "dollar_pnl": dollar_pnl, "reasoning": reasoning,
+                "dollar_pnl": dollar_pnl, "pct_pnl": pct_pnl, "reasoning": reasoning,
             })
 
-            await asyncio.sleep(0.8)
+            # Queued sells fill tomorrow — surface them individually (hybrid #4).
+            # Immediate fills are rolled into the one results card at the end.
             if queued:
+                await asyncio.sleep(0.8)
                 await notify_claude_manager_embed(_trade_embed(
                     "SELL", ticker,
-                    [_field("Status", "⏳ Queued for market open"),
+                    [_field("Status", f"⏳ Queued — fills ~9:31 AM ET {_next_fill_label()}"),
                      _field("Est. Qty", f"{qty:g} shares"),
                      _field("Est. Price", f"${result.get('price_est', 0):,.2f}"),
                      _field("Reasoning", reasoning or "—", inline=False)],
                     _timestamp(),
                 ))
-            else:
-                pnl_str = (
-                    f"+${dollar_pnl:,.2f} ({pct_pnl:+.2f}%)" if dollar_pnl >= 0
-                    else f"-${abs(dollar_pnl):,.2f} ({pct_pnl:+.2f}%)"
-                ) if dollar_pnl is not None else "—"
-                await notify_claude_manager_embed(_trade_embed(
-                    "SELL", ticker,
-                    [_field("Qty", f"{qty:g} shares @ ${fill or 0:,.2f}"),
-                     _field("Record", f"{wins}W — {losses}L"),
-                     _field("Reasoning", reasoning or "—", inline=False),
-                     _field("P&L", pnl_str, inline=False)],
-                    _timestamp(),
-                ))
-                await notify_claude_signal_feed(
-                    f"🔴 **KIMI INSPECTION SELL — {ticker}**\n{reasoning or 'See analysis.'}\n"
-                    f"@ ${fill or 0:,.2f}\n{_timestamp()}"
-                )
 
         # ── Phase 2: TRIM ────────────────────────────────────────────────────
         for trade in (t for t in pending_trades if t["action"] == "TRIM"):
             ticker = trade["ticker"].upper()
             reasoning = trade.get("reasoning", "")
-            log_entry["notes"][ticker] = reasoning or "TRIM — see full analysis in Discord."
+            log_entry["notes"][ticker] = reasoning or "TRIM — (no reasoning provided)"
             pos = position_by_ticker.get(ticker)
             if pos is None:
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "no position"})
@@ -403,42 +452,25 @@ async def run_weekly_inspection() -> None:
                 from app.rh_trade_record import record_rh_trade
                 await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
 
-            wins, losses = get_record()
             log_entry["trades_executed"].append({
                 "action": "TRIM", "ticker": ticker, "qty": qty_sold,
                 "fill_price": fill, "queued": queued,
-                "dollar_pnl": dollar_pnl,
+                "dollar_pnl": dollar_pnl, "pct_pnl": pct_pnl,
                 "target_weight_pct": target_wt, "reasoning": reasoning,
             })
 
-            await asyncio.sleep(0.8)
+            # Queued trims surface individually; immediate fills roll into the
+            # end-of-run results card (hybrid #4).
             if queued:
+                await asyncio.sleep(0.8)
                 await notify_claude_manager_embed(_trade_embed(
                     "TRIM", ticker,
-                    [_field("Status", "⏳ Queued for market open"),
+                    [_field("Status", f"⏳ Queued — fills ~9:31 AM ET {_next_fill_label()}"),
                      _field("Selling", f"{qty_sold:g} shares"),
                      _field("→ Target", f"{target_wt}%"),
                      _field("Reasoning", reasoning or "—", inline=False)],
                     _timestamp(),
                 ))
-            else:
-                pnl_str = (
-                    f"+${dollar_pnl:,.2f} ({pct_pnl:+.2f}%)" if dollar_pnl >= 0
-                    else f"-${abs(dollar_pnl):,.2f} ({pct_pnl:+.2f}%)"
-                ) if dollar_pnl is not None else "—"
-                await notify_claude_manager_embed(_trade_embed(
-                    "TRIM", ticker,
-                    [_field("Sold", f"{qty_sold:g} shares @ ${fill or 0:,.2f}"),
-                     _field("→ Target", f"{target_wt}%"),
-                     _field("Record", f"{wins}W — {losses}L"),
-                     _field("Reasoning", reasoning or "—", inline=False),
-                     _field("P&L", pnl_str, inline=False)],
-                    _timestamp(),
-                ))
-                await notify_claude_signal_feed(
-                    f"✂️ **KIMI INSPECTION TRIM — {ticker}**\n{reasoning or 'See analysis.'}\n"
-                    f"→ target {target_wt}% · {_timestamp()}"
-                )
 
         # ── Phase 3: DOUBLE_DOWN — funded by real cash + realized sell/trim proceeds ─
         # Budget is derived from the sells/trims that actually executed above, so a
@@ -447,7 +479,7 @@ async def run_weekly_inspection() -> None:
         for trade in (t for t in pending_trades if t["action"] == "DOUBLE_DOWN"):
             ticker = trade["ticker"].upper()
             reasoning = trade.get("reasoning", "")
-            log_entry["notes"][ticker] = reasoning or "DOUBLE_DOWN — see full analysis in Discord."
+            log_entry["notes"][ticker] = reasoning or "DOUBLE_DOWN — (no reasoning provided)"
             pos = position_by_ticker.get(ticker)
             if pos is None:
                 log_entry["trades_skipped"].append({"action": "DOUBLE_DOWN", "ticker": ticker, "reason": "no position"})
@@ -495,44 +527,67 @@ async def run_weekly_inspection() -> None:
             })
             available_budget = max(0.0, available_budget - invest_dollars)
 
-            await asyncio.sleep(0.8)
+            # Queued adds surface individually; immediate fills roll into the
+            # end-of-run results card (hybrid #4).
             if queued:
+                await asyncio.sleep(0.8)
                 await notify_claude_manager_embed(_trade_embed(
                     "DOUBLE_DOWN", ticker,
-                    [_field("Status", "⏳ Queued for market open"),
+                    [_field("Status", f"⏳ Queued — fills ~9:31 AM ET {_next_fill_label()}"),
                      _field("Est. Qty", f"{qty:g} shares ≈ ${est:,.2f}"),
                      _field("Target Weight", f"{target_wt}%"),
                      _field("Investing", f"${invest_dollars:,.2f}"),
                      _field("Reasoning", reasoning or "—", inline=False)],
                     _timestamp(),
                 ))
-            else:
-                await notify_claude_manager_embed(_trade_embed(
-                    "DOUBLE_DOWN", ticker,
-                    [_field("Qty", f"{qty:g} shares @ ${fill or 0:,.2f}"),
-                     _field("Target Weight", f"{target_wt}%"),
-                     _field("Invested", f"${invest_dollars:,.2f}"),
-                     _field("Reasoning", reasoning or "—", inline=False)],
-                    _timestamp(),
-                ))
-                await notify_claude_signal_feed(
-                    f"🔥 **KIMI INSPECTION DOUBLE_DOWN — {ticker}**\n{reasoning or 'See analysis.'}\n"
-                    f"Target: {target_wt}% · {_timestamp()}"
-                )
 
+        # ── Consolidated results card (hybrid #4) ────────────────────────────
         log_entry["status"] = "completed"
+
+        executed_trades = log_entry["trades_executed"]
+        filled = [t for t in executed_trades if not t.get("queued")]
+        queued_ct = sum(1 for t in executed_trades if t.get("queued"))
+        skipped_ct = len(log_entry["trades_skipped"])
+        reviewed = len(log_entry["holdings_reviewed"])
+        acted = len(executed_trades)
+        held = max(0, reviewed - acted)
+
+        # KI Server: one decisions card covering every acted holding (no dollars).
+        if executed_trades:
+            _now = datetime.now(_CT)
+            _date_label = f"{_now:%b} {_now.day}"
+            await _send_chunked(notify_claude_signal_feed, _build_inspection_ki_summary(executed_trades, _date_label))
+
+        benchmark_str = _format_benchmark(
+            log_entry, _load_recent_inspection_entries(limit=36),
+            period_label="Since last check",
+        )
         _append_inspection_log(log_entry)
 
-        executed = len(log_entry["trades_executed"])
-        skipped = len(log_entry["trades_skipped"])
+        wins, losses = get_record()
+        desc_lines = [f"**Reviewed {reviewed} · Held {held} · Acted {acted}**  ·  Record {wins}W — {losses}L"]
+        notes = []
+        if queued_ct:
+            notes.append(f"⏳ {queued_ct} queued for next open")
+        if skipped_ct:
+            notes.append(f"⚠️ {skipped_ct} skipped")
+        if notes:
+            desc_lines.append("  ·  ".join(notes))
+        if benchmark_str:
+            desc_lines.append(f"\n{benchmark_str}")
+
         await asyncio.sleep(0.8)
-        await notify_claude_manager_embed(_embed(
+        _cards = _result_card_embeds(
             "✅ KIMI INSPECTION COMPLETE",
             _CLR_GREEN,
-            description=f"{executed} trade(s) executed"
-                        + (f", {skipped} skipped" if skipped else ""),
+            description="\n".join(desc_lines),
+            fields=[_trade_result_field(t) for t in filled],
             footer=_timestamp(),
-        ))
+        )
+        for _i, _card in enumerate(_cards):
+            if _i:
+                await asyncio.sleep(0.5)
+            await notify_claude_manager_embed(_card)
 
     except Exception as exc:
         log.error("Unhandled error in run_weekly_inspection: %s", exc)
@@ -540,7 +595,7 @@ async def run_weekly_inspection() -> None:
         _append_inspection_log(log_entry)
         await notify_claude_manager_embed(_embed(
             "❌ INSPECTION FAILED — unexpected error",
-            _CLR_ORANGE, description=str(exc), footer=_timestamp(),
+            _CLR_RED, description=str(exc), footer=_timestamp(),
         ))
 
 

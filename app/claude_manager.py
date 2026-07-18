@@ -101,6 +101,103 @@ def _trade_embed(action: str, ticker: str, fields: list[dict], footer: str) -> d
         footer=footer,
     )
 
+
+def format_pnl(dollar_pnl: "float | None", pct_pnl: "float | None", *, tag: bool = False) -> str:
+    """Canonical realized-P&L string, shared by the rebalance and inspection flows.
+
+    Returns an em dash when P&L is unknown (e.g. a queued sell whose fill price
+    isn't in yet). With tag=True, appends the 🟢 WIN / 🔴 LOSS marker used in the
+    per-trade rebalance embeds; without it, just the signed dollar and percent.
+    """
+    if dollar_pnl is None:
+        return "—"
+    pct = pct_pnl if pct_pnl is not None else 0.0
+    if dollar_pnl >= 0:
+        s = f"+${dollar_pnl:,.2f} ({pct:+.2f}%)"
+        return f"{s} 🟢 WIN" if tag else s
+    s = f"-${abs(dollar_pnl):,.2f} ({pct:+.2f}%)"
+    return f"{s} 🔴 LOSS" if tag else s
+
+
+def _trade_result_field(t: dict) -> dict:
+    """One Discord field summarizing a single filled trade, for the consolidated
+    end-of-run results card shared by the rebalance and the weekly inspection
+    (hybrid batching). SELL/TRIM show realized P&L; BUY/DOUBLE_DOWN show the
+    dollars deployed. Reasoning is appended when present (inspection carries it;
+    the rebalance shows full theses as separate prose earlier in the run)."""
+    action = t["action"]
+    ticker = t["ticker"]
+    emoji = {"SELL": "🔴", "TRIM": "✂️", "DOUBLE_DOWN": "🔥", "BUY": "🟢"}.get(action, "📌")
+    label = "DOUBLE DOWN" if action == "DOUBLE_DOWN" else action
+    fill = t.get("fill_price") or 0.0
+    qty = t.get("qty", 0)
+    lines: list = []
+    if action == "SELL":
+        lines.append(f"{qty:g} sh @ ${fill:,.2f}")
+        lines.append(format_pnl(t.get("dollar_pnl"), t.get("pct_pnl"), tag=True))
+    elif action == "TRIM":
+        lines.append(f"sold {qty:g} sh @ ${fill:,.2f}  →  {t.get('target_weight_pct')}%")
+        lines.append(format_pnl(t.get("dollar_pnl"), t.get("pct_pnl"), tag=True))
+    elif action in ("BUY", "DOUBLE_DOWN"):
+        lines.append(f"{qty:g} sh @ ${fill:,.2f}  →  {t.get('target_weight_pct')}%")
+        lines.append(f"${t.get('dollars_invested', 0):,.2f} invested")
+    if t.get("reasoning"):
+        lines.append(t["reasoning"])
+    return _field(f"{emoji} {label} — {ticker}", "\n".join(lines), inline=False)
+
+
+_EMBED_FIELD_LIMIT = 25     # Discord's hard cap on fields per embed
+_EMBED_CHAR_BUDGET = 5500   # headroom under Discord's 6000-char per-embed total
+
+
+def _result_card_embeds(
+    title: str,
+    color: int,
+    *,
+    description: str = "",
+    fields: "list[dict] | None" = None,
+    footer: str = "",
+) -> list:
+    """Build the consolidated results card as one embed — or several, if the
+    fields would blow past Discord's 25-field or 6000-char per-embed limits.
+
+    The description rides the first embed and the footer the last, so a split
+    card still reads as one unit (continuation embeds get a '(cont.)' title).
+    A run with only a handful of trades yields exactly one embed, unchanged."""
+    fields = fields or []
+    if not fields:
+        return [_embed(title, color, description=description, footer=footer)]
+
+    def _flen(f: dict) -> int:
+        return len(f.get("name", "")) + len(str(f.get("value", "")))
+
+    pages: list = []
+    cur: list = []
+    used = len(title) + len(description) + len(footer)
+    for f in fields:
+        fl = _flen(f)
+        if cur and (len(cur) >= _EMBED_FIELD_LIMIT or used + fl > _EMBED_CHAR_BUDGET):
+            pages.append(cur)
+            cur = []
+            used = len(title)  # continuation pages carry the title only
+        cur.append(f)
+        used += fl
+    if cur:
+        pages.append(cur)
+
+    embeds: list = []
+    last = len(pages) - 1
+    for i, page in enumerate(pages):
+        embeds.append(_embed(
+            title if i == 0 else f"{title} (cont. {i + 1})",
+            color,
+            description=description if i == 0 else "",
+            fields=page,
+            footer=footer if i == last else "",
+        ))
+    return embeds
+
+
 _DIVIDER = "══════════════════════════════"
 
 
@@ -672,8 +769,14 @@ def _load_recent_history() -> tuple[list, str]:
     return records, "\n".join(lines)
 
 
-def _format_benchmark(log_entry: dict, all_records: list) -> str:
-    """Build a month-over-month and inception-to-date benchmark comparison string."""
+def _format_benchmark(log_entry: dict, all_records: list, period_label: str = "This month") -> str:
+    """Build a period-over-period and inception-to-date benchmark comparison string.
+
+    period_label names the most-recent comparison ("This month" for the monthly
+    rebalance, "Since last check" for the weekly inspection). Both flows store
+    the same portfolio_value / spy_price_at_rebalance keys, so this works for
+    either as long as all_records is that flow's own prior log entries.
+    """
     curr_pv = log_entry.get("portfolio_value")
     curr_spy = log_entry.get("spy_price_at_rebalance")
     if not all_records or not curr_pv or not curr_spy:
@@ -681,7 +784,7 @@ def _format_benchmark(log_entry: dict, all_records: list) -> str:
 
     lines = []
 
-    # Month-over-month vs previous rebalance
+    # Period-over-period vs previous run of this flow
     prev = all_records[-1]
     prev_pv = prev.get("portfolio_value")
     prev_spy = prev.get("spy_price_at_rebalance")
@@ -691,7 +794,7 @@ def _format_benchmark(log_entry: dict, all_records: list) -> str:
         alpha = port_chg - spy_chg
         emoji = "🟢" if alpha >= 0 else "🔴"
         lines.append(
-            f"{emoji} **This month:** Portfolio {port_chg:+.2f}%  |  SPY {spy_chg:+.2f}%  |  Alpha {alpha:+.2f}%"
+            f"{emoji} **{period_label}:** Portfolio {port_chg:+.2f}%  |  SPY {spy_chg:+.2f}%  |  Alpha {alpha:+.2f}%"
         )
 
     # Inception-to-date vs first logged rebalance
@@ -760,10 +863,7 @@ async def notify_claude_pending_sell_fill(
     from app.claude_portfolio import get_record
     wins, losses = get_record()
 
-    if dollar_pnl >= 0:
-        pnl_str = f"P&L: +${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
-    else:
-        pnl_str = f"P&L: -${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
+    pnl_str = "P&L: " + format_pnl(dollar_pnl, pct_pnl, tag=True)
 
     prefix = "🤖 " if source == "autopilot" else ""
     await notify_fn(
@@ -1212,6 +1312,15 @@ async def run_monthly_rebalance() -> None:
                 run_dt.isoformat(), broker="claude_sell", qty=qty_sold, source="manager",
             )
 
+        _next_day_cache: list = []
+
+        def _next_fill_label() -> str:
+            """Short 'Mon 7/21' label for the next trading day, for queued-order embeds."""
+            if not _next_day_cache:
+                _next_day_cache.append(get_next_trading_day())
+            d = _next_day_cache[0]
+            return f"{d:%a} {d.month}/{d.day}"
+
         # ── 5. Execute full sells first ───────────────────────────────────────
         for trade in (t for t in trades if t["action"] == "SELL"):
             ticker = trade["ticker"].upper()
@@ -1253,45 +1362,24 @@ async def run_monthly_rebalance() -> None:
                 from app.rh_trade_record import record_rh_trade
                 await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
 
-            wins, losses = get_record()
             log_entry["trades_executed"].append({
                 "action": "SELL", "ticker": ticker, "qty": qty,
                 "fill_price": fill, "queued": queued,
                 "dollar_pnl": dollar_pnl, "pct_pnl": pct_pnl,
             })
 
-            await asyncio.sleep(0.8)
+            # Queued sells fill tomorrow — surface them individually (hybrid).
+            # Immediate fills roll into the one results card at the end.
             if queued:
+                await asyncio.sleep(0.8)
                 await notify_claude_manager_embed(_trade_embed(
                     "SELL", ticker,
                     [
-                        _field("Status", "⏳ Queued for market open"),
+                        _field("Status", f"⏳ Queued — fills ~9:31 AM ET {_next_fill_label()}"),
                         _field("Est. Qty", f"{qty:g} shares"),
                         _field("Est. Price", f"${result.get('price_est', 0):,.2f}"),
                     ],
                     _timestamp(),
-                ))
-            else:
-                pnl_str = (
-                    f"+${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
-                    if dollar_pnl >= 0
-                    else f"-${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
-                ) if dollar_pnl is not None else "—"
-                await notify_claude_manager_embed(_trade_embed(
-                    "SELL", ticker,
-                    [
-                        _field("Qty",    f"{qty:g} shares @ ${fill or 0:,.2f}"),
-                        _field("Record", f"{wins}W — {losses}L"),
-                        _field("P&L",    pnl_str, inline=False),
-                    ],
-                    _timestamp(),
-                ))
-                from app.notifications import notify_claude_signal_feed
-                _fire(notify_claude_signal_feed(
-                    f"🔴 **KIMI SELL — {ticker}**\n"
-                    f"@ ${fill or 0:,.2f}\n"
-                    + ("🟢 WIN" if dollar_pnl >= 0 else "🔴 LOSS") + "\n"
-                    + _timestamp()
                 ))
 
         # ── 5b. Execute TRIMs ─────────────────────────────────────────────────
@@ -1369,46 +1457,24 @@ async def run_monthly_rebalance() -> None:
                 from app.rh_trade_record import record_rh_trade
                 await record_rh_trade(dollar_pnl >= 0, ticker, dollar_pnl)
 
-            wins, losses = get_record()
             log_entry["trades_executed"].append({
                 "action": "TRIM", "ticker": ticker, "qty": qty_sold,
                 "fill_price": fill, "queued": queued,
-                "dollar_pnl": dollar_pnl, "target_weight_pct": target_wt,
+                "dollar_pnl": dollar_pnl, "pct_pnl": pct_pnl, "target_weight_pct": target_wt,
             })
 
-            await asyncio.sleep(0.8)
+            # Queued trims surface individually; immediate fills roll into the
+            # end-of-run results card (hybrid).
             if queued:
+                await asyncio.sleep(0.8)
                 await notify_claude_manager_embed(_trade_embed(
                     "TRIM", ticker,
                     [
-                        _field("Status",        "⏳ Queued for market open"),
+                        _field("Status",        f"⏳ Queued — fills ~9:31 AM ET {_next_fill_label()}"),
                         _field("Selling",       f"{qty_sold:g} shares"),
                         _field("Target Weight", f"{target_wt}%"),
                     ],
                     _timestamp(),
-                ))
-            else:
-                pnl_str = (
-                    f"+${dollar_pnl:,.2f} (+{pct_pnl:.2f}%) 🟢 WIN"
-                    if dollar_pnl >= 0
-                    else f"-${abs(dollar_pnl):,.2f} (-{abs(pct_pnl):.2f}%) 🔴 LOSS"
-                ) if dollar_pnl is not None else "—"
-                await notify_claude_manager_embed(_trade_embed(
-                    "TRIM", ticker,
-                    [
-                        _field("Sold",          f"{qty_sold:g} shares @ ${fill or 0:,.2f}"),
-                        _field("→ Target",      f"{target_wt}%"),
-                        _field("Record",        f"{wins}W — {losses}L"),
-                        _field("P&L",           pnl_str, inline=False),
-                    ],
-                    _timestamp(),
-                ))
-                from app.notifications import notify_claude_signal_feed
-                _fire(notify_claude_signal_feed(
-                    f"✂️ **KIMI TRIM — {ticker}**\n"
-                    f"@ ${fill or 0:,.2f} → target {target_wt}% weight\n"
-                    + (f"+{pct_pnl:.2f}% 🟢 WIN" if dollar_pnl >= 0 else f"-{abs(pct_pnl):.2f}% 🔴 LOSS") + "\n"
-                    + _timestamp()
                 ))
 
         # Use pre-calculated sell proceeds + current cash as the buy budget.
@@ -1467,66 +1533,63 @@ async def run_monthly_rebalance() -> None:
                 "dollars_invested": invest_dollars, "target_weight_pct": target_wt,
             })
 
-            await asyncio.sleep(0.8)
+            # Queued adds surface individually; immediate fills roll into the
+            # end-of-run results card (hybrid).
             if queued:
+                await asyncio.sleep(0.8)
                 await notify_claude_manager_embed(_trade_embed(
                     action_label, ticker,
                     [
-                        _field("Status",        "⏳ Queued for market open"),
+                        _field("Status",        f"⏳ Queued — fills ~9:31 AM ET {_next_fill_label()}"),
                         _field("Est. Qty",      f"{qty:g} shares ≈ ${est:,.2f}"),
                         _field("Target Weight", f"{target_wt}%"),
                         _field("Investing",     f"${invest_dollars:,.2f}"),
                     ],
                     _timestamp(),
                 ))
-            else:
-                await notify_claude_manager_embed(_trade_embed(
-                    action_label, ticker,
-                    [
-                        _field("Qty",           f"{qty:g} shares @ ${fill or 0:,.2f}"),
-                        _field("Target Weight", f"{target_wt}%"),
-                        _field("Invested",      f"${invest_dollars:,.2f}"),
-                    ],
-                    _timestamp(),
-                ))
-                from app.notifications import notify_claude_signal_feed
-                sig_emoji = "🔥" if action_label == "DOUBLE_DOWN" else "🟢"
-                _fire(notify_claude_signal_feed(
-                    f"{sig_emoji} **KIMI {action_label} — {ticker}**\n"
-                    f"@ ${fill or 0:,.2f}\n"
-                    f"Target: {target_wt}% weight\n"
-                    + _timestamp()
-                ))
             available_budget = max(0.0, available_budget - invest_dollars)
 
         log_entry["status"] = "completed"
 
-        # ── 7. Completion embed with benchmark ────────────────────────────────
+        # ── 7. Consolidated results card with benchmark (hybrid batching) ─────
         benchmark_str = _format_benchmark(log_entry, all_history_records)
-        executed_count = len(log_entry["trades_executed"])
-        skipped_count  = len(log_entry["trades_skipped"])
+        executed_trades = log_entry["trades_executed"]
+        filled = [t for t in executed_trades if not t.get("queued")]
+        queued_ct = sum(1 for t in executed_trades if t.get("queued"))
+        skipped_count = len(log_entry["trades_skipped"])
 
         _action_order = ("SELL", "TRIM", "DOUBLE_DOWN", "BUY", "HOLD")
         _action_emoji = {"SELL": "🔴", "TRIM": "✂️", "DOUBLE_DOWN": "🔥", "BUY": "🟢", "HOLD": "⏸"}
         trade_parts = [
-            f"{_action_emoji.get(a, '')} {sum(1 for t in log_entry['trades_executed'] if t['action'] == a)}× {a}"
+            f"{_action_emoji.get(a, '')} {sum(1 for t in executed_trades if t['action'] == a)}× {a}"
             for a in _action_order
-            if any(t["action"] == a for t in log_entry["trades_executed"])
+            if any(t["action"] == a for t in executed_trades)
         ]
         trade_summary = "  ·  ".join(trade_parts) if trade_parts else "No trades"
 
-        desc_lines = [f"**{trade_summary}**"]
+        wins, losses = get_record()
+        desc_lines = [f"**{trade_summary}**  ·  Record {wins}W — {losses}L"]
+        notes = []
+        if queued_ct:
+            notes.append(f"⏳ {queued_ct} queued for next open")
+        if skipped_count:
+            notes.append(f"⚠️ {skipped_count} skipped — see messages above")
+        if notes:
+            desc_lines.append("  ·  ".join(notes))
         if benchmark_str:
             desc_lines.append(f"\n{benchmark_str}")
-        if skipped_count:
-            desc_lines.append(f"\n⚠️ {skipped_count} trade(s) skipped — see messages above.")
         await asyncio.sleep(0.8)
-        await notify_claude_manager_embed(_embed(
+        _cards = _result_card_embeds(
             "✅ KIMI PORTFOLIO REBALANCE COMPLETE",
             _CLR_GREEN,
             description="\n".join(desc_lines),
+            fields=[_trade_result_field(t) for t in filled],
             footer=_timestamp(),
-        ))
+        )
+        for _i, _card in enumerate(_cards):
+            if _i:
+                await asyncio.sleep(0.5)
+            await notify_claude_manager_embed(_card)
 
     finally:
         _append_rebalance_log(log_entry)

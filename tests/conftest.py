@@ -24,3 +24,15 @@ def isolate_idempotency_store(tmp_path):
     """Redirect the idempotency store to a fresh temp file for every test."""
     with patch("app.idempotency._FILE", tmp_path / "idempotency.json"):
         yield
+
+
+@pytest.fixture(autouse=True)
+def stub_inspection_spy_price():
+    """The weekly inspection fetches a live SPY price for its context header and
+    benchmark. Stub it so tests never hit yfinance/network. No-ops cleanly if the
+    module isn't imported by a given test."""
+    try:
+        with patch("app.claude_inspection._fetch_spy_price", return_value=450.0):
+            yield
+    except (ImportError, AttributeError):
+        yield

@@ -263,8 +263,8 @@ On the **1st of each month at 9:35 AM ET**, the system:
 8. **Risk guardrails run before execution** (`app/risk_guardrails.py`): any BUY/DOUBLE_DOWN/TRIM over 25% is hard-clamped down to 25% in place, and a `⚠️ RISK GUARDRAIL` Discord alert fires if any single sector's post-trade weight would exceed 50% (alert-only — no auto-scaling). Enforces the stated policy in code rather than trusting the prompt alone
 9. Trades execute in order — SELL → TRIM → DOUBLE_DOWN/BUY — so sale proceeds fund same-run buys. The buy budget is **real cash + the proceeds of the sells/trims that actually executed this run** (computed via `_realized_sell_proceeds` from the recorded executed trades, shared with the weekly Inspection). A proposed sell that skips or fails contributes nothing — so a buy is never sized against phantom cash — while a queued after-hours sell still counts (its estimated fill is credited). Buys are capped at 95% of that combined budget.
 9. After-hours sells are saved as pending orders and resolved at market open with actual fill price and P&L
-10. Full analysis + each trade posted to Discord; full audit log saved to `/data/claude_rebalance_log.json`
-11. **Benchmark comparison** posted at completion (and on no-change months): portfolio % vs SPY % month-over-month and since inception
+10. Posted to Discord (see [Discord message format](#discord-message-format--consolidated-results-card) below): a context header (portfolio value / cash / SPY / holdings), the full 5-section research **one stock per message** (chunked plain text) with each ticker's financials chart, then a **single consolidated results card** — one field per filled trade — instead of a separate embed per trade. Failures and queued after-hours orders still post individually. Full audit log saved to `/data/claude_rebalance_log.json`
+11. **Benchmark comparison** carried in the results card (and on no-change months): portfolio % vs SPY % month-over-month and since inception
 12. **Decision Review** card posted monthly (`📅 KIMI DECISION REVIEW`) — a **monitoring-only** scorecard for you: every executed trade from the last 6 months (up to 20) scored by the stock's return **vs SPY since the decision** (good/bad/neutral by action) plus the most recent decisions. Derived live from the decision logs + yfinance; **deliberately not fed into Claude's prompt** — it's an observability tool for the operator, so the track record never biases Kimi's decisions toward recency
 
 Can also be triggered on-demand via `/rebalance` Discord slash command or `POST /run-rebalance`.
@@ -347,7 +347,7 @@ On the **first trading day of each week** at **9:35 AM ET** — skipped on any w
 5. Can act immediately with three trade actions — **SELL** (close the position), **TRIM** (reduce to a lower target weight, same 1-share-minimum rule as the monthly rebalance), or **DOUBLE_DOWN** (add to an existing position with elevated conviction)
 6. **Never opens a new position.** BUY is disallowed in the prompt *and* rejected in code — a response containing a BUY anywhere has its entire trade block discarded, nothing executes
 7. **Same risk guardrails as the monthly rebalance** (`app/risk_guardrails.py`): a DOUBLE_DOWN/TRIM over 25% is hard-clamped to 25% before execution, and a `⚠️ RISK GUARDRAIL` alert fires if a sector would exceed 50% post-trade
-8. Posts full analysis + every trade to Discord (`CLAUDE_MANAGER_WEBHOOK_URL`); posts an actioned-holdings-only summary to the paid subscriber channel (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`); realized SELL/TRIM P&L is recorded to the same win/loss ledger the monthly rebalance uses
+8. Posts to Discord (`CLAUDE_MANAGER_WEBHOOK_URL`): a context header (portfolio value / cash / SPY / holdings), then a **single consolidated results card** with `Reviewed · Held · Acted` counts, the "since last check" benchmark, and one field per acted holding carrying its one-to-two-sentence reasoning inline (Inspection posts no long-form prose — the reasoning *is* the record). Failures and queued orders post individually. A single **decisions roll-up** goes to the paid subscriber channel (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`) — action, target weight, and the reasoning, with dollars/P&L stripped. Realized SELL/TRIM P&L is recorded to the same win/loss ledger the monthly rebalance uses. See [Discord message format](#discord-message-format--consolidated-results-card)
 9. Audit log saved to `/data/claude_inspection_log.json` (separate file from the monthly rebalance's log). The next monthly rebalance reads recent Inspection activity as part of its own history context, so it builds on what Inspection already decided instead of re-deriving a thesis
 
 Can also be triggered on-demand via the `/inspection` Discord slash command.
@@ -379,6 +379,25 @@ Updates since last rebalance:
   • 2026-07-08: DOUBLE_DOWN → 20%: Blackwell ramp ahead of schedule, bear case on supply eased.
   • 2026-07-15: TRIM → 16%: position ran to 22% of book on the rally, trimming to target.
 ```
+
+---
+
+### Discord message format — consolidated results card
+
+Both autonomous loops (monthly rebalance and weekly Inspection) share one message shape, tuned so a run reads as a few clean cards instead of a burst of per-trade pings. Built in `_result_card_embeds` / `_trade_result_field` (`app/claude_manager.py`).
+
+**Hybrid batching.** Every immediately-**filled** trade is folded into a *single* results card — one Discord embed field per trade (ticker, fill, target weight, and either realized P&L for SELL/TRIM or dollars deployed for BUY/DOUBLE_DOWN). What deliberately stays on its own message is anything you'd want to react to in the moment:
+
+| Outcome | How it posts | Accent |
+|---|---|---|
+| Filled trade | Field in the one results card | — |
+| Failure | Standalone embed | 🔴 red |
+| Queued for next open | Standalone embed, with the actual fill day/time (`fills ~9:31 AM ET Mon 7/21`) | color of the action |
+| Benign skip (already at target, fractional, etc.) | Standalone gray embed; also counted in the card footer | ⚪ gray |
+
+The card footer summarizes the run: rebalance shows `🔴 1× SELL · 🟢 4× BUY` + record + benchmark; Inspection shows `Reviewed 8 · Held 6 · Acted 2` + record + benchmark. Subscribers get a single **decisions roll-up** — the rebalance shares its full 5-section research prose there, and the Inspection roll-up carries each decision's one-to-two-sentence reasoning (the "why"). Both strip dollar amounts, quantities, and P&L; subscribers see the reasoning, action, and target weight, never the per-fill detail.
+
+**Discord limit guard.** A single embed is capped by Discord at **25 fields** and **6000 total characters**. Because consolidation can, in a heavy run, push past either, `_result_card_embeds` measures the fields and splits them across multiple embeds when needed (description on the first, footer on the last, continuation embeds titled `… (cont. 2)`) — so the card can never be silently rejected. A normal run yields exactly one embed. Covered by `tests/test_claude_manager_run.py`.
 
 ---
 
@@ -529,7 +548,7 @@ Uses the same `ANTHROPIC_API_KEY`, `CLAUDE_MANAGER_WEBHOOK_URL`, and `CLAUDE_SUB
 | Variable | Description |
 |---|---|
 | `SIGNAL_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — Kimi BUY/SELL signals with WIN/LOSS on sells. No P&L amounts or quantities. |
-| `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — full 5-section research analysis (one stock per message, chunked) + decisions summary card on every autonomous rebalance. Dollar amounts are stripped — subscribers see research, action, and target weight but not portfolio value or position sizes. |
+| `CLAUDE_SUBSCRIBERS_WEBHOOK_URL` | Paid Kimi Invest Discord — full 5-section research analysis (one stock per message, chunked) + decisions summary card on every autonomous rebalance, plus a decisions roll-up on any weekly Inspection that acts. Dollar amounts are stripped — subscribers see research, action, and target weight but not portfolio value or position sizes. |
 | `WHOP_WEBHOOK_SECRET` | HMAC-SHA256 secret for verifying Whop membership webhook payloads. Optional — signature check is skipped if not set. |
 
 ### GitHub Gist Backup
