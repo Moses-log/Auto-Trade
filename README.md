@@ -977,45 +977,41 @@ Bear: (1) customer concentration (2) China export ceiling (3) valuation priced f
 ┃                                    🕐 9:36 AM CT — July 1, 2026
 ```
 
-**Per-trade embeds** *(one per trade, color coded by action)*
-```
-┃ green  🟢 KIMI BUY — FICO
-┃        Qty                Target Weight    Invested
-┃        1.234 shares @     15%              $2,271.73
-┃        $1,842.00
-┃                                    🕐 9:36 AM CT — July 1, 2026
-
-┃ orange ✂️ KIMI TRIM — NVDA
-┃        Sold               Target Weight
-┃        2.000 shares @     8%
-┃        $127.50
-┃        P&L                Record
-┃        +$84.20 (+8.5%) 🟢 WIN     9W — 2L
-┃                                    🕐 9:36 AM CT — July 1, 2026
-
-┃ yellow 🔥 KIMI DOUBLE DOWN — META
-┃        Qty                Target Weight    Invested
-┃        0.834 shares @     22%              $501.23
-┃        $601.00
-┃                                    🕐 9:36 AM CT — July 1, 2026
-
-┃ red    🔴 KIMI SELL — NOW
-┃        Qty                P&L
-┃        5.5 shares @       +$312.00 (+18.42%) 🟢 WIN
-┃        $210.00
-┃        Record
-┃        8W — 2L
-┃                                    🕐 9:36 AM CT — July 1, 2026
-```
-
-**Final — Completion embed** *(green border)*
+**N+2 — Consolidated results card** *(green border)* — every **filled** trade is a field in this **one** card, not a separate embed per trade. See [Discord message format](#discord-message-format--consolidated-results-card).
 ```
 ┃ ✅ KIMI PORTFOLIO REBALANCE COMPLETE
+┃ 🔴 1× SELL · ✂️ 1× TRIM · 🔥 1× DOUBLE_DOWN · 🟢 1× BUY  ·  Record 9W — 2L
 ┃ 🟢 This month:        Portfolio +3.21%  |  SPY +1.84%  |  Alpha +1.37%
 ┃ 🟢 Since 2026-01-01:  Portfolio +18.50% |  SPY +12.30% |  Alpha +6.20%
-┃ Trades Executed   Trades Skipped
-┃ 4                 0
+┃
+┃ 🔴 SELL — NOW
+┃ 5.5 sh @ $210.00
+┃ +$312.00 (+18.42%) 🟢 WIN
+┃
+┃ ✂️ TRIM — NVDA
+┃ sold 2 sh @ $127.50  →  8%
+┃ +$84.20 (+8.50%) 🟢 WIN
+┃
+┃ 🔥 DOUBLE DOWN — META
+┃ 0.834 sh @ $601.00  →  22%
+┃ $501.23 invested
+┃
+┃ 🟢 BUY — FICO
+┃ 1.234 sh @ $1,842.00  →  15%
+┃ $2,271.73 invested
 ┃                                    🕐 9:37 AM CT — July 1, 2026
+```
+
+A run large enough to exceed Discord's 25-field / 6000-char per-embed limit auto-splits into `✅ … COMPLETE` + `✅ … COMPLETE (cont. 2)` (built by `_result_card_embeds`). The footer line also appends `⏳ N queued for next open` / `⚠️ N skipped` when applicable.
+
+**Standalone exceptions** — anything you'd want to react to in the moment still posts on its own: a **failure** *(red)*, a **queued** after-hours order *(action color, with the real fill time)*, or a benign **skip** *(gray)*:
+```
+┃ red    🔴 KIMI SELL — PLTR
+┃        Status
+┃        ⏳ Queued — fills ~9:31 AM ET Tue 7/2
+┃        Est. Qty           Est. Price
+┃        30 shares          $28.40
+┃                                    🕐 4:12 PM CT — July 1, 2026
 ```
 
 — or when no trades needed —
@@ -1029,9 +1025,18 @@ Bear: (1) customer concentration (2) China export ceiling (3) valuation priced f
 ```
 
 ### Kimi Inspection (`CLAUDE_MANAGER_WEBHOOK_URL`)
-Same embed-sequence pattern as Kimi Manager, scaled down. Fires weekly; the common case is a single "no material changes" embed and nothing else.
+Same consolidated pattern as Kimi Manager, scaled down. Fires weekly; the common case is a single "no material changes" card and nothing else. Unlike the rebalance, Inspection posts **no long-form prose** — the per-trade reasoning *is* the record, carried inline in the results card.
 
-**No holdings** *(gray border)*
+**1 — Context header** *(yellow border, fires first)*
+```
+┃ 🔍 KIMI INSPECTION — WEEKLY HOLDINGS CHECK
+┃ Reviewing 8 holding(s) for anything material since last week.
+┃ Portfolio Value   Cash               SPY       Holdings
+┃ $12,988.05        $151.02 (1.2%)     $556.90   8
+┃                                    🕐 9:35 AM CT — July 6, 2026
+```
+
+**No holdings** *(gray border)* — replaces the header when there's nothing to review
 ```
 ┃ 🔍 KIMI INSPECTION — no current holdings to review
 ┃                                    🕐 9:35 AM CT — July 6, 2026
@@ -1040,52 +1045,38 @@ Same embed-sequence pattern as Kimi Manager, scaled down. Fires weekly; the comm
 **No material changes** *(green border)* — the common case
 ```
 ┃ 🔍 KIMI INSPECTION — no material changes this week
-┃ Reviewed 7 holding(s); no action needed.
+┃ Reviewed 8 · Held 8 · Acted 0 — every holding's thesis still holds.
+┃ 🟢 Since last check: Portfolio +1.10% | SPY +0.86% | Alpha +0.24%
 ┃                                    🕐 9:37 AM CT — July 6, 2026
 ```
 
-**Action(s) this week** *(orange border, fires once before any trades)*
-```
-┃ 🔍 KIMI INSPECTION — 2 action(s) this week
-┃                                    🕐 9:37 AM CT — July 6, 2026
-```
-
-**Per-trade embeds** — same color-coded style as Kimi Manager, plus a **Reasoning** field carrying the specific trigger that justified acting:
-```
-┃ red    🔴 KIMI SELL — NOW
-┃        Qty                Record
-┃        5.5 shares @       8W — 2L
-┃        $210.00
-┃        Reasoning
-┃        Guidance cut on July 3 earnings call — thesis broken.
-┃        P&L
-┃        +$312.00 (+18.42%)
-┃                                    🕐 9:38 AM CT — July 6, 2026
-
-┃ yellow 🔥 KIMI DOUBLE_DOWN — META
-┃        Qty                Target Weight
-┃        0.834 shares @     22%
-┃        $601.00
-┃        Invested
-┃        $501.23
-┃        Reasoning
-┃        Ad business reaccelerated on Q2 print — raising conviction.
-┃                                    🕐 9:38 AM CT — July 6, 2026
-```
-
-**Completion** *(green border)*
+**Consolidated results card** *(green border)* — filled trades roll into this **one** card, each with its reasoning inline. Failures and queued orders post standalone, exactly like the rebalance.
 ```
 ┃ ✅ KIMI INSPECTION COMPLETE
-┃ 2 trade(s) executed
-┃                                    🕐 9:39 AM CT — July 6, 2026
+┃ Reviewed 8 · Held 6 · Acted 2  ·  Record 35W — 18L
+┃ 🟢 Since last check: Portfolio +1.10% | SPY +0.86% | Alpha +0.24%
+┃
+┃ 🔴 SELL — NOW
+┃ 5.5 sh @ $210.00
+┃ +$312.00 (+18.42%) 🟢 WIN
+┃ Guidance cut on July 3 earnings call — thesis broken.
+┃
+┃ 🔥 DOUBLE DOWN — META
+┃ 0.834 sh @ $601.00  →  22%
+┃ $501.23 invested
+┃ Ad business reaccelerated on Q2 print — raising conviction.
+┃                                    🕐 9:38 AM CT — July 6, 2026
 ```
 
-Paid subscribers (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`) only see actioned holdings — no "no changes" noise, and no P&L or position-sizing detail beyond the reasoning and fill price:
+Paid subscribers (`CLAUDE_SUBSCRIBERS_WEBHOOK_URL`) get a single **decisions roll-up** — action, target weight, and the reasoning (the "why"), with no "no changes" noise and no dollar amounts, quantities, or P&L:
 ```
-🔴 **KIMI INSPECTION SELL — NOW**
-Guidance cut on July 3 earnings call — thesis broken.
-@ $210.00
-🕐 9:38 AM CT — July 6, 2026
+**KIMI INSPECTION — Jul 6**
+🔴 `SELL       ` **NOW  ** → **EXIT**
+↳ Guidance cut on July 3 earnings call — thesis broken.
+🔥 `DOUBLE DOWN` **META ** → **20%**
+↳ Ad business reaccelerated on Q2 print — raising conviction.
+
+Weekly holdings check · delta vs prior thesis
 ```
 
 ### Paid Signal Subscribers (`SIGNAL_SUBSCRIBERS_WEBHOOK_URL`)
