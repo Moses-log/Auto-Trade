@@ -1635,3 +1635,15 @@ See [Withdrawal Approval Delay](#withdrawal-approval-delay) for the full flow.
 | High | `public_stats.py` used LIFO cost-basis matching while `tax.py` uses FIFO — win rate and cumulative return shown publicly disagreed with tax records for multi-entry positions | Switched `list + pop()` to `collections.deque + popleft()` for FIFO |
 | High | `robinhood_client.py` accepted orders with a `cancel` URL key as confirmed, masking certain rejected orders | Check only `result.get("id")` for order acceptance |
 | Medium | All `asyncio.create_task()` calls in `claude_manager.py` were fire-and-forget with no stored reference — Python's GC could cancel in-flight subscriber Discord notifications | All background tasks go through `_fire()` helper that keeps strong reference in module-level `_bg_tasks` set |
+
+---
+
+## License
+
+This project is **proprietary and source-available for viewing only** — see [`LICENSE`](LICENSE).
+
+The repository is public for transparency, but **all rights are reserved**. You may read the code within this repository; you may **not** use, run, copy, modify, redistribute, or reuse the code, trading strategies, or prompts — commercially or non-commercially — without prior written permission.
+
+The Software is provided "AS IS" with no warranty, and the copyright holder accepts no liability for any financial or trading losses. **Nothing here is financial advice.** Trading involves substantial risk, including loss of principal.
+
+> Note: GitHub only auto-detects standard open-source licenses, so it will show this repo's license as a generic "LICENSE" rather than a named one — that is expected for a proprietary license.
