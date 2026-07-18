@@ -431,6 +431,7 @@ app/
 │
 ├── claude_manager.py     # Autonomous monthly portfolio manager (Anthropic API)
 ├── claude_inspection.py  # Weekly holdings-only check between monthly rebalances (SELL/TRIM/DOUBLE_DOWN, never BUY)
+├── anthropic_cache.py    # Prompt-caching helpers (cache_control) shared by the three Claude agentic loops — cuts repeated-prefix cost/latency, output unchanged
 ├── decision_review.py    # Scores past executed trades vs SPY since decision → monthly Discord review (monitoring-only, derived live from logs + yfinance, no persisted state)
 ├── risk_guardrails.py    # Code-enforced position hard-cap (25%) + sector alert (50%) between parsed trades and execution — shared by rebalance + Inspection
 ├── claude_portfolio.py   # Kimi position tracker — open/close/trim/W-L for both Kimi systems
@@ -1372,6 +1373,16 @@ python -c "import secrets; print(secrets.token_hex(32))"
 ---
 
 ## Recent Changes
+
+### Prompt caching on the Claude agentic loops (July 17, 2026)
+
+| Change | Details |
+|---|---|
+| **What** | All three Claude agentic loops — the monthly rebalance (`claude_manager`), weekly Inspection (`claude_inspection`), and geopolitical brief (`macro_context`) — now use Anthropic prompt caching. Within a loop the same large prefix (tools + system prompt + initial context, then accumulating web-search results) was previously re-sent at full price on **every** turn; it's now cached and read at ~0.1× input price on turns after the first. Identical model, prompt, and output — purely cheaper and faster. |
+| **How** | New shared module `app/anthropic_cache.py`: `cached_system()` marks the system block with `cache_control` (also caching the tools that render before it), and `apply_message_cache()` rolls a single breakpoint to the newest turn each iteration — stripping the prior one so a request never exceeds the 4-breakpoint max. |
+| **TTL** | Default 5-minute ephemeral TTL. It's a *sliding window refreshed on every cache hit*, and loop turns fire back-to-back with no sleeps, so the cache stays warm for the whole loop (turn-to-turn gaps are seconds, well under 5 min). The 1-hour TTL was considered and deliberately not used — unnecessary at 2× write cost for these tight loops. |
+| **Savings (estimated)** | Repeated-input cost ~75–90% lower; total per-run cost ~40–65% lower (diluted by output tokens, which aren't cached, and the first uncached pass); wall-clock ~20–40% faster (cached tokens prefill faster, but web-search round-trips and output generation still dominate). Quality unchanged. |
+| **Measurement** | Each loop logs `cache_read` / `cache_write` / `uncached_input` per turn, so the next real rebalance/inspection yields exact figures rather than the estimate. Covered by `tests/test_anthropic_cache.py`; also fixed a cross-file test-isolation bug (`test_macro_context.py` now seeds `ANTHROPIC_API_KEY` so the shared settings singleton builds correctly regardless of import order). |
 
 ### Geopolitical situational-awareness brief (July 17, 2026)
 
