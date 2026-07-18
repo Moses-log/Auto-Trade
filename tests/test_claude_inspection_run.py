@@ -48,6 +48,7 @@ async def test_no_changes_posts_notification_and_logs(
 ):
     mock_rh.available = True
     mock_rh.get_all_positions_async = AsyncMock(return_value=[_mock_position()])
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
     mock_call.return_value = "analysis text ```json\n{}\n```"
     mock_parse.return_value = {"no_changes": True, "trades": []}
 
@@ -75,6 +76,7 @@ async def test_claude_api_failure_notifies_and_does_not_raise(
 ):
     mock_rh.available = True
     mock_rh.get_all_positions_async = AsyncMock(return_value=[_mock_position()])
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
 
     from app.claude_inspection import run_weekly_inspection
     await run_weekly_inspection()  # must not raise
@@ -724,3 +726,159 @@ async def test_spy_excluded_trade_reasoning_still_captured_in_notes(
 
     logged_entry = mock_log.call_args[0][0]
     assert logged_entry["notes"]["SPY"] == "should never execute but should be noted"
+
+
+def _private_embeds(mock_notify_private):
+    return [c.args[0] for c in mock_notify_private.call_args_list]
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.rh_trade_record.record_rh_trade", new_callable=AsyncMock)
+@patch("app.claude_inspection.get_record", return_value=(5, 2))
+@patch("app.claude_inspection.trim_position", return_value=(4.0, 200.0, 8.0))
+@patch("app.claude_inspection.close_position", return_value=(5.0, 500.0, 12.5))
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_filled_trades_consolidated_into_single_results_card(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_close, mock_trim, mock_get_record, mock_record_rh_trade,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    """Hybrid batching (#4): two immediately-filled actions must NOT each post
+    their own trade embed — they roll into the single COMPLETE results card."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(return_value=[
+        {"symbol": "NOW", "qty": 5.0, "avg_entry_price": 900.0,
+         "current_price": 950.0, "unrealized_pl": 250.0, "unrealized_plpc": 5.5},
+        {"symbol": "NVDA", "qty": 10.0, "avg_entry_price": 400.0,
+         "current_price": 450.0, "unrealized_pl": 500.0, "unrealized_plpc": 12.5},
+    ])
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
+    mock_rh.close_ticker_async = AsyncMock(
+        return_value={"status": "ok", "qty": 5.0, "fill_price": 960.0, "queued": False})
+    mock_rh.sell_shares_async = AsyncMock(
+        return_value={"status": "ok", "qty": 4.0, "fill_price": 455.0, "queued": False})
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {"no_changes": False, "trades": [
+        {"action": "SELL", "ticker": "NOW", "reasoning": "guidance cut"},
+        {"action": "TRIM", "ticker": "NVDA", "target_weight_pct": 20, "reasoning": "trim concentration"},
+    ]}
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    embeds = _private_embeds(mock_notify_private)
+    titles = [e.get("title", "") for e in embeds]
+
+    # No standalone per-trade card for the filled SELL/TRIM.
+    assert not any(t.startswith("🔴 KIMI SELL") or t.startswith("✂️ KIMI TRIM") for t in titles)
+
+    # Exactly one results card, carrying one field per filled trade.
+    complete = [e for e in embeds if "INSPECTION COMPLETE" in e.get("title", "")]
+    assert len(complete) == 1
+    card = complete[0]
+    assert len(card["fields"]) == 2
+    assert "Acted 2" in card["description"]
+    assert "Reviewed 2" in card["description"]
+
+    # KI Server gets exactly one roll-up decisions card mentioning both tickers,
+    # now carrying each decision's reasoning (the "why") — but no dollar amounts.
+    assert mock_notify_public.await_count == 1
+    summary = mock_notify_public.call_args[0][0]
+    assert "NOW" in summary and "NVDA" in summary
+    assert "guidance cut" in summary and "trim concentration" in summary
+    assert "$" not in summary  # dollars/P&L stay Private
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.rh_trade_record.record_rh_trade", new_callable=AsyncMock)
+@patch("app.claude_inspection.get_record", return_value=(5, 2))
+@patch("app.claude_inspection.close_position", return_value=(5.0, 500.0, 12.5))
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_results_card_reports_held_count(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_close, mock_get_record, mock_record_rh_trade,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    """#3: with 3 holdings reviewed and 1 acted, the card reports Held 2."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(return_value=[
+        {"symbol": "NOW", "qty": 5.0, "avg_entry_price": 900.0,
+         "current_price": 950.0, "unrealized_pl": 250.0, "unrealized_plpc": 5.5},
+        {"symbol": "MSFT", "qty": 20.0, "avg_entry_price": 280.0,
+         "current_price": 300.0, "unrealized_pl": 400.0, "unrealized_plpc": 7.1},
+        {"symbol": "AAPL", "qty": 15.0, "avg_entry_price": 180.0,
+         "current_price": 190.0, "unrealized_pl": 150.0, "unrealized_plpc": 5.6},
+    ])
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
+    mock_rh.close_ticker_async = AsyncMock(
+        return_value={"status": "ok", "qty": 5.0, "fill_price": 960.0, "queued": False})
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {"no_changes": False, "trades": [
+        {"action": "HOLD", "ticker": "MSFT"},
+        {"action": "HOLD", "ticker": "AAPL"},
+        {"action": "SELL", "ticker": "NOW", "reasoning": "guidance cut"},
+    ]}
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    card = next(e for e in _private_embeds(mock_notify_private) if "INSPECTION COMPLETE" in e.get("title", ""))
+    assert "Reviewed 3" in card["description"]
+    assert "Held 2" in card["description"]
+    assert "Acted 1" in card["description"]
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.rh_trade_record.record_rh_trade", new_callable=AsyncMock)
+@patch("app.claude_inspection.get_record", return_value=(5, 2))
+@patch("app.claude_inspection.close_position", return_value=(5.0, 500.0, 12.5))
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NOW"})
+@patch("app.claude_inspection.rh_client")
+async def test_empty_reasoning_note_does_not_promise_analysis_in_discord(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_close, mock_get_record, mock_record_rh_trade,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    """#1: a trade with no reasoning must not leave a note claiming a full
+    analysis was posted to Discord — Inspection never posts prose."""
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(return_value=[
+        {"symbol": "NOW", "qty": 5.0, "avg_entry_price": 900.0,
+         "current_price": 950.0, "unrealized_pl": 250.0, "unrealized_plpc": 5.5},
+    ])
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
+    mock_rh.close_ticker_async = AsyncMock(
+        return_value={"status": "ok", "qty": 5.0, "fill_price": 960.0, "queued": False})
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {"no_changes": False, "trades": [
+        {"action": "SELL", "ticker": "NOW"},  # no reasoning
+    ]}
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    note = mock_log.call_args[0][0]["notes"]["NOW"]
+    assert "see full analysis in Discord" not in note
