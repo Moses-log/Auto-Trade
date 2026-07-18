@@ -546,6 +546,7 @@ async def run_weekly_inspection() -> None:
 
 import httpx
 
+from app.anthropic_cache import apply_message_cache, cached_system
 from app.claude_manager import _parse_trade_block, _DIVIDER, _section_ticker
 from app.config import settings
 
@@ -622,15 +623,17 @@ def _call_claude_inspection_sync(user_message: str) -> str:
         "anthropic-beta": "web-search-2025-03-05",
         "content-type": "application/json",
     }
+    system_payload = cached_system(_INSPECTION_SYSTEM_PROMPT)
     messages: list[dict] = [{"role": "user", "content": user_message}]
     for _turn in range(30):
+        apply_message_cache(messages)  # roll the cache breakpoint to the newest turn
         resp = httpx.post(
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json={
                 "model": "claude-opus-4-8",
                 "max_tokens": 8000,
-                "system": _INSPECTION_SYSTEM_PROMPT,
+                "system": system_payload,
                 "messages": messages,
                 "tools": [_INSPECTION_WEB_SEARCH_TOOL],
             },
@@ -638,6 +641,12 @@ def _call_claude_inspection_sync(user_message: str) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
+        _usage = data.get("usage", {})
+        log.info(
+            "Inspection turn %d: cache_read=%s cache_write=%s uncached_input=%s",
+            _turn, _usage.get("cache_read_input_tokens"),
+            _usage.get("cache_creation_input_tokens"), _usage.get("input_tokens"),
+        )
         content: list = data["content"]
         stop_reason: str = data.get("stop_reason", "end_turn")
         messages.append({"role": "assistant", "content": content})

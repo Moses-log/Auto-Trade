@@ -23,6 +23,7 @@ import httpx
 import pytz
 import yfinance as yf
 
+from app.anthropic_cache import apply_message_cache, cached_system
 from app.config import settings
 from app.decision_review import build_live_scorecard, format_scorecard_embed
 from app.risk_guardrails import (
@@ -506,15 +507,17 @@ def _call_claude_sync(user_message: str) -> str:
         "anthropic-beta": "web-search-2025-03-05",
         "content-type": "application/json",
     }
+    system_payload = cached_system(_SYSTEM_PROMPT)
     messages: list[dict] = [{"role": "user", "content": user_message}]
     for _turn in range(80):
+        apply_message_cache(messages)  # roll the cache breakpoint to the newest turn
         resp = httpx.post(
             "https://api.anthropic.com/v1/messages",
             headers=headers,
             json={
                 "model": "claude-opus-4-8",
                 "max_tokens": 16000,
-                "system": _SYSTEM_PROMPT,
+                "system": system_payload,
                 "messages": messages,
                 "tools": [_WEB_SEARCH_TOOL],
             },
@@ -522,6 +525,12 @@ def _call_claude_sync(user_message: str) -> str:
         )
         resp.raise_for_status()
         data = resp.json()
+        _usage = data.get("usage", {})
+        log.info(
+            "Claude rebalance turn %d: cache_read=%s cache_write=%s uncached_input=%s",
+            _turn, _usage.get("cache_read_input_tokens"),
+            _usage.get("cache_creation_input_tokens"), _usage.get("input_tokens"),
+        )
         content: list = data["content"]
         stop_reason: str = data.get("stop_reason", "end_turn")
         messages.append({"role": "assistant", "content": content})

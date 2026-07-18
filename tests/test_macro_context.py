@@ -8,6 +8,9 @@ import os
 os.environ.setdefault("ALPACA_API_KEY", "test_key")
 os.environ.setdefault("ALPACA_SECRET_KEY", "test_secret")
 os.environ.setdefault("WEBHOOK_SECRET", "MY_SHARED_SECRET")
+# Seed before the shared `settings` singleton is built, so this file is safe to
+# import before test_claude_manager_run (which also seeds it) in any order.
+os.environ.setdefault("ANTHROPIC_API_KEY", "test_anthropic_key")
 
 from unittest.mock import patch
 

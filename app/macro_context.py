@@ -14,6 +14,7 @@ from typing import Optional
 import httpx
 import yfinance as yf
 
+from app.anthropic_cache import cached_system, apply_message_cache
 from app.config import settings
 
 log = logging.getLogger(__name__)
@@ -66,11 +67,13 @@ def _fetch_geopolitical_brief_sync() -> Optional[str]:
         "anthropic-beta": "web-search-2025-03-05",
         "content-type": "application/json",
     }
+    system_payload = cached_system(_GEO_BRIEF_SYSTEM)
     messages: list[dict] = [
         {"role": "user", "content": "Give the current macro/geopolitical backdrop brief."}
     ]
     try:
         for _turn in range(12):
+            apply_message_cache(messages)  # roll the cache breakpoint to the newest turn
             resp = httpx.post(
                 "https://api.anthropic.com/v1/messages",
                 headers=headers,
@@ -80,7 +83,7 @@ def _fetch_geopolitical_brief_sync() -> Optional[str]:
                     # The rebalance itself still runs on Opus (claude_manager.py).
                     "model": "claude-sonnet-5",
                     "max_tokens": 1500,
-                    "system": _GEO_BRIEF_SYSTEM,
+                    "system": system_payload,
                     "messages": messages,
                     "tools": [_GEO_WEB_SEARCH_TOOL],
                 },
