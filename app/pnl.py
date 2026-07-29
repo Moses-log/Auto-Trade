@@ -95,9 +95,9 @@ def _deposit_events() -> list[tuple[str, float]]:
 _DEPOSIT_ALIGN_WINDOW_DAYS = 3  # a deposit's date may sit within a few bars of its jump
 
 
-def _align_deposits_to_equity(
+def align_deposits_to_bars(
     equity: list,
-    timestamps: list,
+    bar_dates: list,
     deposit_events: list[tuple[str, float]],
 ) -> dict:
     """Map each deposit to the equity-bar *index* where its cash actually lands.
@@ -109,13 +109,16 @@ def _align_deposits_to_equity(
     that deposit (within 50% of its size). Deposits that predate the window (the
     fund's baseline capital) leave no in-window jump and are therefore never
     stripped — this is the rule whose absence cratered the chart. Returns
-    {bar_index: total_amount}."""
+    {bar_index: total_amount}.
+
+    `bar_dates` is a list of `date` (or None) parallel to `equity`. Aligning on
+    the jump rather than on the recorded date is what makes this correct whether
+    the cash lands the same day, the next trading day, or a weekend-dated
+    deposit lands on the following Monday. Shared by the Alpaca P&L charts and
+    the Kimi Manager track record — keep it that way; a second copy of this rule
+    is how the transient-spike bug came back."""
     from collections import defaultdict
     by_index: dict = defaultdict(float)
-    bar_dates = [
-        datetime.fromtimestamp(ts, tz=ET).date() if ts is not None else None
-        for ts in timestamps
-    ]
     used: set = set()
     for date_str, amt in sorted(deposit_events):
         try:
@@ -142,6 +145,19 @@ def _align_deposits_to_equity(
             by_index[best_i] += amt
             used.add(best_i)
     return by_index
+
+
+def _align_deposits_to_equity(
+    equity: list,
+    timestamps: list,
+    deposit_events: list[tuple[str, float]],
+) -> dict:
+    """align_deposits_to_bars for an Alpaca series keyed by unix timestamps."""
+    bar_dates = [
+        datetime.fromtimestamp(ts, tz=ET).date() if ts is not None else None
+        for ts in timestamps
+    ]
+    return align_deposits_to_bars(equity, bar_dates, deposit_events)
 
 
 def deposit_adjusted_equity(

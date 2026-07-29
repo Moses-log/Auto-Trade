@@ -43,6 +43,24 @@ def test_trading_day_deposit_takes_effect_next_snapshot():
     assert result["portfolio_pct"] == 0.0
 
 
+def test_same_day_deposit_leaves_no_transient_spike():
+    # July 24 incident: the $100 landed in the SAME day's equity snapshot, but the
+    # deposit was only subtracted from the NEXT snapshot onward, leaving a one-bar
+    # phantom spike that self-corrected the following trading day.
+    snaps = _snaps(("2026-07-23", 1000.0), ("2026-07-24", 2000.0), ("2026-07-27", 2000.0))
+    result = _run(snaps, [("2026-07-24", 1000.0)])
+    pcts = [p["portfolio_pct"] for p in result["data_points"]]
+    assert pcts == [0.0, 0.0, 0.0], f"transient deposit spike in series: {pcts}"
+
+
+def test_baseline_capital_is_never_stripped():
+    # A deposit dated at/before the first snapshot is already inside the baseline
+    # equity. Stripping it again is what cratered the chart previously.
+    snaps = _snaps(("2026-07-08", 1000.0), ("2026-07-09", 1100.0))
+    result = _run(snaps, [("2026-07-08", 900.0)])
+    assert result["portfolio_pct"] == 10.0
+
+
 def test_no_deposits_leaves_returns_untouched():
     snaps = _snaps(("2026-07-08", 1000.0), ("2026-07-09", 1100.0))
     result = _run(snaps, [])
