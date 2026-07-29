@@ -110,30 +110,50 @@ def get_claude_performance() -> dict:
 
             if first_equity and first_spy and first_equity > 0:
                 data_points = []
-                cumulative_deposit = 0.0
 
-                # Deposits after the baseline snapshot, oldest first. A deposit
-                # takes effect on the first snapshot dated strictly AFTER the
-                # deposit date: Robinhood ACH deposits show as "pending" and are
-                # absent from the equity figure on the deposit date itself,
-                # landing on the next trading day's snapshot. Matching by date
-                # ordering (not exact date equality) is essential — deposits
-                # dated on a weekend or holiday match no snapshot's date, so the
-                # old exact-match logic never subtracted them and they showed up
-                # as a phantom gain.
-                pending_deposits = sorted(
+                # Align each deposit to the snapshot where its cash actually
+                # shows up in equity, rather than assuming a fixed offset from
+                # the recorded date. The recorded date is when /rh_deposit was
+                # run, and the cash may land the same day (instant deposit), the
+                # next trading day (ACH pending), or after a weekend — a fixed
+                # offset is wrong for at least one of those and leaves a one-bar
+                # phantom spike. Shared with the Alpaca P&L charts so the rule
+                # only exists in one place.
+                from app.pnl import align_deposits_to_bars
+
+                equity_series = [s["equity"] for s in snapshots]
+                bar_dates = []
+                for s in snapshots:
+                    try:
+                        bar_dates.append(datetime.strptime(s["date"], "%Y-%m-%d").date())
+                    except (ValueError, TypeError):
+                        bar_dates.append(None)
+
+                # Deposits at or before the baseline snapshot are already inside
+                # first_equity — stripping them would crater the whole curve.
+                post_inception = [
                     (dt, amt) for dt, amt in deposit_by_date.items() if dt > first["date"]
-                )
-                dep_idx = 0
+                ]
+                by_index = align_deposits_to_bars(equity_series, bar_dates, post_inception)
 
-                for snap in snapshots:
+                # Guardrail: an over-subtraction must never render a crater to
+                # the public chart. If the adjustment would drive any snapshot
+                # non-positive, abandon it and show the raw curve instead.
+                _running = 0.0
+                for idx, eq in enumerate(equity_series):
+                    _running += by_index.get(idx, 0.0)
+                    if eq and eq - _running <= 0:
+                        log.warning(
+                            "RH deposit adjustment produced non-positive equity at %s — "
+                            "abandoning adjustment, charting raw equity.", snapshots[idx]["date"]
+                        )
+                        by_index = {}
+                        break
+
+                cumulative_deposit = 0.0
+                for idx, snap in enumerate(snapshots):
                     date_str = snap["date"]
-
-                    # Fold in every deposit dated strictly before this snapshot,
-                    # so it is subtracted from this and all later data points.
-                    while dep_idx < len(pending_deposits) and pending_deposits[dep_idx][0] < date_str:
-                        cumulative_deposit += pending_deposits[dep_idx][1]
-                        dep_idx += 1
+                    cumulative_deposit += by_index.get(idx, 0.0)
 
                     if not snap["equity"] or not snap["spy_close"]:
                         continue
