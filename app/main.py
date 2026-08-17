@@ -45,6 +45,7 @@ from app.investors import (
     investors_lock,
 )
 from app.logging_config import setup_logging
+from app import memprofile
 from app.models import AlertPayload, DepositRequest, WithdrawRequest, TradingAction
 from app.notifications import notify, close_http_client, notify_rh_session
 from app.sqlite_guard import ensure_sqlite_ready
@@ -113,6 +114,9 @@ async def lifespan(app: FastAPI):
         "TradingView → Alpaca webhook server starting",
         extra={"paper_trading": "paper" in settings.alpaca_base_url, "rh_enabled": settings.rh_enabled},
     )
+    # Temporary memory-leak probe — see app/memprofile.py. Start tracing early
+    # so the baseline snapshot reflects a nearly-fresh process.
+    memprofile.init()
     # Settle the storage backend before anything reads/writes the ledger:
     # creates the SQLite schema when USE_SQLITE is on, and falls back to JSON
     # (with a CRITICAL alert) if the flag is on but the DB was never migrated.
@@ -149,8 +153,10 @@ async def lifespan(app: FastAPI):
     await catch_up_equity_snapshot()
     log.info("Startup checkpoint: before scheduler.start()")
     scheduler.start()
+    memprofile.log_snapshot("startup")
     log.info("Startup checkpoint: reached yield — startup complete")
     yield
+    memprofile.log_snapshot("shutdown")
     scheduler.shutdown(wait=False)
     _yf_executor.shutdown(wait=False)
     await close_http_client()

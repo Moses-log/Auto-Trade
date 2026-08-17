@@ -16,6 +16,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from app.config import settings
+from app.memprofile import log_snapshot, profile_job
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
 from app.rh_equity_history import get_snapshots
 from app.rh_keep_alive_state import get_next_run_ts, record_run
@@ -102,6 +103,26 @@ def _inspection_already_completed_this_week() -> bool:
 
 # Singleton — imported and started in main.py lifespan.
 scheduler = AsyncIOScheduler(timezone=ET)
+
+
+def _profiled(tag: str, fn):
+    """Wrap a scheduler coroutine so its RSS before/after (and tracemalloc
+    top allocators) get logged. Temporary — part of the memory-leak probe in
+    app/memprofile.py. Remove this and the log_snapshot job once the leaking
+    site is identified and fixed."""
+
+    async def _runner():
+        async with profile_job(tag):
+            return await fn()
+
+    _runner.__name__ = getattr(fn, "__name__", tag)
+    return _runner
+
+
+async def _memprofile_hourly() -> None:
+    """Hourly memory snapshot — catches steady baseline creep between jobs and
+    shows which allocation site climbs over days. Temporary probe."""
+    log_snapshot("hourly")
 
 
 async def _check_rh_period_reports() -> None:
@@ -279,13 +300,13 @@ async def _nightly_backup() -> None:
 def setup_jobs() -> None:
     """Register cron jobs — two parallel bundles replacing five staggered jobs."""
     scheduler.add_job(
-        _weekday_jobs,
+        _profiled("weekday_jobs", _weekday_jobs),
         CronTrigger(day_of_week="mon-thu", hour=16, minute=0, timezone=ET),
         id="weekday_jobs",
         replace_existing=True,
     )
     scheduler.add_job(
-        _friday_jobs,
+        _profiled("friday_jobs", _friday_jobs),
         CronTrigger(day_of_week="fri", hour=16, minute=0, timezone=ET),
         id="friday_jobs",
         replace_existing=True,
@@ -303,21 +324,27 @@ def setup_jobs() -> None:
         replace_existing=True,
     )
     scheduler.add_job(
-        _claude_monthly_rebalance,
+        _profiled("claude_monthly_rebalance", _claude_monthly_rebalance),
         CronTrigger(day="1-4", hour=9, minute=35, timezone=ET),
         id="claude_monthly_rebalance",
         replace_existing=True,
     )
     scheduler.add_job(
-        _weekly_inspection,
+        _profiled("weekly_inspection", _weekly_inspection),
         CronTrigger(day_of_week="mon-wed", hour=9, minute=35, timezone=ET),
         id="weekly_inspection",
         replace_existing=True,
     )
     scheduler.add_job(
-        _nightly_backup,
+        _profiled("nightly_backup", _nightly_backup),
         CronTrigger(hour=0, minute=0, timezone=ET),
         id="nightly_backup",
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _memprofile_hourly,
+        CronTrigger(minute=0, timezone=ET),
+        id="memprofile_hourly",
         replace_existing=True,
     )
     log.info(
@@ -326,7 +353,8 @@ def setup_jobs() -> None:
         "quarterly_tax_report (first trading day of Jan/Apr/Jul/Oct), "
         "claude_monthly_rebalance (first trading day of each month, 9:35 AM ET), "
         "weekly_inspection (first trading day of week, 9:35 AM ET, skipped on rebalance weeks), "
-        "nightly_backup (daily midnight ET)"
+        "nightly_backup (daily midnight ET), "
+        "memprofile_hourly (temporary memory-leak probe, top of every hour)"
     )
 
 
