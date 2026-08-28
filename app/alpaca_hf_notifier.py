@@ -29,7 +29,7 @@ def _signed(x: float) -> str:
 
 def _time_ct(ts_ct: datetime) -> str:
     hour = int(ts_ct.strftime("%I"))
-    return f"{hour}:{ts_ct.strftime('%M %p')} {ts_ct.strftime('%Z')} — {ts_ct.strftime('%B')} {ts_ct.day}, {ts_ct.year}"
+    return f"{hour}:{ts_ct.strftime('%M %p')} CT — {ts_ct.strftime('%B')} {ts_ct.day}, {ts_ct.year}"
 
 
 def format_open(symbol, direction, qty, price, ts_ct: datetime) -> str:
@@ -91,6 +91,13 @@ def format_recap(day_label, fills, wins, losses, total_pnl) -> str:
 
 _poll_lock = asyncio.Lock()
 
+# Resting limit orders can sit for a long time between submission and fill
+# (the external strategy uses limit orders with 6-25+ min submit->fill lag).
+# get_orders_filled_range() filters on submitted_at, so the lookback window
+# must be wide enough to still catch those orders' fills; dedup-by-order-id
+# (not a filled_at high-water mark) is what actually prevents reprocessing.
+_POLL_LOOKBACK_HOURS = 24
+
 _INTENT_MAP = {
     "buy_to_open": ("LONG", "OPEN"),
     "sell_to_close": ("LONG", "CLOSE"),
@@ -126,20 +133,33 @@ async def poll_and_notify() -> None:
     async with _poll_lock:
         now = datetime.now(timezone.utc)
         last = await rec.get_last_seen()
-        if last is None:
-            await rec.set_last_seen(now)  # seed; no backfill
-            return
-        after = last - timedelta(minutes=5)
+        after = now - timedelta(hours=_POLL_LOOKBACK_HOURS)
         try:
             orders = get_orders_filled_range(after, now)
         except Exception as exc:
             log.warning("HF poll fetch failed: %s", exc)
             return
 
-        newest = last
+        if last is None:
+            # First run: remember pre-existing history as already seen so it
+            # is never notified, without recording opens/closes for it.
+            for order in orders:
+                if order.symbol == "SPY":
+                    continue
+                qty = float(order.filled_qty or 0)
+                if qty <= 0:
+                    continue
+                await rec.mark_seen(str(order.id))
+            await rec.set_last_seen(now)
+            return
+
         for order in orders:
             oid = str(order.id)
             if order.symbol == "SPY":
+                continue
+            qty = float(order.filled_qty or 0)
+            if qty <= 0:
+                await rec.mark_seen(oid)
                 continue
             if await rec.is_seen(oid):
                 continue
@@ -148,10 +168,6 @@ async def poll_and_notify() -> None:
                 await rec.mark_seen(oid)
                 continue
             direction, role = classified
-            qty = float(order.filled_qty or 0)
-            if qty <= 0:
-                await rec.mark_seen(oid)
-                continue
             price = float(order.filled_avg_price or 0)
             filled_at = order.filled_at or now
             ts_ct = filled_at.astimezone(CT)
@@ -178,14 +194,14 @@ async def poll_and_notify() -> None:
                 ))
 
             await rec.mark_seen(oid)
-            if order.filled_at and order.filled_at > newest:
-                newest = order.filled_at
 
-        await rec.set_last_seen(min(newest, now))
+        await rec.set_last_seen(now)
 
 
 def _day_label_ct() -> str:
-    now = datetime.now(CT)
+    # send_daily_recap fires at 00:00 CT, the instant the new day starts,
+    # but it summarizes the day that just ended -- so label with that day.
+    now = datetime.now(CT) - timedelta(hours=1)
     return f"{now.strftime('%B')} {now.day}, {now.year}"
 
 
