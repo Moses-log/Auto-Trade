@@ -14,7 +14,9 @@ from datetime import datetime, timedelta, date as _date
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 
+from app.alpaca_hf_notifier import poll_and_notify as hf_poll_and_notify, send_daily_recap as hf_send_daily_recap
 from app.config import settings
 from app.memprofile import log_snapshot, profile_job
 from app.pnl import send_daily_report, send_investor_report, send_weekly_report, check_period_reports
@@ -297,6 +299,14 @@ async def _nightly_backup() -> None:
     await push_backup()
 
 
+async def _hf_poll() -> None:
+    await hf_poll_and_notify()
+
+
+async def _hf_recap() -> None:
+    await hf_send_daily_recap()
+
+
 def setup_jobs() -> None:
     """Register cron jobs — two parallel bundles replacing five staggered jobs."""
     scheduler.add_job(
@@ -347,6 +357,20 @@ def setup_jobs() -> None:
         id="memprofile_hourly",
         replace_existing=True,
     )
+    scheduler.add_job(
+        _profiled("hf_poll", _hf_poll),
+        trigger=IntervalTrigger(minutes=2),
+        id="hf_poll",
+        max_instances=1,
+        replace_existing=True,
+    )
+    scheduler.add_job(
+        _profiled("hf_recap", _hf_recap),
+        trigger=CronTrigger(hour=0, minute=0, timezone="America/Chicago"),
+        id="hf_recap",
+        max_instances=1,
+        replace_existing=True,
+    )
     log.info(
         "Scheduler jobs registered: weekday_jobs, friday_jobs (Alpaca+RH), "
         "robinhood_keep_alive (daily check, runs every ~3 days), "
@@ -354,7 +378,8 @@ def setup_jobs() -> None:
         "claude_monthly_rebalance (first trading day of each month, 9:35 AM ET), "
         "weekly_inspection (first trading day of week, 9:35 AM ET, skipped on rebalance weeks), "
         "nightly_backup (daily midnight ET), "
-        "memprofile_hourly (temporary memory-leak probe, top of every hour)"
+        "memprofile_hourly (temporary memory-leak probe, top of every hour), "
+        "hf_poll (every 2 min), hf_recap (00:00 CT)"
     )
 
 
