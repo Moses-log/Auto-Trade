@@ -99,3 +99,32 @@ def test_close_long_loss_uses_red_not_green():
     msg = format_close("QCOM", "LONG", 12, 150.0, -50.0, -2.5, False, [], datetime.now(CT))
     assert "\U0001F7E2" not in msg
     assert "\U0001F534" in msg
+
+
+@pytest.mark.asyncio
+async def test_recap_excludes_unmatched_close_from_win_loss_tally():
+    import app.alpaca_hf_notifier as nf
+    import app.alpaca_hf_record as rec
+
+    await rec.record_daily_fill({
+        "symbol": "QCOM", "role": "CLOSE", "direction": "LONG",
+        "qty": 5, "price": 100.0, "realized_pnl": 25.0,
+        "is_win": True, "ts": "2026-08-27T14:00:00+00:00",
+    })
+    await rec.record_daily_fill({
+        "symbol": "CSCO", "role": "CLOSE", "direction": "LONG",
+        "qty": 3, "price": 50.0, "realized_pnl": -15.0,
+        "is_win": False, "ts": "2026-08-27T14:05:00+00:00",
+    })
+    await rec.record_daily_fill({
+        "symbol": "AMD", "role": "CLOSE", "direction": "LONG",
+        "qty": 2, "price": 80.0, "realized_pnl": 0.0,
+        "is_win": None, "ts": "2026-08-27T14:10:00+00:00",
+    })
+
+    with patch.object(nf, "notify_hf_recap", new=AsyncMock()) as post:
+        await nf.send_daily_recap()
+
+    msg = post.await_args.args[0]
+    assert "1 W" in msg
+    assert "1 L" in msg

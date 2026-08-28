@@ -169,7 +169,8 @@ async def poll_and_notify() -> None:
                 split = await _investor_split(result.realized_pnl) if result.is_win is not None else []
                 await rec.record_daily_fill({
                     "symbol": order.symbol, "role": "CLOSE", "direction": direction,
-                    "qty": qty, "price": price, "realized_pnl": result.realized_pnl, "ts": ts_iso,
+                    "qty": qty, "price": price, "realized_pnl": result.realized_pnl,
+                    "is_win": result.is_win, "ts": ts_iso,
                 })
                 await notify_hf_trade(format_close(
                     order.symbol, direction, qty, price,
@@ -190,8 +191,8 @@ def _day_label_ct() -> str:
 
 async def send_daily_recap() -> None:
     fills = await rec.pop_daily_fills()
-    closes = [f for f in fills if f.get("role") == "CLOSE" and "realized_pnl" in f]
-    wins = sum(1 for f in closes if f["realized_pnl"] > 0)
-    losses = sum(1 for f in closes if f["realized_pnl"] <= 0)
-    total_pnl = sum(f["realized_pnl"] for f in closes)
+    closes = [f for f in fills if f.get("role") == "CLOSE"]
+    wins = sum(1 for f in closes if f.get("is_win") is True)
+    losses = sum(1 for f in closes if f.get("is_win") is False)
+    total_pnl = sum(f.get("realized_pnl", 0.0) for f in closes)
     await notify_hf_recap(format_recap(_day_label_ct(), fills, wins, losses, total_pnl))
