@@ -250,6 +250,7 @@ class InvestorResult:
     pct_pnl: float
     portfolio_share: float
     total_withdrawn: float = 0.0   # cumulative cash proceeds already paid out
+    nonspy_contribution: float = 0.0   # this investor's share of non-SPY realized P&L
 
 
 @dataclass
@@ -266,6 +267,7 @@ def compute_breakdown(
     investors: list[Investor],
     spy_price: float,
     real_total_equity: float,
+    nonspy_pnl: float = 0.0,
 ) -> InvestorBreakdown:
     nav_per_unit = compute_nav_per_unit(investors, real_total_equity)
     results: list[InvestorResult] = []
@@ -294,6 +296,7 @@ def compute_breakdown(
     total_portfolio = sum(r.current_equity for r in results)
     for r in results:
         r.portfolio_share = (r.current_equity / total_portfolio * 100) if total_portfolio else 0.0
+        r.nonspy_contribution = nonspy_pnl * r.portfolio_share / 100.0
 
     total_deposited = sum(r.total_deposited for r in results)
     overall_dollar_pnl = total_portfolio - total_deposited
@@ -501,6 +504,13 @@ def format_discord_message(breakdown: InvestorBreakdown, date_str: str) -> str:
         ]
         if r.total_withdrawn > 0:
             lines.append(f"> Total Withdrawn: ${r.total_withdrawn:,.2f}")
+        if r.nonspy_contribution:
+            nonspy_str = (
+                f"+${r.nonspy_contribution:,.2f}"
+                if r.nonspy_contribution >= 0
+                else f"-${abs(r.nonspy_contribution):,.2f}"
+            )
+            lines.append(f"> Non-SPY contribution: {nonspy_str}")
         lines.append("")
     pnl_str = (
         f"+${breakdown.overall_dollar_pnl:,.2f} (+{breakdown.overall_pct_pnl:.2f}%)"

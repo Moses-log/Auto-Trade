@@ -17,6 +17,7 @@ from typing import Optional
 import pytz
 
 from app.chart import generate_equity_chart, generate_investor_pie_chart
+from app.alpaca_hf_record import contribution_total
 from app.investors import compute_breakdown, format_discord_message, load_investors
 from app.notifications import notify, notify_investors, notify_investors_with_chart, notify_with_chart
 import yfinance as yf
@@ -828,7 +829,8 @@ async def send_investor_report() -> None:
     now = datetime.now(ET)
     date_str = now.strftime(f"%B {now.day}, %Y")
     try:
-        breakdown = compute_breakdown(investors, spy_price, real_total_equity)
+        nonspy_pnl = await contribution_total()
+        breakdown = compute_breakdown(investors, spy_price, real_total_equity, nonspy_pnl=nonspy_pnl)
         message = format_discord_message(breakdown, date_str)
         chart_bytes = None
         try:
