@@ -161,3 +161,27 @@ async def pop_daily_fills() -> list:
 async def contribution_total() -> float:
     async with _lock:
         return sum(t["realized_pnl"] for t in _load().get("closed_trades", []))
+
+
+async def realized_pnl_today(tz: str = "America/Chicago") -> float:
+    """Sum realized P&L of non-SPY round trips closed today (in the given tz).
+
+    `closed_ts` is stored as the fill's tz-aware ISO timestamp. Trades whose
+    timestamp can't be parsed (e.g. legacy/test rows) are skipped.
+    """
+    import pytz
+
+    zone = pytz.timezone(tz)
+    today = datetime.now(zone).date()
+    async with _lock:
+        trades = _load().get("closed_trades", [])
+    total = 0.0
+    for t in trades:
+        raw = t.get("closed_ts")
+        try:
+            when = datetime.fromisoformat(raw).astimezone(zone).date()
+        except (TypeError, ValueError):
+            continue
+        if when == today:
+            total += t.get("realized_pnl", 0.0)
+    return total
