@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     github_token: Optional[str] = None
     github_repo: str = "Moses-log/Auto-Trade"
     discord_trades_webhook_url: Optional[str] = None
+    alpaca_hf_trades_webhook_url: Optional[str] = None
+    alpaca_hf_recap_webhook_url: Optional[str] = None
 
     # ── Discord slash commands ─────────────────────────────────────────────────
     discord_app_public_key: Optional[str] = None
