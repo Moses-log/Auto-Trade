@@ -96,6 +96,28 @@ async def notify_trades(message: str) -> None:
         log.warning("Trade Discord notification failed: %s", exc)
 
 
+async def notify_hf_trade(message: str) -> None:
+    url = settings.alpaca_hf_trades_webhook_url
+    if not url:
+        log.warning("ALPACA_HF_TRADES_WEBHOOK_URL not set; skipping HF trade notification")
+        return
+    try:
+        await get_http_client().post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("HF trade Discord notification failed: %s", exc)
+
+
+async def notify_hf_recap(message: str) -> None:
+    url = settings.alpaca_hf_recap_webhook_url
+    if not url:
+        log.warning("ALPACA_HF_RECAP_WEBHOOK_URL not set; skipping HF recap notification")
+        return
+    try:
+        await get_http_client().post(url, json={"content": message[:2000]}, timeout=5)
+    except Exception as exc:
+        log.warning("HF recap Discord notification failed: %s", exc)
+
+
 async def notify_signal_feed(message: str) -> None:
     """Post to the paid signal-subscriber Discord feed. No-op if unconfigured."""
     url = settings.signal_subscribers_webhook_url
