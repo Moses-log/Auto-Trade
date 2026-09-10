@@ -18,9 +18,27 @@ from app.config import settings
 
 log = logging.getLogger(__name__)
 
+async def _log_bad_response(resp: httpx.Response) -> None:
+    """Surface Discord/HTTP rejections that httpx does NOT raise on.
+
+    httpx.post() returns normally on 4xx/5xx, so a Discord 413 (attachment
+    too large), 429 (rate limit) or 400 (bad payload) used to vanish with no
+    message sent and no log line — the exact cause of missing reports. This
+    response hook logs any error status + body once, for every _client POST.
+    """
+    if resp.status_code >= 400:
+        await resp.aread()
+        log.warning(
+            "Discord/HTTP POST %s -> %s: %s",
+            resp.request.url,
+            resp.status_code,
+            resp.text[:500],
+        )
+
+
 # Persistent client — reuses connections across all notification calls.
 # Closed in main.py lifespan on shutdown.
-_client = httpx.AsyncClient()
+_client = httpx.AsyncClient(event_hooks={"response": [_log_bad_response]})
 
 
 def get_http_client() -> httpx.AsyncClient:
