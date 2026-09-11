@@ -127,18 +127,23 @@ def _classify(order):
     return None
 
 
-async def _investor_split(realized_pnl: float):
+async def _current_shares():
+    """Each investor's current fund share as (name, pct). [] on any failure."""
     try:
         investors = load_investors()
         if not investors:
             return []
         equity = float(get_account().equity)
         breakdown = compute_breakdown(investors, 0.0, equity)
-        return [(r.name, realized_pnl * r.portfolio_share / 100.0)
-                for r in breakdown.investors]
+        return [(r.name, r.portfolio_share) for r in breakdown.investors]
     except Exception as exc:
-        log.warning("Investor split failed: %s", exc)
+        log.warning("Investor shares fetch failed: %s", exc)
         return []
+
+
+def _split_from_shares(realized_pnl: float, shares):
+    """Dollar split of one trade's realized P&L across the given shares."""
+    return [(name, realized_pnl * pct / 100.0) for name, pct in shares]
 
 
 async def poll_and_notify() -> None:
@@ -193,8 +198,11 @@ async def poll_and_notify() -> None:
                 })
                 await notify_hf_trade(format_open(order.symbol, direction, qty, price, ts_ct))
             else:
-                result = await rec.record_close(order.symbol, direction, qty, price, ts_iso)
-                split = await _investor_split(result.realized_pnl) if result.is_win is not None else []
+                shares = await _current_shares()
+                result = await rec.record_close(
+                    order.symbol, direction, qty, price, ts_iso, shares=shares
+                )
+                split = _split_from_shares(result.realized_pnl, shares) if result.is_win is not None else []
                 await rec.record_daily_fill({
                     "symbol": order.symbol, "role": "CLOSE", "direction": direction,
                     "qty": qty, "price": price, "realized_pnl": result.realized_pnl,

@@ -95,7 +95,7 @@ async def record_open(symbol, direction, qty, price, ts, order_id) -> None:
         _save(state)
 
 
-async def record_close(symbol, direction, qty, exit_price, ts) -> CloseResult:
+async def record_close(symbol, direction, qty, exit_price, ts, shares=None) -> CloseResult:
     async with _lock:
         state = _load()
         lots = state["open_lots"].get(symbol, [])
@@ -129,11 +129,19 @@ async def record_close(symbol, direction, qty, exit_price, ts) -> CloseResult:
 
         pct = (pnl / cost * 100) if cost else 0.0
         is_win = pnl > 0
-        state["closed_trades"].append({
+        trade = {
             "symbol": symbol, "direction": direction, "qty": matched,
             "exit_price": exit_price, "realized_pnl": round(pnl, 4),
             "pct": round(pct, 4), "is_win": is_win, "closed_ts": ts,
-        })
+        }
+        # Freeze each investor's dollar share of THIS trade at close time, so
+        # the cumulative per-investor contribution stays exact even when fund
+        # shares later change (deposits/withdrawals/new investors).
+        if shares:
+            trade["investor_split"] = {
+                name: round(pnl * pct_share / 100.0, 4) for name, pct_share in shares
+            }
+        state["closed_trades"].append(trade)
         if is_win:
             state["wins"] += 1
         else:
@@ -161,6 +169,30 @@ async def pop_daily_fills() -> list:
 async def contribution_total() -> float:
     async with _lock:
         return sum(t["realized_pnl"] for t in _load().get("closed_trades", []))
+
+
+async def contribution_by_investor(fallback_shares=None) -> dict:
+    """Cumulative non-SPY realized P&L attributed per investor.
+
+    Each closed trade carries the dollar split frozen at its close time
+    (`investor_split`), so shifting fund shares never retro-distort earlier
+    trades. Legacy trades recorded before splits were stored fall back to
+    `fallback_shares` (a list of (name, pct)) — current shares — so their
+    P&L is still attributed rather than dropped.
+    """
+    async with _lock:
+        trades = _load().get("closed_trades", [])
+    totals: dict = {}
+    for t in trades:
+        split = t.get("investor_split")
+        if split:
+            for name, amt in split.items():
+                totals[name] = totals.get(name, 0.0) + amt
+        elif fallback_shares:
+            pnl = t.get("realized_pnl", 0.0)
+            for name, pct_share in fallback_shares:
+                totals[name] = totals.get(name, 0.0) + pnl * pct_share / 100.0
+    return totals
 
 
 async def realized_pnl_today(tz: str = "America/Chicago") -> float:
