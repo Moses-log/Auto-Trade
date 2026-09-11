@@ -8,6 +8,8 @@ import matplotlib
 matplotlib.use("Agg")  # non-interactive backend — required for server use
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_agg import FigureCanvasAgg
 import pytz
 
 if TYPE_CHECKING:
@@ -86,7 +88,9 @@ def generate_equity_chart(
                 d.date() if hasattr(d, "date") else d for d in spy_df.index
             ]
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig = Figure(figsize=(10, 5))
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
 
     # Dark cyberpunk background
     fig.patch.set_facecolor(_BG)
@@ -157,7 +161,6 @@ def generate_equity_chart(
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, facecolor=_BG)
-    plt.close(fig)
     buf.seek(0)
     return buf.read()
 
@@ -197,7 +200,9 @@ def generate_investor_pie_chart(breakdown: "InvestorBreakdown", date_str: str) -
         for r in investors
     ]
 
-    fig, ax = plt.subplots(figsize=(11, 8))
+    fig = Figure(figsize=(11, 8))
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_BG)
 
@@ -243,7 +248,6 @@ def generate_investor_pie_chart(breakdown: "InvestorBreakdown", date_str: str) -
     fig.tight_layout()
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, facecolor=_BG, bbox_inches="tight")
-    plt.close(fig)
     buf.seek(0)
     return buf.read()
 
@@ -278,7 +282,9 @@ def generate_rh_pnl_chart(trades: list, title: str) -> bytes:
         running += pnl
         cumulative.append(running)
 
-    fig, ax = plt.subplots(figsize=(10, 5))
+    fig = Figure(figsize=(10, 5))
+    FigureCanvasAgg(fig)
+    ax = fig.subplots()
     fig.patch.set_facecolor(_BG)
     ax.set_facecolor(_PANEL)
 
@@ -332,6 +338,5 @@ def generate_rh_pnl_chart(trades: list, title: str) -> bytes:
 
     buf = io.BytesIO()
     fig.savefig(buf, format="png", dpi=150, facecolor=_BG)
-    plt.close(fig)
     buf.seek(0)
     return buf.read()
