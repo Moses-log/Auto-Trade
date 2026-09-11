@@ -11,7 +11,7 @@ def test_format_open_has_shares_and_notional():
     from app.alpaca_hf_notifier import format_open
     ts = CT.localize(datetime(2026, 8, 27, 15, 32))
     msg = format_open("QCOM", "LONG", 12, 164.77, ts)
-    assert "LONG OPEN" in msg and "QCOM" in msg
+    assert "OPEN" in msg and "LONG" in msg and "QCOM" in msg
     assert "12" in msg and "$164.77" in msg
     assert "$1,977.24" in msg
 
@@ -40,6 +40,6 @@ def test_format_recap_counts_and_winrate():
              {"symbol": "QCOM", "role": "CLOSE", "direction": "LONG",
               "qty": 12, "price": 164.84, "realized_pnl": 5.64}]
     msg = format_recap("August 27, 2026", fills, wins=5, losses=2, total_pnl=41.28)
-    assert "5 W" in msg and "2 L" in msg
-    assert "71.4" in msg
+    assert "5W" in msg and "2L" in msg
+    assert "71%" in msg
     assert "+$41.28" in msg

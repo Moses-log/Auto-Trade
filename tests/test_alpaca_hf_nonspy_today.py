@@ -45,7 +45,25 @@ async def test_realized_pnl_today_zero_when_none_today():
     assert await rec.realized_pnl_today(tz="UTC") == 0.0
 
 
-def test_footer_line_renders_when_provided():
+def test_nonspy_today_line_renders_in_daily_pnl_message():
+    # The line now lives on the Daily P&L message, not the investor breakdown.
+    from app.pnl import _format_message, PnLResult
+
+    result = PnLResult(period="daily", close_equity=1100.0,
+                       dollar_pnl=100.0, pct_pnl=10.0)
+
+    msg = _format_message(result, "Daily P&L", "August 27, 2026", nonspy_today=12.34)
+    assert "Non-SPY realized P&L today: +$12.34" in msg
+
+    msg_neg = _format_message(result, "Daily P&L", "August 27, 2026", nonspy_today=-8.90)
+    assert "Non-SPY realized P&L today: -$8.90" in msg_neg
+
+    # Omitting the arg keeps the old output (no line).
+    msg_none = _format_message(result, "Daily P&L", "August 27, 2026")
+    assert "realized P&L today" not in msg_none
+
+
+def test_breakdown_no_longer_carries_nonspy_today():
     from app.investors import (
         InvestorBreakdown,
         InvestorResult,
@@ -60,13 +78,5 @@ def test_footer_line_renders_when_provided():
         investors=[r], spy_price=500.0, total_portfolio=1100.0,
         total_deposited=1000.0, overall_dollar_pnl=100.0, overall_pct_pnl=10.0,
     )
-
-    msg = format_discord_message(breakdown, "August 27, 2026", nonspy_today=12.34)
-    assert "Non-SPY realized P&L today: +$12.34" in msg
-
-    msg_neg = format_discord_message(breakdown, "August 27, 2026", nonspy_today=-8.90)
-    assert "Non-SPY realized P&L today: -$8.90" in msg_neg
-
-    # Omitting the arg keeps the old output (no footer line).
-    msg_none = format_discord_message(breakdown, "August 27, 2026")
-    assert "realized P&L today" not in msg_none
+    msg = format_discord_message(breakdown, "August 27, 2026")
+    assert "realized P&L today" not in msg

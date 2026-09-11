@@ -80,3 +80,29 @@ async def test_contribution_total_sums_closed():
     await rec.record_open("QCOM", "LONG", 12, 164.37, "t1", "o1")
     await rec.record_close("QCOM", "LONG", 12, 164.84, "t2")
     assert round(await rec.contribution_total(), 2) == 5.64
+
+
+@pytest.mark.asyncio
+async def test_contribution_by_investor_freezes_shares_at_close():
+    import app.alpaca_hf_record as rec
+    # Trade closes with shares 60/40 -> pnl +100 -> Hoang 60, Moses 40 frozen.
+    await rec.record_open("TSLA", "LONG", 5, 200.0, "t1", "o1")
+    await rec.record_close("TSLA", "LONG", 5, 220.0, "t2",
+                           shares=[("Hoang", 60.0), ("Moses", 40.0)])
+    # Shares later shift to 50/50; frozen split must ignore the change.
+    by = await rec.contribution_by_investor(fallback_shares=[("Hoang", 50.0), ("Moses", 50.0)])
+    assert by == {"Hoang": 60.0, "Moses": 40.0}
+
+
+@pytest.mark.asyncio
+async def test_contribution_by_investor_legacy_falls_back_to_current():
+    import app.alpaca_hf_record as rec
+    # Legacy closed trade written without a stored split.
+    st = rec._load()
+    st["closed_trades"].append({
+        "symbol": "X", "direction": "LONG", "qty": 1, "exit_price": 10.0,
+        "realized_pnl": 50.0, "pct": 1.0, "is_win": True, "closed_ts": "t",
+    })
+    rec._save(st)
+    by = await rec.contribution_by_investor(fallback_shares=[("Hoang", 60.0), ("Moses", 40.0)])
+    assert by == {"Hoang": 30.0, "Moses": 20.0}

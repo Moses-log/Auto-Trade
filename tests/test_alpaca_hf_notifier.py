@@ -184,5 +184,5 @@ async def test_recap_excludes_unmatched_close_from_win_loss_tally():
         await nf.send_daily_recap()
 
     msg = post.await_args.args[0]
-    assert "1 W" in msg
-    assert "1 L" in msg
+    assert "1W" in msg
+    assert "1L" in msg
