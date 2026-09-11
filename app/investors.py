@@ -486,7 +486,6 @@ def format_withdrawal_message(
 def format_discord_message(
     breakdown: InvestorBreakdown,
     date_str: str,
-    nonspy_today: Optional[float] = None,
 ) -> str:
     lines = [
         f"📊 **Investor Breakdown — {date_str}**",
@@ -527,13 +526,6 @@ def format_discord_message(
         f"**Total Cost Basis: ${breakdown.total_deposited:,.2f}**",
         f"**Overall P&L: {pnl_str}**",
     ]
-    if nonspy_today is not None:
-        nonspy_today_str = (
-            f"+${nonspy_today:,.2f}"
-            if nonspy_today >= 0
-            else f"-${abs(nonspy_today):,.2f}"
-        )
-        lines.append(f"**Non-SPY realized P&L today: {nonspy_today_str}**")
     return "\n".join(lines)
 
 

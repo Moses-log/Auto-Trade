@@ -294,7 +294,8 @@ def format_spy_comparison_lines(pct_pnl: float, spy_pct: float) -> list[str]:
     return [f"S&P 500: {spy_sign}{spy_pct:.2f}%", comparison]
 
 
-def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optional[float] = None) -> str:
+def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optional[float] = None,
+                    nonspy_today: Optional[float] = None) -> str:
     """Format a Discord-ready P&L message string.
 
     Args:
@@ -318,6 +319,12 @@ def _format_message(result: PnLResult, label: str, date_str: str, spy_pct: Optio
     if spy_pct is not None:
         msg += "\n" + "\n".join(format_spy_comparison_lines(result.pct_pnl, spy_pct))
 
+    if nonspy_today is not None:
+        nonspy_str = (
+            f"+${nonspy_today:,.2f}" if nonspy_today >= 0 else f"-${abs(nonspy_today):,.2f}"
+        )
+        msg += f"\n**Non-SPY realized P&L today: {nonspy_str}**"
+
     return msg
 
 
@@ -330,8 +337,10 @@ async def send_daily_report() -> None:
         result = _compute_pnl(history, "daily")
 
         spy_pct = compute_spy_pct("1d")
+        nonspy_today = await realized_pnl_today()
 
-        msg = _format_message(result, "Daily P&L", date_str, spy_pct=spy_pct)
+        msg = _format_message(result, "Daily P&L", date_str, spy_pct=spy_pct,
+                              nonspy_today=nonspy_today)
         await notify(msg)
         log.info("Daily P&L report sent: dollar=%.2f pct=%.2f", result.dollar_pnl, result.pct_pnl)
     except Exception as exc:
@@ -830,9 +839,8 @@ async def send_investor_report() -> None:
     date_str = now.strftime(f"%B {now.day}, %Y")
     try:
         nonspy_pnl = await contribution_total()
-        nonspy_today = await realized_pnl_today()
         breakdown = compute_breakdown(investors, spy_price, real_total_equity, nonspy_pnl=nonspy_pnl)
-        message = format_discord_message(breakdown, date_str, nonspy_today=nonspy_today)
+        message = format_discord_message(breakdown, date_str)
         chart_bytes = None
         try:
             loop = asyncio.get_running_loop()

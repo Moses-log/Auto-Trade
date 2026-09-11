@@ -29,15 +29,15 @@ def _signed(x: float) -> str:
 
 def _time_ct(ts_ct: datetime) -> str:
     hour = int(ts_ct.strftime("%I"))
-    return f"{hour}:{ts_ct.strftime('%M %p')} CT — {ts_ct.strftime('%B')} {ts_ct.day}, {ts_ct.year}"
+    return f"{hour}:{ts_ct.strftime('%M %p')} CT · {ts_ct.strftime('%b')} {ts_ct.day}, {ts_ct.year}"
 
 
 def format_open(symbol, direction, qty, price, ts_ct: datetime) -> str:
     emoji = _GREEN if direction == "LONG" else _RED
     notional = price * qty
     return "\n".join([
-        f"{emoji} **{direction} OPEN — {symbol}**",
-        f"{qty:g} shares @ {_money(price)} ({_money(notional)})",
+        f"{emoji}  **OPEN · {direction} {symbol}**",
+        f"{qty:g} shares @ {_money(price)}  ·  {_money(notional)}",
         f"\U0001F550 {_time_ct(ts_ct)}",
     ])
 
@@ -46,19 +46,21 @@ def format_close(symbol, direction, qty, exit_price, realized_pnl, pct,
                  is_win: Optional[bool], investor_split, ts_ct: datetime) -> str:
     notional = exit_price * qty
     if is_win is None:
+        head_emoji = _GREEN if direction == "LONG" else _RED
         verdict = ""
-        pnl_line = "P&L: n/a (no recorded entry)"
-        split_lines = []
+        pnl_line = "P&L  n/a (no recorded entry)"
     else:
-        verdict = "  WIN" if is_win else "  LOSS"
-        pnl_line = f"P&L: {_signed(realized_pnl)} ({'+' if pct >= 0 else '-'}{abs(pct):.2f}%)"
-        split_lines = ["Investor split:"] + [
-            f"  - {name}: {_signed(amt)}" for name, amt in investor_split
+        head_emoji = _GREEN if is_win else _RED
+        verdict = " — ✅ WIN" if is_win else " — ❌ LOSS"
+        pnl_line = f"P&L  {_signed(realized_pnl)} ({'+' if pct >= 0 else '-'}{abs(pct):.2f}%)"
+    split_lines = []
+    if investor_split:
+        split_lines = ["", "**Investor split**"] + [
+            f"• {name}:  {_signed(amt)}" for name, amt in investor_split
         ]
-    head_emoji = _GREEN if (is_win is True or (is_win is None and direction == "LONG")) else _RED
     lines = [
-        f"{head_emoji} **{direction} CLOSE — {symbol}**{verdict}",
-        f"Exit: {qty:g} shares @ {_money(exit_price)} ({_money(notional)})",
+        f"{head_emoji}  **CLOSE · {direction} {symbol}**{verdict}",
+        f"Exit {qty:g} @ {_money(exit_price)}  ·  {_money(notional)}",
         pnl_line,
         f"\U0001F550 {_time_ct(ts_ct)}",
     ] + split_lines
@@ -66,26 +68,36 @@ def format_close(symbol, direction, qty, exit_price, realized_pnl, pct,
 
 
 def format_recap(day_label, fills, wins, losses, total_pnl) -> str:
-    opens = sum(1 for f in fills if f.get("role") == "OPEN")
-    closes = sum(1 for f in fills if f.get("role") == "CLOSE")
+    opens = [f for f in fills if f.get("role") == "OPEN"]
+    closes = [f for f in fills if f.get("role") == "CLOSE"]
     total = wins + losses
     win_rate = (wins / total * 100) if total else 0.0
     lines = [
-        f"**Non-SPY Recap — {day_label} (CT)**",
-        f"Fills today: {len(fills)}  ({opens} opens / {closes} closes)",
-        f"Closed round-trips: {total} — {wins} W / {losses} L ({win_rate:.1f}% win rate)",
-        f"Total realized P&L: {_signed(total_pnl)}",
-        "Fills:",
+        f"\U0001F4C5  **Non-SPY Recap · {day_label}**",
+        f"P&L {_signed(total_pnl)}  ·  {total} trades · {wins}W / {losses}L "
+        f"({win_rate:.0f}%)  ·  {len(fills)} fills",
     ]
-    for f in fills:
-        if f.get("role") == "CLOSE" and "realized_pnl" in f:
-            tail = f"({_signed(f['realized_pnl'])})"
-        else:
-            tail = f"({_money(f.get('notional', 0.0))})"
-        lines.append(
-            f"  {f['symbol']} {f.get('direction','')} {f.get('role','')} "
-            f"{f.get('qty', 0):g} @ {_money(f.get('price', 0.0))} {tail}"
-        )
+    if not fills:
+        lines.append("No fills today.")
+        return "\n".join(lines)
+    if closes:
+        lines.append("━" * 15)
+        lines.append("**Closes**")
+        for f in closes:
+            emoji = _GREEN if f.get("is_win") else _RED
+            lines.append(
+                f"{emoji} {f['symbol']} {f.get('direction','')} · "
+                f"{f.get('qty', 0):g} @ {_money(f.get('price', 0.0))} · "
+                f"{_signed(f.get('realized_pnl', 0.0))}"
+            )
+    if opens:
+        lines.append("**Opens**")
+        for f in opens:
+            lines.append(
+                f"▫️ {f['symbol']} {f.get('direction','')} · "
+                f"{f.get('qty', 0):g} @ {_money(f.get('price', 0.0))} · "
+                f"{_money(f.get('notional', 0.0))}"
+            )
     return "\n".join(lines)
 
 
