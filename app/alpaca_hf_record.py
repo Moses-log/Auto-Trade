@@ -98,15 +98,22 @@ async def record_open(symbol, direction, qty, price, ts, order_id) -> None:
 async def record_close(symbol, direction, qty, exit_price, ts, shares=None) -> CloseResult:
     async with _lock:
         state = _load()
-        lots = state["open_lots"].get(symbol, [])
+        lots = list(state["open_lots"].get(symbol, []))
         remaining = float(qty)
         matched = 0.0
         pnl = 0.0
         cost = 0.0
-        kept: list = []
-        for lot in lots:
-            if remaining <= 0 or lot["direction"] != direction:
-                kept.append(lot)
+        # Match newest matching lot first (LIFO). The external HF strategy opens
+        # and closes each position in the same-second bracket, so a close belongs
+        # to the lot it *just* opened, not a stale older lot of the same symbol.
+        # FIFO here booked a close against an unrelated week-old lot -> a phantom
+        # loss (the PLTR bug). Iterate newest->oldest; keep every untouched lot
+        # and any leftover in its original position so order is preserved.
+        for i in range(len(lots) - 1, -1, -1):
+            if remaining <= 0:
+                break
+            lot = lots[i]
+            if lot["direction"] != direction:
                 continue
             take = min(lot["qty"], remaining)
             entry = lot["entry_price"]
@@ -118,10 +125,8 @@ async def record_close(symbol, direction, qty, exit_price, ts, shares=None) -> C
             matched += take
             remaining -= take
             leftover = lot["qty"] - take
-            if leftover > 1e-9:
-                lot = {**lot, "qty": leftover}
-                kept.append(lot)
-        state["open_lots"][symbol] = kept
+            lots[i] = {**lot, "qty": leftover} if leftover > 1e-9 else None
+        state["open_lots"][symbol] = [lot for lot in lots if lot is not None]
 
         if matched <= 0:
             _save(state)

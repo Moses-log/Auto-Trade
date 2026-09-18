@@ -45,6 +45,44 @@ async def test_partial_close_leaves_lot():
 
 
 @pytest.mark.asyncio
+async def test_close_matches_newest_lot_lifo():
+    """A close pairs with the most recently opened matching lot (LIFO), not the
+    oldest. Regression for the PLTR phantom-loss bug: a stale older short lot
+    must not be consumed by a close that belongs to a newer bracket."""
+    import app.alpaca_hf_record as rec
+    # Old, still-open short from a prior week @167.17 (must be left untouched).
+    await rec.record_open("PLTR", "SHORT", 8, 167.1701, "t1", "old")
+    # New same-second bracket: sell_to_open @174.82 ...
+    await rec.record_open("PLTR", "SHORT", 5, 174.82, "t2", "new")
+    # ... buy_to_close @174.41 -> this closes the NEW lot -> a win.
+    r = await rec.record_close("PLTR", "SHORT", 5, 174.41, "t3")
+    assert r.matched_qty == 5
+    assert round(r.realized_pnl, 2) == 2.05   # (174.82 - 174.41) * 5
+    assert r.is_win is True
+    # Old lot survives intact, unchanged qty and price.
+    lots = rec._load()["open_lots"]["PLTR"]
+    assert len(lots) == 1
+    assert lots[0]["qty"] == 8
+    assert lots[0]["entry_price"] == 167.1701
+
+
+@pytest.mark.asyncio
+async def test_close_spills_newest_to_older_lifo():
+    """A close larger than the newest lot spills into the next-newest, oldest last."""
+    import app.alpaca_hf_record as rec
+    await rec.record_open("NVDA", "SHORT", 4, 100.0, "t1", "a")  # oldest
+    await rec.record_open("NVDA", "SHORT", 3, 110.0, "t2", "b")  # newest
+    r = await rec.record_close("NVDA", "SHORT", 5, 105.0, "t3")
+    # 3 @110 -> (110-105)*3=+15 ; 2 @100 -> (100-105)*2=-10 ; net +5
+    assert r.matched_qty == 5
+    assert round(r.realized_pnl, 2) == 5.0
+    lots = rec._load()["open_lots"]["NVDA"]
+    assert len(lots) == 1
+    assert lots[0]["entry_price"] == 100.0
+    assert lots[0]["qty"] == 2
+
+
+@pytest.mark.asyncio
 async def test_close_without_open_is_neutral():
     import app.alpaca_hf_record as rec
     r = await rec.record_close("TSLA", "LONG", 5, 353.05, "t1")
