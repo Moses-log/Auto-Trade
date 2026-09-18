@@ -76,9 +76,9 @@ async def test_sample_day_recap_totals():
     assert expected_total == -0.27  # guards against a silent change in the sample math
 
     msg = format_recap("August 27, 2026", fills, wins, losses, total)
-    assert "4 W" in msg
-    assert "2 L" in msg
-    assert "Fills today: 12" in msg  # 6 opens + 6 closes
+    assert "4W" in msg
+    assert "2L" in msg
+    assert "12 fills" in msg  # 6 opens + 6 closes
 
 
 @pytest.mark.asyncio
@@ -101,4 +101,4 @@ async def test_unmatched_close_not_counted_in_sample():
     assert wins == 0
     assert losses == 0
     msg = format_recap("August 27, 2026", fills, wins, losses, 0.0)
-    assert "0 W" in msg and "0 L" in msg
+    assert "0W" in msg and "0L" in msg
