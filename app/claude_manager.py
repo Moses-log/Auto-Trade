@@ -29,6 +29,7 @@ from app.decision_review import build_live_scorecard, format_scorecard_embed
 from app.risk_guardrails import (
     clamp_position_weights, resolve_sectors, _yf_sector_fetch,
     compute_sector_exposure, sector_warnings, format_guardrail_embed,
+    trim_skip_reason,
 )
 
 _CT = pytz.timezone("America/Chicago")
@@ -412,7 +413,7 @@ POSITION SIZING ACTIONS:
 - BUY: Open a new position or add to an existing one. The system uses delta-buy logic — it only invests the additional dollars needed to reach your target weight, not the full amount.
 - DOUBLE_DOWN: Explicitly increase conviction in an existing position beyond its current weight. Executes identically to BUY (same delta-buy logic). Use when you want to signal elevated conviction.
 - SELL: Close an entire position.
-- TRIM: Reduce a position to a lower target weight without closing it. The system will sell the shares needed to reach your target. CRITICAL CONSTRAINT: TRIM is only possible if the position holds 1 or more whole shares. If qty < 1 (fractional position), you MUST use SELL to close it entirely — Robinhood does not support partial sells on sub-1-share positions.
+- TRIM: Reduce a position to a lower target weight without closing it. The system will sell the shares needed to reach your target. TRIM works on fractional positions too, as long as the position and the amount sold are each worth more than $1; below that, use SELL to close it entirely.
 - HOLD: Keep position at target weight; no trade executed.
 
 HARD EXCLUSION — never buy, sell, trim, or mention as a candidate:
@@ -1402,20 +1403,6 @@ async def run_monthly_rebalance() -> None:
             current_price = pos.get("current_price", 0)
             current_value = current_qty * current_price
 
-            if current_qty < 1.0:
-                await asyncio.sleep(0.8)
-                await notify_claude_manager_embed(_embed(
-                    f"⚠️ TRIM {ticker} skipped — fractional position",
-                    _CLR_GRAY,
-                    description=(
-                        f"Position is {current_qty:.4f} shares (< 1 whole share). "
-                        "Robinhood cannot partially sell fractional positions. Use SELL to close entirely."
-                    ),
-                    footer=_timestamp(),
-                ))
-                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": f"fractional ({current_qty:.4f} shares)"})
-                continue
-
             if target_value >= current_value * 0.95:
                 await asyncio.sleep(0.8)
                 await notify_claude_manager_embed(_embed(
@@ -1430,6 +1417,18 @@ async def run_monthly_rebalance() -> None:
             sell_qty = round((current_value - target_value) / current_price, 6) if current_price > 0 else 0.0
             if sell_qty <= 0:
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "sell qty <= 0"})
+                continue
+
+            skip = trim_skip_reason(current_value, sell_qty * current_price)
+            if skip:
+                await asyncio.sleep(0.8)
+                await notify_claude_manager_embed(_embed(
+                    f"⚠️ TRIM {ticker} skipped",
+                    _CLR_GRAY,
+                    description=f"{skip[:1].upper()}{skip[1:]}.",
+                    footer=_timestamp(),
+                ))
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": skip})
                 continue
 
             result = await rh_client.sell_shares_async(ticker, sell_qty)

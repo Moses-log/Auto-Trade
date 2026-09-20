@@ -258,7 +258,7 @@ On the **1st of each month at 9:35 AM ET**, the system:
    - **BUY** — open or add to a position (delta-buy: only invests the additional dollars needed to reach target weight)
    - **DOUBLE_DOWN** — explicitly add to an existing position with elevated conviction (same delta-buy execution, distinct Discord signal)
    - **SELL** — close an entire position
-   - **TRIM** — reduce a position to a lower target weight without closing it (blocked if qty < 1 share — Robinhood cannot partially sell fractional positions)
+   - **TRIM** — reduce a position to a lower target weight without closing it (works on fractional positions too, as long as the position and the amount sold are each worth more than $1)
    - **HOLD** — no trade, maintain target weight
 8. **Risk guardrails run before execution** (`app/risk_guardrails.py`): any BUY/DOUBLE_DOWN/TRIM over 25% is hard-clamped down to 25% in place, and a `⚠️ RISK GUARDRAIL` Discord alert fires if any single sector's post-trade weight would exceed 50% (alert-only — no auto-scaling). Enforces the stated policy in code rather than trusting the prompt alone
 9. Trades execute in order — SELL → TRIM → DOUBLE_DOWN/BUY — so sale proceeds fund same-run buys. The buy budget is **real cash + the proceeds of the sells/trims that actually executed this run** (computed via `_realized_sell_proceeds` from the recorded executed trades, shared with the weekly Inspection). A proposed sell that skips or fails contributes nothing — so a buy is never sized against phantom cash — while a queued after-hours sell still counts (its estimated fill is credited). Buys are capped at 95% of that combined budget.
@@ -863,7 +863,7 @@ $env:DISCORD_APP_ID="..."; $env:DISCORD_BOT_TOKEN="..."; python scripts/register
 | `BUY` | `target_weight_pct` | Delta-buy — only invests the additional dollars needed to reach the target weight |
 | `DOUBLE_DOWN` | `target_weight_pct` | Same as BUY, but signals elevated conviction — distinct Discord emoji (🔥) |
 | `SELL` | — | Closes the entire position |
-| `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. **Blocked if position qty < 1 share** (Robinhood cannot partially sell fractional positions). |
+| `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. Works on fractional positions; skipped only if the position or the amount sold is $1 or less. |
 | `HOLD` | `target_weight_pct` | No trade executed |
 
 ## Trade Actions (Kimi Inspection)
@@ -873,7 +873,7 @@ Same three non-BUY actions as Kimi Portfolio Manager, evaluated weekly against c
 | Action | JSON field | Behaviour |
 |---|---|---|
 | `SELL` | — | Closes the entire position |
-| `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. **Blocked if position qty < 1 share.** |
+| `TRIM` | `target_weight_pct` | Sells only the shares needed to reduce to the target weight. Works on fractional positions; skipped only if the position or the amount sold is $1 or less. |
 | `DOUBLE_DOWN` | `target_weight_pct` | Adds to the position — signals elevated conviction, same delta-buy sizing as the monthly rebalance, funded from buying power plus the proceeds of this run's **executed** SELL/TRIM trades (skipped/failed sells add nothing), capped at 95% of that combined budget |
 | `HOLD` | — | No trade executed — the default unless a specific trigger is documented in the reasoning |
 

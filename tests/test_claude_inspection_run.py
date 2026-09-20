@@ -13,6 +13,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def _no_forced_cap_trim():
+    """These tests use tiny (often single-holding = 100% weight) portfolios;
+    the forced position-cap trim is covered in test_inspection_position_cap.py."""
+    with patch("app.claude_inspection.enforce_position_cap", return_value=[]):
+        yield
+
+
 def _mock_position(symbol="NVDA", qty=10.0, avg_entry=400.0, current_price=450.0):
     return {
         "symbol": symbol, "qty": qty, "avg_entry_price": avg_entry,
@@ -882,3 +890,76 @@ async def test_empty_reasoning_note_does_not_promise_analysis_in_discord(
 
     note = mock_log.call_args[0][0]["notes"]["NOW"]
     assert "see full analysis in Discord" not in note
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection.get_record", return_value=(5, 2))
+@patch("app.rh_trade_record.record_rh_trade", new_callable=AsyncMock)
+@patch("app.claude_inspection.trim_position", return_value=(0.375, 10.0, 5.0))
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_trim_of_sub_one_share_position_executes(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_trim_position, mock_record_rh_trade, mock_get_record, mock_notify_private, mock_notify_public, mock_log,
+):
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[{"symbol": "NVDA", "qty": 0.5, "avg_entry_price": 400.0,
+                       "current_price": 300.0, "unrealized_pl": -50.0, "unrealized_plpc": -25.0}]
+    )
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
+    mock_rh.sell_shares_async = AsyncMock(
+        return_value={"status": "ok", "qty": 0.375, "fill_price": 300.0}
+    )
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [{"action": "TRIM", "ticker": "NVDA", "target_weight_pct": 25, "reasoning": "overweight"}],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    # portfolio = 150; 25% target = 37.5; sell (150 - 37.5) / 300 = 0.375 shares.
+    mock_rh.sell_shares_async.assert_awaited_once_with("NVDA", 0.375)
+
+
+@pytest.mark.asyncio
+@patch("app.claude_inspection._append_inspection_log")
+@patch("app.claude_inspection.notify_claude_signal_feed", new_callable=AsyncMock)
+@patch("app.claude_inspection.notify_claude_manager_embed", new_callable=AsyncMock)
+@patch("app.claude_inspection._parse_inspection_trade_block")
+@patch("app.claude_inspection._call_claude_inspection_sync")
+@patch("app.claude_inspection._load_recent_inspection_entries", return_value=[])
+@patch("app.claude_inspection._fetch_technical_data", return_value={})
+@patch("app.claude_inspection._fetch_yf_data", return_value={"ticker": "NVDA"})
+@patch("app.claude_inspection.rh_client")
+async def test_trim_of_position_under_one_dollar_is_skipped(
+    mock_rh, mock_yf, mock_tech, mock_history, mock_call, mock_parse,
+    mock_notify_private, mock_notify_public, mock_log,
+):
+    mock_rh.available = True
+    mock_rh.get_all_positions_async = AsyncMock(
+        return_value=[{"symbol": "NVDA", "qty": 0.002, "avg_entry_price": 400.0,
+                       "current_price": 300.0, "unrealized_pl": -0.2, "unrealized_plpc": -25.0}]
+    )
+    mock_rh.get_buying_power_async = AsyncMock(return_value=0.0)
+    mock_call.return_value = "```json\n{}\n```"
+    mock_parse.return_value = {
+        "no_changes": False,
+        "trades": [{"action": "TRIM", "ticker": "NVDA", "target_weight_pct": 10, "reasoning": "x"}],
+    }
+
+    from app.claude_inspection import run_weekly_inspection
+    await run_weekly_inspection()
+
+    mock_rh.sell_shares_async.assert_not_called()
+    logged_entry = mock_log.call_args[0][0]
+    assert any("under $1" in t["reason"] for t in logged_entry["trades_skipped"])
