@@ -794,21 +794,26 @@ async def deposit(request: Request) -> dict:
             match = Investor(name=req.investor, deposits=[])
             investors.append(match)
 
-        if manual_override:
+        # match.deposits has NOT had the new deposit appended yet at this point,
+        # so this sum is exactly "all units outstanding before this deposit" --
+        # including match's own prior deposits if they're an existing investor.
+        total_existing_units = sum(
+            d.amount / d.entry_spy for inv in investors for d in inv.deposits if d.entry_spy
+        )
+        if manual_override and total_existing_units > 0:
+            # A manual SPY price would mint units at SPY instead of NAV and shift
+            # value between investors. Only the bootstrap deposit may use it.
+            raise HTTPException(
+                status_code=400,
+                detail="spy_price override is only allowed for the first deposit; "
+                       "later deposits are priced at fund NAV.",
+            )
+        if total_existing_units <= 0:
             entry_price = spy_price
         else:
-            # match.deposits has NOT had the new deposit appended yet at this point,
-            # so this sum is exactly "all units outstanding before this deposit" --
-            # including match's own prior deposits if they're an existing investor.
-            total_existing_units = sum(
-                d.amount / d.entry_spy for inv in investors for d in inv.deposits if d.entry_spy
-            )
-            if total_existing_units <= 0:
-                entry_price = spy_price
-            else:
-                account = get_account()
-                real_total_equity = float(account.equity)
-                entry_price = compute_nav_per_unit(investors, real_total_equity)
+            account = get_account()
+            real_total_equity = float(account.equity)
+            entry_price = compute_nav_per_unit(investors, real_total_equity)
 
         match.deposits.append(Deposit(amount=req.amount, entry_spy=entry_price, date=date.today().isoformat()))
         save_investors(investors)
