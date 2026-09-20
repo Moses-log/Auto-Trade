@@ -67,8 +67,10 @@ def format_close(symbol, direction, qty, exit_price, realized_pnl, pct,
     return "\n".join(lines)
 
 
-def format_recap(day_label, fills, wins, losses, total_pnl) -> str:
-    opens = [f for f in fills if f.get("role") == "OPEN"]
+def format_recap(day_label, fills, wins, losses, total_pnl, open_lots=None) -> str:
+    # "Open trades" are positions still open right now (live lots), not the
+    # day's OPEN fills -- a trade opened and closed the same day is a close.
+    opens = open_lots or []
     closes = [f for f in fills if f.get("role") == "CLOSE"]
     total = wins + losses
     win_rate = (wins / total * 100) if total else 0.0
@@ -77,12 +79,12 @@ def format_recap(day_label, fills, wins, losses, total_pnl) -> str:
         f"P&L {_signed(total_pnl)}  ·  {total} trades · {wins}W / {losses}L "
         f"({win_rate:.0f}%)  ·  {len(fills)} fills",
     ]
-    if not fills:
+    if not fills and not opens:
         lines.append("No fills today.")
         return "\n".join(lines)
     if closes:
         lines.append("━" * 15)
-        lines.append("**Closes**")
+        lines.append("**Closed trades**")
         for f in closes:
             emoji = _GREEN if f.get("is_win") else _RED
             lines.append(
@@ -91,12 +93,13 @@ def format_recap(day_label, fills, wins, losses, total_pnl) -> str:
                 f"{_signed(f.get('realized_pnl', 0.0))}"
             )
     if opens:
-        lines.append("**Opens**")
+        lines.append("**Open trades**")
         for f in opens:
+            qty = f.get("qty", 0)
+            price = f.get("entry_price", 0.0)
             lines.append(
                 f"▫️ {f['symbol']} {f.get('direction','')} · "
-                f"{f.get('qty', 0):g} @ {_money(f.get('price', 0.0))} · "
-                f"{_money(f.get('notional', 0.0))}"
+                f"{qty:g} @ {_money(price)} · {_money(price * qty)}"
             )
     return "\n".join(lines)
 
@@ -231,4 +234,7 @@ async def send_daily_recap() -> None:
     wins = sum(1 for f in closes if f.get("is_win") is True)
     losses = sum(1 for f in closes if f.get("is_win") is False)
     total_pnl = sum(f.get("realized_pnl", 0.0) for f in closes)
-    await notify_hf_recap(format_recap(_day_label_ct(), fills, wins, losses, total_pnl))
+    open_lots = await rec.get_open_lots()
+    await notify_hf_recap(
+        format_recap(_day_label_ct(), fills, wins, losses, total_pnl, open_lots)
+    )

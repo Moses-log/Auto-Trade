@@ -155,6 +155,17 @@ async def record_close(symbol, direction, qty, exit_price, ts, shares=None) -> C
         return CloseResult(matched, pnl, pct, is_win, remaining)
 
 
+async def get_open_lots() -> list:
+    """Flat list of lots still open, each with its symbol added."""
+    async with _lock:
+        lots = _load().get("open_lots", {})
+    return [
+        {"symbol": sym, **lot}
+        for sym, sym_lots in lots.items()
+        for lot in sym_lots
+    ]
+
+
 async def record_daily_fill(fill: dict) -> None:
     async with _lock:
         state = _load()
