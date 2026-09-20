@@ -84,6 +84,9 @@ Both server receive signal from all three strategy, but different detail level.
 - **Holiday guard**: All Scheduler report check `was_market_open_today()` (Alpaca calendar API) before fire. No report on market holiday. Tax Reports also guard against double-fire by check if earlier trading day already happen same quarter month.
 - **Snapshot integrity**: `record_rh_equity_snapshot()` always call first in daily/weekly job, before any report function, so all RH report use data capture at same 4 PM ET instant.
 - **RH Session stability**: Never restart Kimi API process unless need — each restart risk miss 4 PM ET scheduler tick, need catch-up equity snapshot logic to recover.
+- **Deposit order (Investor Tracker)**: Run `/deposit` BEFORE cash land in Alpaca. New units priced from live account equity at command time; if cash already in equity, new investor get too few unit, old investor get windfall. After cash land, then buy SPY (cash to SPY not change equity, safe).
+- **`spy_price` on `/deposit`**: Only allow for very first deposit (no units yet). Later deposit always price at fund NAV — `/deposit` and `POST /deposit` reject manual `spy_price` once units exist.
+- **Withdrawal order**: Ledger update when scheduled withdrawal run; send cash out right after. Don't run `/deposit` in gap between the two.
 
 ---
 
