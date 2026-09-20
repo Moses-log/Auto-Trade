@@ -60,8 +60,9 @@ def test_deposit_appends_to_existing_investor():
     assert data["deposits"][1]["entry_spy"] == 700.0
 
 
-def test_deposit_uses_provided_spy_price_and_skips_alpaca_call():
-    with patch("app.main.load_investors", return_value=_initial_investors()):
+def test_deposit_uses_provided_spy_price_for_first_deposit_only():
+    # Bootstrap: no units outstanding yet, so a manual SPY price is allowed.
+    with patch("app.main.load_investors", return_value=[]):
         with patch("app.main.save_investors"):
             with patch("app.main.get_latest_price") as mock_price:
                 with patch("app.main.get_account") as mock_account:
@@ -74,7 +75,23 @@ def test_deposit_uses_provided_spy_price_and_skips_alpaca_call():
     assert response.status_code == 200
     mock_price.assert_not_called()
     mock_account.assert_not_called()
-    assert response.json()["deposits"][1]["entry_spy"] == 595.0
+    assert response.json()["deposits"][0]["entry_spy"] == 595.0
+
+
+def test_deposit_rejects_manual_spy_price_once_units_outstanding():
+    # A manual SPY price would mint units at SPY, not NAV, shifting value
+    # between investors. Must be rejected and nothing saved.
+    with patch("app.main.load_investors", return_value=_initial_investors()):
+        with patch("app.main.save_investors") as mock_save:
+            response = client.post("/deposit", json={
+                "secret": TEST_SECRET,
+                "investor": "Moses",
+                "amount": 500.0,
+                "spy_price": 595.0,
+            })
+    assert response.status_code == 400
+    assert "NAV" in response.json()["detail"]
+    mock_save.assert_not_called()
 
 
 def test_deposit_creates_new_investor_when_name_not_found():

@@ -73,15 +73,14 @@ async def handle_deposit(
             investors.append(match)
             is_new = True
 
-        if manual_override:
-            entry_price = spy_price
-        else:
-            # match.deposits has NOT had the new deposit appended yet at this point,
-            # so this sum is exactly "all units outstanding before this deposit" --
-            # including match's own prior deposits if they're an existing investor.
-            total_existing_units = sum(
-                d.amount / d.entry_spy for inv in investors for d in inv.deposits if d.entry_spy
-            )
+        # match.deposits has NOT had the new deposit appended yet at this point,
+        # so this sum is exactly "all units outstanding before this deposit" --
+        # including match's own prior deposits if they're an existing investor.
+        total_existing_units = sum(
+            d.amount / d.entry_spy for inv in investors for d in inv.deposits if d.entry_spy
+        )
+        rejected = manual_override and total_existing_units > 0
+        if not rejected:
             if total_existing_units <= 0:
                 # Bootstrap case — no real performance to benchmark against yet.
                 entry_price = spy_price
@@ -90,8 +89,18 @@ async def handle_deposit(
                 real_total_equity = float(account.equity)
                 entry_price = compute_nav_per_unit(investors, real_total_equity)
 
-        match.deposits.append(Deposit(amount=amount, entry_spy=entry_price, date=date.today().isoformat()))
-        save_investors(investors)
+            match.deposits.append(Deposit(amount=amount, entry_spy=entry_price, date=date.today().isoformat()))
+            save_investors(investors)
+
+    if rejected:
+        # A manual SPY price would mint units at SPY instead of NAV and shift
+        # value between investors. Only the bootstrap deposit may use it.
+        await _edit_original(
+            token,
+            "❌ spy_price override is only allowed for the first deposit — "
+            "later deposits are priced at fund NAV. Re-run without spy_price.",
+        )
+        return
 
     status = "🆕 New investor added" if is_new else "✅ Deposit recorded"
     await _edit_original(

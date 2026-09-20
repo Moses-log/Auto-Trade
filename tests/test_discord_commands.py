@@ -68,6 +68,36 @@ async def test_handle_deposit_prices_at_real_nav_when_units_outstanding():
 
 
 @pytest.mark.asyncio
+async def test_handle_deposit_rejects_manual_spy_price_once_units_outstanding():
+    from app.investors import Investor, Deposit
+    existing = Investor(name="Moses", deposits=[
+        Deposit(amount=300.0, entry_spy=600.0, date="2026-01-01")
+    ])
+
+    with patch("app.discord_commands.load_investors", return_value=[existing]), \
+         patch("app.discord_commands.save_investors") as mock_save, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_deposit
+        await handle_deposit("David", 500.0, 500.0, "test-token")
+
+    mock_save.assert_not_called()
+    msg = mock_edit.call_args[0][1]
+    assert msg.startswith("❌") and "NAV" in msg
+
+
+@pytest.mark.asyncio
+async def test_handle_deposit_allows_manual_spy_price_for_first_deposit():
+    with patch("app.discord_commands.load_investors", return_value=[]), \
+         patch("app.discord_commands.save_investors") as mock_save, \
+         patch("app.discord_commands._edit_original", new_callable=AsyncMock) as mock_edit:
+        from app.discord_commands import handle_deposit
+        await handle_deposit("Moses", 2000.0, 500.0, "test-token")
+
+    mock_save.assert_called_once()
+    assert "500.00" in mock_edit.call_args[0][1]
+
+
+@pytest.mark.asyncio
 async def test_handle_deposit_falls_back_to_spy_price_with_no_units_outstanding():
     from types import SimpleNamespace
 
