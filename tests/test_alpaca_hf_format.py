@@ -43,3 +43,37 @@ def test_format_recap_counts_and_winrate():
     assert "5W" in msg and "2L" in msg
     assert "71%" in msg
     assert "+$41.28" in msg
+
+
+def test_format_recap_closed_trade_not_listed_under_open():
+    from app.alpaca_hf_notifier import format_recap
+    fills = [{"symbol": "QCOM", "role": "OPEN", "direction": "LONG",
+              "qty": 12, "price": 164.37, "notional": 1972.44},
+             {"symbol": "QCOM", "role": "CLOSE", "direction": "LONG",
+              "qty": 12, "price": 164.84, "realized_pnl": 5.64, "is_win": True}]
+    msg = format_recap("August 27, 2026", fills, 1, 0, 5.64, open_lots=[])
+    assert "Closed trades" in msg
+    assert "Open trades" not in msg
+    assert msg.count("QCOM") == 1
+
+
+def test_format_recap_still_open_lot_listed_only_under_open():
+    from app.alpaca_hf_notifier import format_recap
+    fills = [{"symbol": "TSM", "role": "OPEN", "direction": "LONG",
+              "qty": 4, "price": 425.47, "notional": 1701.88}]
+    lots = [{"symbol": "TSM", "direction": "LONG", "qty": 4.0,
+             "entry_price": 425.47, "entry_ts": "2026-08-27T15:00:00+00:00"},
+            {"symbol": "PLTR", "direction": "SHORT", "qty": 2.0,
+             "entry_price": 150.0, "entry_ts": "2026-08-20T15:00:00+00:00"}]
+    msg = format_recap("August 27, 2026", fills, 0, 0, 0.0, open_lots=lots)
+    assert "Open trades" in msg
+    assert "Closed trades" not in msg
+    assert "TSM" in msg and "PLTR" in msg  # carried-over lot included
+
+
+def test_format_recap_no_fills_but_open_lot_still_shown():
+    from app.alpaca_hf_notifier import format_recap
+    lots = [{"symbol": "PLTR", "direction": "SHORT", "qty": 2.0,
+             "entry_price": 150.0, "entry_ts": "x"}]
+    msg = format_recap("August 27, 2026", [], 0, 0, 0.0, open_lots=lots)
+    assert "PLTR" in msg and "Open trades" in msg

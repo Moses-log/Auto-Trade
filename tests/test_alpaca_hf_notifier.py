@@ -186,3 +186,29 @@ async def test_recap_excludes_unmatched_close_from_win_loss_tally():
     msg = post.await_args.args[0]
     assert "1W" in msg
     assert "1L" in msg
+
+
+@pytest.mark.asyncio
+async def test_recap_open_section_uses_live_open_lots_not_open_fills():
+    import app.alpaca_hf_notifier as nf
+    import app.alpaca_hf_record as rec
+
+    # QCOM opened + closed today; TSM opened today and still open.
+    await rec.record_open("QCOM", "LONG", 12, 164.37, "t1", "o1")
+    await rec.record_daily_fill({"symbol": "QCOM", "role": "OPEN", "direction": "LONG",
+                                 "qty": 12, "price": 164.37, "notional": 1972.44, "ts": "t1"})
+    r = await rec.record_close("QCOM", "LONG", 12, 164.84, "t2")
+    await rec.record_daily_fill({"symbol": "QCOM", "role": "CLOSE", "direction": "LONG",
+                                 "qty": 12, "price": 164.84, "realized_pnl": r.realized_pnl,
+                                 "is_win": r.is_win, "ts": "t2"})
+    await rec.record_open("TSM", "LONG", 4, 425.47, "t3", "o3")
+    await rec.record_daily_fill({"symbol": "TSM", "role": "OPEN", "direction": "LONG",
+                                 "qty": 4, "price": 425.47, "notional": 1701.88, "ts": "t3"})
+
+    with patch.object(nf, "notify_hf_recap", new=AsyncMock()) as post:
+        await nf.send_daily_recap()
+
+    msg = post.await_args.args[0]
+    open_part = msg.split("Open trades")[1]
+    assert "TSM" in open_part and "QCOM" not in open_part
+    assert msg.count("QCOM") == 1
