@@ -32,6 +32,7 @@ from app.trading.robinhood_client import rh_client
 from app.risk_guardrails import (
     clamp_position_weights, resolve_sectors, _yf_sector_fetch,
     compute_sector_exposure, sector_warnings, format_guardrail_embed,
+    trim_skip_reason, enforce_position_cap,
 )
 
 _ET_TZ = pytz.timezone("America/New_York")
@@ -235,6 +236,14 @@ async def run_weekly_inspection() -> None:
             ))
             return
 
+        # A holding above the 25% cap (e.g. after a rally) is trimmed back even if
+        # the model said HOLD -- must run before the no-changes early exit below.
+        _forced = enforce_position_cap(trade_block.setdefault("trades", []), positions, portfolio_value)
+        if _forced:
+            trade_block["no_changes"] = False
+            log_entry["forced_trims"] = _forced
+            log.warning("Inspection forced trim to cap: %s", _forced)
+
         if trade_block.get("no_changes") or not [
             t for t in trade_block.get("trades", []) if t.get("action") != "HOLD"
         ]:
@@ -419,13 +428,16 @@ async def run_weekly_inspection() -> None:
             current_qty = pos["qty"]
             current_price = pos.get("current_price", 0)
             current_value = current_qty * current_price
-            if current_qty < 1.0 or target_value >= current_value * 0.95:
-                reason = "fractional position" if current_qty < 1.0 else "already at target"
-                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": reason})
+            if target_value >= current_value * 0.95:
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "already at target"})
                 continue
             sell_qty = round((current_value - target_value) / current_price, 6) if current_price > 0 else 0.0
             if sell_qty <= 0:
                 log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": "sell qty <= 0"})
+                continue
+            skip = trim_skip_reason(current_value, sell_qty * current_price)
+            if skip:
+                log_entry["trades_skipped"].append({"action": "TRIM", "ticker": ticker, "reason": skip})
                 continue
 
             result = await rh_client.sell_shares_async(ticker, sell_qty)
@@ -619,16 +631,23 @@ material has happened in the last 7 days that changes the existing thesis. You a
 each thesis from scratch — you are given the most recent thesis for each ticker and asked whether \
 it still holds.
 
-DEFAULT TO HOLD. Only recommend action (SELL, TRIM, or DOUBLE_DOWN) when there is a specific, \
-nameable trigger:
+You have real freedom to SELL, TRIM, or DOUBLE_DOWN. Act whenever you have a clear, nameable \
+reason; HOLD when you don't. Reasons that justify action:
 - An earnings surprise (beat or miss) since the last review
 - A guidance change (raised or cut)
 - Major company-specific news (management change, regulatory action, product failure, M&A)
 - A macro/sector shock clearly tied to this specific name
 - A meaningful technical breakdown (a major support level broken with volume, a fresh death cross)
+- Overweight position: a holding above ~20% of the book is a reason to TRIM toward a lower target, \
+even with no news
+- Valuation stretched relative to the current thesis (TRIM), or clearly cheap relative to it \
+(DOUBLE_DOWN)
+- Thesis drift or weakening: evidence building against the thesis even without a single headline \
+(TRIM or SELL); or evidence strengthening it (DOUBLE_DOWN)
+- Strong or weak momentum / relative strength worth sizing up or down
 
-Routine day-to-day price noise is NOT a trigger. If nothing material happened for a holding, the \
-correct action is HOLD — do not manufacture a reason to trade.
+Do not churn on single-day price noise. But do not sit still out of habit either: if a holding's \
+position size, valuation, or thesis no longer matches your conviction, say so and act.
 
 HARD RULE: You may never propose BUY. You only act on tickers already held. New positions are \
 opened exclusively by the monthly rebalance's candidate screening — that is out of scope here.
@@ -659,7 +678,7 @@ Rules for the JSON block:
 - action must be exactly "HOLD", "SELL", "TRIM", or "DOUBLE_DOWN" — never "BUY".
 - Every current holding must appear exactly once in "trades".
 - target_weight_pct is required for TRIM and DOUBLE_DOWN; omit for SELL and HOLD.
-- reasoning is required for SELL, TRIM, and DOUBLE_DOWN — one or two sentences naming the specific trigger (earnings, guidance, news, macro, technical) that justifies acting. Omit for HOLD.
+- reasoning is required for SELL, TRIM, and DOUBLE_DOWN — one or two sentences naming the specific reason (earnings, guidance, news, macro, technical, overweight size, valuation, thesis drift, momentum) that justifies acting. Omit for HOLD.
 - Do not include markdown, comments, or other extra fields in the JSON block."""
 
 

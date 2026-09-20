@@ -15,6 +15,20 @@ log = logging.getLogger(__name__)
 MAX_POSITION_PCT = 25.0
 MAX_SECTOR_PCT = 50.0
 _CLAMPED_ACTIONS = ("BUY", "DOUBLE_DOWN", "TRIM")
+MIN_TRIM_USD = 1.0   # Robinhood fractional-share minimum
+
+
+def trim_skip_reason(current_value: float, sell_value: float) -> str | None:
+    """Why a TRIM can't be placed, or None if it can.
+
+    Robinhood partial-sells fractional positions, so share count doesn't matter --
+    only that the position and the amount sold are each worth more than $1.
+    """
+    if current_value <= MIN_TRIM_USD:
+        return f"position under ${MIN_TRIM_USD:g} (${current_value:.2f}) — use SELL"
+    if sell_value < MIN_TRIM_USD:
+        return f"trim amount under ${MIN_TRIM_USD:g} (${sell_value:.2f})"
+    return None
 
 
 @dataclass
@@ -38,6 +52,48 @@ def clamp_position_weights(trades: list[dict]) -> list[ClampEvent]:
             events.append(ClampEvent((t.get("ticker") or "?").upper(), float(wt), MAX_POSITION_PCT))
             t["target_weight_pct"] = MAX_POSITION_PCT
     return events
+
+
+def enforce_position_cap(
+    trades: list[dict], positions: list[dict], portfolio_value: float,
+    excluded: tuple = ("SPY",),
+) -> list[dict]:
+    """Force any holding above MAX_POSITION_PCT back to the cap, in place.
+
+    clamp_position_weights only limits *target* weights, so a HOLD (or a rally
+    past 25% between reviews) would otherwise sit above the cap forever. A HOLD,
+    DOUBLE_DOWN, or missing trade for an over-cap holding becomes a TRIM to the
+    cap. SELL and TRIM are left alone (TRIM targets are clamped separately).
+    Returns one {ticker, weight_pct} per forced trim.
+    """
+    if not portfolio_value or portfolio_value <= 0:
+        return []
+    forced: list[dict] = []
+    by_ticker = {(t.get("ticker") or "").upper(): t for t in trades}
+    for p in positions:
+        sym = p["symbol"].upper()
+        if sym in excluded:
+            continue
+        weight = p.get("qty", 0) * p.get("current_price", 0) / portfolio_value * 100
+        if weight <= MAX_POSITION_PCT:
+            continue
+        t = by_ticker.get(sym)
+        if t is not None and t.get("action") in ("SELL", "TRIM"):
+            continue
+        new = {
+            "action": "TRIM", "ticker": sym, "target_weight_pct": MAX_POSITION_PCT,
+            "reasoning": (
+                f"Auto-trim: position at {weight:.1f}% exceeds the {MAX_POSITION_PCT:g}% "
+                f"position cap; trimming back to {MAX_POSITION_PCT:g}%."
+            ),
+        }
+        if t is None:
+            trades.append(new)
+        else:
+            t.clear()
+            t.update(new)
+        forced.append({"ticker": sym, "weight_pct": weight})
+    return forced
 
 
 def compute_sector_exposure(positions, trades, portfolio_value, sector_of) -> dict:

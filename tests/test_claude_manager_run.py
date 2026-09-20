@@ -394,3 +394,44 @@ def test_result_card_empty_fields_is_single_plain_embed():
     assert len(cards) == 1
     assert "fields" not in cards[0]
     assert cards[0]["description"] == "no trades"
+
+
+@pytest.mark.asyncio
+async def test_trim_of_sub_one_share_position_executes():
+    """Robinhood allows partial sells on fractional positions worth > $1."""
+    with _rebalance_mocks() as m:
+        m.rh.get_all_positions_async.return_value = [_pos("MSFT", 0.5, 300.0)]  # $150
+        m.rh.get_buying_power_async.return_value = 0.0
+        m.rh.sell_shares_async.return_value = {"status": "ok", "qty": 0.375, "fill_price": 300.0}
+        m.trim_position.return_value = (0.375, 10.0, 5.0)
+        m.parse.return_value = {
+            "no_changes": False,
+            "trades": [{"action": "TRIM", "ticker": "MSFT", "target_weight_pct": 25}],
+        }
+
+        from app.claude_manager import run_monthly_rebalance
+        await run_monthly_rebalance()
+
+    # portfolio = 150; 25% target = 37.5; sell (150 - 37.5) / 300 = 0.375 shares.
+    m.rh.sell_shares_async.assert_awaited_once_with("MSFT", 0.375)
+    assert any(t["action"] == "TRIM" for t in _logged(m)["trades_executed"])
+
+
+@pytest.mark.asyncio
+async def test_trim_of_position_under_one_dollar_is_skipped():
+    with _rebalance_mocks() as m:
+        m.rh.get_all_positions_async.return_value = [
+            _pos("MSFT", 0.002, 300.0),   # $0.60 -- the tiny position we try to trim
+            _pos("NVDA", 10.0, 100.0),    # keeps the portfolio itself non-trivial
+        ]
+        m.rh.get_buying_power_async.return_value = 0.0
+        m.parse.return_value = {
+            "no_changes": False,
+            "trades": [{"action": "TRIM", "ticker": "MSFT", "target_weight_pct": 0.01}],
+        }
+
+        from app.claude_manager import run_monthly_rebalance
+        await run_monthly_rebalance()
+
+    m.rh.sell_shares_async.assert_not_called()
+    assert any("under $1" in t["reason"] for t in _logged(m)["trades_skipped"])

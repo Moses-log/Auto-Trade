@@ -96,3 +96,72 @@ def test_embed_has_clamp_and_sector_fields():
     assert embed["title"] == "⚠️ RISK GUARDRAIL"
     joined = " ".join(f["value"] for f in embed["fields"])
     assert "NVDA" in joined and "Technology 68%" in joined and "ZZZ" in joined
+
+
+def test_trim_skip_reason_allows_sub_share_position_over_one_dollar():
+    from app.risk_guardrails import trim_skip_reason
+    # 0.5 share @ $300 = $150 position, selling $112.50 -- fine on Robinhood.
+    assert trim_skip_reason(current_value=150.0, sell_value=112.5) is None
+
+
+def test_trim_skip_reason_blocks_position_at_or_under_one_dollar():
+    from app.risk_guardrails import trim_skip_reason
+    assert "under $1" in trim_skip_reason(current_value=0.60, sell_value=0.30)
+    assert trim_skip_reason(current_value=1.0, sell_value=0.5) is not None
+
+
+def test_trim_skip_reason_blocks_sell_under_one_dollar():
+    from app.risk_guardrails import trim_skip_reason
+    assert "under $1" in trim_skip_reason(current_value=50.0, sell_value=0.40)
+
+
+def _pos(sym, qty, px):
+    return {"symbol": sym, "qty": qty, "current_price": px}
+
+
+def test_enforce_position_cap_turns_hold_into_trim_to_cap():
+    from app.risk_guardrails import enforce_position_cap
+    trades = [{"action": "HOLD", "ticker": "NVDA"}, {"action": "HOLD", "ticker": "MSFT"}]
+    positions = [_pos("NVDA", 10, 350.0), _pos("MSFT", 10, 100.0)]   # NVDA 35%, MSFT 10%
+    forced = enforce_position_cap(trades, positions, 10000.0)
+    assert [f["ticker"] for f in forced] == ["NVDA"]
+    nvda = trades[0]
+    assert nvda["action"] == "TRIM" and nvda["target_weight_pct"] == 25.0
+    assert "cap" in nvda["reasoning"].lower()
+    assert trades[1] == {"action": "HOLD", "ticker": "MSFT"}
+
+
+def test_enforce_position_cap_adds_trade_when_ticker_missing():
+    from app.risk_guardrails import enforce_position_cap
+    trades = []
+    forced = enforce_position_cap(trades, [_pos("NVDA", 10, 350.0)], 10000.0)
+    assert len(forced) == 1 and trades[0]["action"] == "TRIM"
+
+
+def test_enforce_position_cap_overrides_double_down_on_overweight():
+    from app.risk_guardrails import enforce_position_cap
+    trades = [{"action": "DOUBLE_DOWN", "ticker": "NVDA", "target_weight_pct": 40}]
+    enforce_position_cap(trades, [_pos("NVDA", 10, 350.0)], 10000.0)
+    assert trades[0]["action"] == "TRIM" and trades[0]["target_weight_pct"] == 25.0
+
+
+def test_enforce_position_cap_leaves_sell_trim_and_under_cap_alone():
+    from app.risk_guardrails import enforce_position_cap
+    trades = [
+        {"action": "SELL", "ticker": "NVDA"},
+        {"action": "TRIM", "ticker": "AMD", "target_weight_pct": 10, "reasoning": "x"},
+        {"action": "HOLD", "ticker": "MSFT"},
+    ]
+    positions = [_pos("NVDA", 10, 350.0), _pos("AMD", 10, 350.0), _pos("MSFT", 10, 100.0)]
+    forced = enforce_position_cap(trades, positions, 10000.0)
+    assert [f["ticker"] for f in forced] == []      # SELL/TRIM handled; MSFT is 10%
+    assert trades[0]["action"] == "SELL"
+    assert trades[1]["target_weight_pct"] == 10
+
+
+def test_enforce_position_cap_ignores_spy_and_zero_portfolio():
+    from app.risk_guardrails import enforce_position_cap
+    trades = []
+    assert enforce_position_cap(trades, [_pos("SPY", 100, 500.0)], 50000.0) == []
+    assert enforce_position_cap(trades, [_pos("NVDA", 1, 1.0)], 0.0) == []
+    assert trades == []
