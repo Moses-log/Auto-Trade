@@ -103,8 +103,17 @@ def _inspection_already_completed_this_week() -> bool:
     return _already_decided_this_period(_INSPECTION_LOG_PATH, week_start, _COMPLETED_INSPECTION_STATUSES)
 
 
+# How late a job may start and still run. APScheduler's default is 1 second:
+# any event-loop stall longer than that at the scheduled instant (e.g. the
+# hourly tracemalloc snapshot landing on the same 16:00 tick) made it log
+# "Run time of job ... was missed" and drop the job outright — no retry.
+_MISFIRE_GRACE_SECONDS = 300
+
 # Singleton — imported and started in main.py lifespan.
-scheduler = AsyncIOScheduler(timezone=ET)
+scheduler = AsyncIOScheduler(
+    timezone=ET,
+    job_defaults={"misfire_grace_time": _MISFIRE_GRACE_SECONDS},
+)
 
 
 def _profiled(tag: str, fn):
