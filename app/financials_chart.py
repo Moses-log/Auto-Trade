@@ -9,6 +9,7 @@ a grouped bar + line chart styled like Robinhood's Financials section:
 
 from __future__ import annotations
 
+import gc
 import io
 import logging
 from typing import Optional
@@ -115,6 +116,18 @@ def fetch_quarterly_financials(ticker: str) -> Optional[dict]:
 
 def generate_financials_chart(data: dict) -> bytes:
     """Render a cyberpunk grouped-bar + margin-line chart. Returns PNG bytes."""
+    try:
+        return _render_financials_chart(data)
+    finally:
+        # A Figure is a reference cycle: plt.close() only unregisters it, and
+        # it (with its ~7 MB Agg pixel buffer) stays alive until the cyclic GC
+        # next runs. The rebalance renders one chart per ticker back to back,
+        # so they piled up — 9 live Figures and +163 MB RSS on 2026-10-01.
+        # Collect here, after the render frame (and its fig/ax locals) is gone.
+        gc.collect()
+
+
+def _render_financials_chart(data: dict) -> bytes:
     ticker    = data["ticker"]
     quarters  = data["quarters"]
     revenues  = data["revenue"]
