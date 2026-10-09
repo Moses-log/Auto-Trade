@@ -25,6 +25,7 @@ from typing import Optional
 from alpaca.trading.enums import OrderSide
 from alpaca.trading.models import Order
 
+from app.leverage_state import add_leverage_qty, clear_leverage_qty, load_leverage_qty
 from app.models import AlertPayload, TradingAction
 from app.trading import alpaca_client as ac
 from app.trading.robinhood_client import rh_client
@@ -109,12 +110,19 @@ async def execute_action(payload: AlertPayload) -> dict:
 
     elif action == TradingAction.REMOVE_LEVERAGE:
         # Close only the DD (Leverage) position, leave base untouched
-        lf = payload.leverage_factor if payload.leverage_factor is not None else DEFAULT_LEVERAGE_FACTOR
-        order = _kimi_remove_leverage(ticker, lf)
-        if order:
-            result["orders"].append(_order_summary(order))
+        try:
+            order = _kimi_remove_leverage(ticker)
+        except LeverageQtyUnknown as exc:
+            # Sell nothing rather than guess a size; tell the owner instead.
+            log.error("REMOVE_LEVERAGE skipped on Alpaca: %s", exc, extra={"ticker": ticker})
+            from app.notifications import notify
+            await notify(f"⚠️ {exc}")
+            result["note"] = str(exc)
         else:
-            result["note"] = "No leverage position to close."
+            if order:
+                result["orders"].append(_order_summary(order))
+            else:
+                result["note"] = "No leverage position to close."
 
     elif action == TradingAction.STOP_LOSS:
         # Close everything
@@ -176,13 +184,25 @@ def _kimi_add_leverage(ticker: str, price: Optional[float], leverage_factor: flo
         },
     )
 
-    return ac.place_market_order(ticker, OrderSide.BUY, dd_qty)
+    order = ac.place_market_order(ticker, OrderSide.BUY, dd_qty)
+    # Record what was bought so REMOVE_LEVERAGE sells exactly this much.
+    add_leverage_qty(ticker, dd_qty)
+    return order
 
 
-def _kimi_remove_leverage(ticker: str, leverage_factor: float) -> Optional[Order]:
+class LeverageQtyUnknown(Exception):
+    """REMOVE_LEVERAGE fired with a position open but no recorded DD share count."""
+
+
+def _kimi_remove_leverage(ticker: str) -> Optional[Order]:
     """
-    Close the DD (leverage) position only.
-    Uses leverage_factor from payload to calculate DD portion of total position.
+    Close the DD (leverage) position only: sell exactly the shares that
+    ADD_LEVERAGE bought, as recorded in leverage_state.
+
+    The DD buy is sized off buying power, not off the base position, so the
+    DD share count cannot be derived from the total position — the old
+    total * lf / (1 + lf) formula sold too little every cycle and left
+    leverage stranded on the account.
     """
     position = ac.get_position(ticker)
 
@@ -191,8 +211,20 @@ def _kimi_remove_leverage(ticker: str, leverage_factor: float) -> Optional[Order
         return None
 
     total_qty = float(position.qty)
-    dd_portion = total_qty * (leverage_factor / (1 + leverage_factor))
-    dd_qty = round(dd_portion, 2) if settings.allow_fractional_shares else math.floor(dd_portion)
+    open_qty = load_leverage_qty(ticker)
+
+    if open_qty is None:
+        raise LeverageQtyUnknown(
+            f"REMOVE_LEVERAGE for {ticker}: no recorded leverage share count, "
+            f"so nothing was sold on Alpaca (position is {total_qty} shares). "
+            f"Sell the leverage shares manually if any are open."
+        )
+
+    if open_qty > total_qty:
+        # Never sell more than is held; round down so the order cannot exceed it.
+        dd_qty = math.floor(total_qty * 100) / 100 if settings.allow_fractional_shares else math.floor(total_qty)
+    else:
+        dd_qty = round(open_qty, 2) if settings.allow_fractional_shares else math.floor(open_qty)
 
     if dd_qty <= 0:
         log.warning("Calculated DD qty to close is 0", extra={"ticker": ticker, "total_qty": total_qty})
@@ -200,10 +232,12 @@ def _kimi_remove_leverage(ticker: str, leverage_factor: float) -> Optional[Order
 
     log.info(
         "Closing Kimi DD position",
-        extra={"ticker": ticker, "total_qty": total_qty, "closing_dd_qty": dd_qty, "leverage_factor": leverage_factor},
+        extra={"ticker": ticker, "total_qty": total_qty, "closing_dd_qty": dd_qty, "recorded_dd_qty": open_qty},
     )
 
-    return ac.place_market_order(ticker, OrderSide.SELL, dd_qty)
+    order = ac.place_market_order(ticker, OrderSide.SELL, dd_qty)
+    clear_leverage_qty(ticker)
+    return order
 
 
 def _kimi_stop_loss(ticker: str) -> list:
@@ -215,6 +249,7 @@ def _kimi_stop_loss(ticker: str) -> list:
         order = ac.close_position(ticker)
         if order:
             orders.append(order)
+        clear_leverage_qty(ticker)
     return orders
 
 
