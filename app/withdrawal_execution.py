@@ -74,11 +74,14 @@ async def schedule_withdrawal(
     nav_per_unit = compute_nav_per_unit(investors, real_total_equity)
 
     try:
-        # Validation only — the result is discarded. Execution re-runs this with
-        # a live price/equity reading and the investor's state at execution time, not now.
-        compute_withdrawal_lots(inv, amount, nav_per_unit)
+        # Unlocked: validation only — execution re-runs this with live equity.
+        # Locked (spy_price given): the investor's SPY was sold to cash at that
+        # price, so freeze the units redeemed now; execution pays exactly
+        # `amount` for them no matter how the rest of the pool moves.
+        _, units_redeemed = compute_withdrawal_lots(inv, amount, nav_per_unit)
     except ValueError as exc:
         raise WithdrawalValidationError(str(exc)) from exc
+    locked_units = units_redeemed if locked_spy_price is not None else None
 
     now = datetime.now(_CT)
     run_at = now + timedelta(hours=settings.withdrawal_delay_hours)
@@ -91,6 +94,7 @@ async def schedule_withdrawal(
         requested_at=now.isoformat(),
         run_at=run_at.isoformat(),
         spy_price=locked_spy_price,  # only stored if user explicitly provided it
+        locked_units=locked_units,
     )
 
     scheduler.add_job(
@@ -169,7 +173,11 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
         else:
             nav_per_unit = compute_nav_per_unit(investors, real_total_equity)
             try:
-                lots, units_redeemed = compute_withdrawal_lots(inv, record["amount"], nav_per_unit)
+                lots, units_redeemed = compute_withdrawal_lots(
+                    inv, record["amount"], nav_per_unit, units=record.get("locked_units"),
+                )
+                # Locked: report at the frozen price, not today's pooled NAV.
+                nav_per_unit = record["amount"] / units_redeemed
             except ValueError as exc:
                 error_reason = str(exc)
             else:
@@ -215,6 +223,14 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
             log.exception("execute_pending_withdrawal: failed to remove pending record %s after processing", withdrawal_id)
 
     if error_reason:
+        if settings.use_sqlite:
+            # The success path removes it inside the transaction; a failed one
+            # must go too, or reschedule_pending_withdrawals re-fires it on
+            # every restart. The 'failed' audit entry below keeps the record.
+            try:
+                remove_pending_withdrawal(withdrawal_id)
+            except Exception:
+                log.exception("execute_pending_withdrawal: failed to remove pending record %s after failure", withdrawal_id)
         try:
             append_withdrawal_audit(
                 withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],

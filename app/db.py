@@ -54,7 +54,8 @@ CREATE TABLE IF NOT EXISTS pending_withdrawals (
     amount       REAL NOT NULL CHECK (amount >= 0),
     requested_at TEXT NOT NULL,
     run_at       TEXT NOT NULL,
-    spy_price    REAL
+    spy_price    REAL,
+    locked_units REAL
 );
 CREATE TABLE IF NOT EXISTS withdrawal_audit (
     id            INTEGER PRIMARY KEY,
@@ -87,7 +88,13 @@ def get_conn() -> sqlite3.Connection:
 
 
 def init_schema() -> None:
-    get_conn().executescript(_SCHEMA)
+    conn = get_conn()
+    conn.executescript(_SCHEMA)
+    # Columns added after the 2026-07-15 cutover: CREATE TABLE IF NOT EXISTS
+    # won't add them to a live db, so add any that are missing.
+    cols = {r["name"] for r in conn.execute("PRAGMA table_info(pending_withdrawals)")}
+    if "locked_units" not in cols:
+        conn.execute("ALTER TABLE pending_withdrawals ADD COLUMN locked_units REAL")
 
 
 def checkpoint() -> None:

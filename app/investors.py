@@ -7,6 +7,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import date as _date, datetime
 from pathlib import Path
+from typing import Optional
 
 import pytz
 
@@ -177,6 +178,17 @@ def get_deposit_events() -> list[tuple[str, float]]:
     return sorted(events)
 
 
+def get_withdrawal_events() -> list[tuple[str, float]]:
+    """Return [(iso_date, -proceeds), ...] for every recorded withdrawal, sorted.
+
+    Negative amounts: cash that left the fund. The Alpaca P&L strips these the
+    same way it strips deposits, so an investor cash-out is not a trading loss.
+    """
+    investors = load_investors()
+    events = [(w.date, -w.proceeds) for inv in investors for w in inv.withdrawals]
+    return sorted(events)
+
+
 def _net_units(investor: Investor) -> float:
     """SPY units the investor currently holds (deposits minus all redemptions)."""
     deposit_units = sum(d.amount / d.entry_spy for d in investor.deposits if d.entry_spy)
@@ -316,6 +328,7 @@ def compute_withdrawal_lots(
     investor: Investor,
     withdraw_amount: float,
     nav_per_unit: float,
+    units: Optional[float] = None,
 ) -> tuple[list[dict], float]:
     """FIFO-match a dollar withdrawal against the investor's deposit lots.
 
@@ -328,17 +341,35 @@ def compute_withdrawal_lots(
     `nav_per_unit` is the fund's real NAV per unit (see compute_nav_per_unit),
     not the raw SPY market price — this determines both the withdrawal cap and
     the real dollar proceeds per lot. `entry_spy` (cost basis) is unaffected.
+
+    `units`, when given, is the unit count frozen at schedule time by a locked
+    (spy_price) withdrawal: exactly that many units are redeemed for exactly
+    `withdraw_amount`, and `nav_per_unit` is ignored. The investor's cash was
+    taken out of SPY at lock time, so later pool moves must not re-price it.
     """
     today = datetime.now(_ET).date()
-    available_equity = _net_units(investor) * nav_per_unit
+    held_units = _net_units(investor)
 
-    if withdraw_amount > available_equity + 0.005:
-        raise ValueError(
-            f"Withdrawal ${withdraw_amount:,.2f} exceeds available equity "
-            f"${available_equity:,.2f}"
-        )
-
-    units_to_redeem = withdraw_amount / nav_per_unit
+    if units is not None:
+        if units > held_units + 1e-6:
+            raise ValueError(
+                f"Locked withdrawal of {units:.6f} units exceeds the "
+                f"{held_units:.6f} units held"
+            )
+        units_to_redeem = min(units, held_units)
+        nav_per_unit = withdraw_amount / units_to_redeem
+    else:
+        available_equity = held_units * nav_per_unit
+        if withdraw_amount > available_equity + 0.005:
+            raise ValueError(
+                f"Withdrawal ${withdraw_amount:,.2f} exceeds available equity "
+                f"${available_equity:,.2f}"
+            )
+        # Within a cent of everything → full redemption; no unit dust left behind.
+        if withdraw_amount >= available_equity - 0.01:
+            units_to_redeem = held_units
+        else:
+            units_to_redeem = withdraw_amount / nav_per_unit
     lots: list[dict] = []
     remaining = units_to_redeem
 

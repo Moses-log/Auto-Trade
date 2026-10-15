@@ -131,8 +131,9 @@ async def test_execute_pending_withdrawal_e2e_sqlite_failure_rolls_back(env):
 
     # Ledger unchanged — the transaction rolled back the save_investors write.
     assert investors.serialize_investors(investors.load_investors()) == before
-    # Pending withdrawal still present — not removed.
-    assert pw.get_pending_withdrawal("wd-e2e-fail") is not None
+    # Failed withdrawals leave pending (same as JSON mode) so a restart can't
+    # re-fire them; the 'failed' audit entry is the durable record.
+    assert pw.get_pending_withdrawal("wd-e2e-fail") is None
     # Exactly one audit entry, written via the post-lock autocommit path, status "failed".
     audit = wa.load_withdrawal_audit()
     assert len(audit) == 1

@@ -33,7 +33,7 @@ def _save_json(records: list) -> None:
 def _load_sqlite() -> list:
     from app import db
     rows = db.get_conn().execute(
-        "SELECT id, investor, amount, requested_at, run_at, spy_price "
+        "SELECT id, investor, amount, requested_at, run_at, spy_price, locked_units "
         "FROM pending_withdrawals ORDER BY rowid").fetchall()
     records = []
     for r in rows:
@@ -43,6 +43,8 @@ def _load_sqlite() -> list:
         }
         if r["spy_price"] is not None:
             rec["spy_price"] = r["spy_price"]
+        if r["locked_units"] is not None:
+            rec["locked_units"] = r["locked_units"]
         records.append(rec)
     return records
 
@@ -53,10 +55,10 @@ def _save_sqlite(records: list) -> None:
         conn.execute("DELETE FROM pending_withdrawals")
         for rec in records:
             conn.execute(
-                "INSERT INTO pending_withdrawals(id, investor, amount, requested_at, run_at, spy_price) "
-                "VALUES(?,?,?,?,?,?)",
+                "INSERT INTO pending_withdrawals(id, investor, amount, requested_at, run_at, "
+                "spy_price, locked_units) VALUES(?,?,?,?,?,?,?)",
                 (rec["id"], rec["investor"], rec["amount"], rec["requested_at"],
-                 rec["run_at"], rec.get("spy_price")))
+                 rec["run_at"], rec.get("spy_price"), rec.get("locked_units")))
 
 
 def _export_json() -> None:
@@ -81,6 +83,7 @@ def save_pending_withdrawal(
     requested_at: str,
     run_at: str,
     spy_price: Optional[float] = None,
+    locked_units: Optional[float] = None,
 ) -> None:
     with _lock:
         records = _load()
@@ -93,6 +96,8 @@ def save_pending_withdrawal(
         }
         if spy_price is not None:
             record["spy_price"] = spy_price
+        if locked_units is not None:
+            record["locked_units"] = locked_units
         records.append(record)
         _save(records)
     log.info("Saved pending withdrawal %s for %s ($%.2f)", withdrawal_id, investor, amount)
