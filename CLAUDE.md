@@ -88,6 +88,7 @@ Both server receive signal from all three strategy, but different detail level.
 - **`spy_price` on `/deposit`**: Only allow for very first deposit (no units yet). Later deposit always price at fund NAV — `/deposit` and `POST /deposit` reject manual `spy_price` once units exist.
 - **Withdrawal order**: Ledger update when scheduled withdrawal run; send cash out right after. Don't run `/deposit` in gap between the two.
 - **`spy_price` on `/withdraw` = lock**: Use when investor SPY already sold to cash at that price. Unit count freeze at schedule time; execution pay exact amount for those unit, pool move in 24h wait not touch it. No `spy_price` = unit re-price at live NAV on execution.
+- **Full deposit/withdraw procedure**: `docs/runbooks/investor-deposits-withdrawals.md`.
 - **Ledger repair**: Cash left Alpaca but ledger write failed → `python -m scripts.record_manual_withdrawal` on Render (dry run first, then `--apply`). Alpaca P&L strip ledger withdrawal as cash outflow, so unrecorded withdrawal = fake loss in report.
 
 ---
