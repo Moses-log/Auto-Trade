@@ -178,6 +178,17 @@ def get_deposit_events() -> list[tuple[str, float]]:
     return sorted(events)
 
 
+def get_withdrawal_events() -> list[tuple[str, float]]:
+    """Return [(iso_date, -proceeds), ...] for every recorded withdrawal, sorted.
+
+    Negative amounts: cash that left the fund. The Alpaca P&L strips these the
+    same way it strips deposits, so an investor cash-out is not a trading loss.
+    """
+    investors = load_investors()
+    events = [(w.date, -w.proceeds) for inv in investors for w in inv.withdrawals]
+    return sorted(events)
+
+
 def _net_units(investor: Investor) -> float:
     """SPY units the investor currently holds (deposits minus all redemptions)."""
     deposit_units = sum(d.amount / d.entry_spy for d in investor.deposits if d.entry_spy)

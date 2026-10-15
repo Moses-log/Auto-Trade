@@ -18,7 +18,9 @@ import pytz
 
 from app.chart import generate_equity_chart, generate_investor_pie_chart
 from app.alpaca_hf_record import contribution_by_investor, realized_pnl_today
-from app.investors import compute_breakdown, format_discord_message, load_investors
+from app.investors import (
+    compute_breakdown, format_discord_message, get_withdrawal_events, load_investors,
+)
 from app.notifications import notify, notify_investors, notify_investors_with_chart, notify_with_chart
 import yfinance as yf
 
@@ -93,6 +95,21 @@ def _deposit_events() -> list[tuple[str, float]]:
     return get_alpaca_deposit_events()
 
 
+def _cash_flow_events() -> list[tuple[str, float]]:
+    """Deposits (positive) plus investor withdrawals (negative), sorted.
+
+    Withdrawals come from the investor ledger: the cash leaves Alpaca right
+    after the ledger records it (see CLAUDE.md withdrawal order), and
+    align_deposits_to_bars matches each one to its equity drop. A ledger read
+    error drops only the withdrawals, never the deposits."""
+    events = list(_deposit_events())
+    try:
+        events.extend(get_withdrawal_events())
+    except Exception as exc:
+        log.warning("Could not load withdrawal events: %s", exc)
+    return sorted(events)
+
+
 _DEPOSIT_ALIGN_WINDOW_DAYS = 3  # a deposit's date may sit within a few bars of its jump
 
 
@@ -135,14 +152,15 @@ def align_deposits_to_bars(
             if equity[i] is None or equity[i - 1] is None:
                 continue
             jump = equity[i] - equity[i - 1]
-            if jump <= 0:
+            # Deposits match a rise, withdrawals (negative amt) a drop.
+            if jump == 0 or (jump > 0) != (amt > 0):
                 continue
             err = abs(jump - amt)
             if best_err is None or err < best_err:
                 best_err, best_i = err, i
         # Only strip when a real in-window jump plausibly IS this deposit. No jump
         # -> baseline capital or masked -> skip (never a blind subtraction).
-        if best_i is not None and best_err <= amt * 0.5:
+        if best_i is not None and best_err <= abs(amt) * 0.5:
             by_index[best_i] += amt
             used.add(best_i)
     return by_index
@@ -214,7 +232,7 @@ def _compute_pnl(history, period: str, start_idx: int = 0) -> PnLResult:
     raw_close = next((eq for eq in reversed(equity) if eq is not None), None)
     if raw_close is None:
         raise ValueError(f"No valid close equity for {period} report")
-    adj = deposit_adjusted_equity(equity, timestamps, _deposit_events())
+    adj = deposit_adjusted_equity(equity, timestamps, _cash_flow_events())
     open_adj = next((eq for eq in adj if eq), None) or equity[0]
     close_adj = next((eq for eq in reversed(adj) if eq is not None), None) or raw_close
     dollar = close_adj - open_adj
@@ -380,7 +398,7 @@ async def send_weekly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for weekly report")
-        _devts = _deposit_events()
+        _devts = _cash_flow_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -449,7 +467,7 @@ async def send_monthly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for monthly report")
-        _devts = _deposit_events()
+        _devts = _cash_flow_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -517,7 +535,7 @@ async def send_yearly_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for yearly report")
-        _devts = _deposit_events()
+        _devts = _cash_flow_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -591,7 +609,7 @@ async def send_ytd_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for YTD report")
-        _devts = _deposit_events()
+        _devts = _cash_flow_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -660,7 +678,7 @@ async def send_alltime_report() -> None:
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError("No valid close equity for all-time report")
-        _devts = _deposit_events()
+        _devts = _cash_flow_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
@@ -742,7 +760,7 @@ async def _send_since_date_report(start_date: _date, label: str, period_key: str
         close_eq = next((eq for eq in reversed(equity) if eq is not None), None)
         if close_eq is None:
             raise ValueError(f"No valid close equity for {label} report")
-        _devts = _deposit_events()
+        _devts = _cash_flow_events()
         _adj = deposit_adjusted_equity(equity, timestamps, _devts)
         _adj_open = next((eq for eq in _adj if eq), None) or open_eq
         _adj_close = next((eq for eq in reversed(_adj) if eq is not None), None) or close_eq
