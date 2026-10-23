@@ -224,7 +224,7 @@ async def test_execute_pending_withdrawal_audits_failed_when_save_investors_rais
         mock_notify.return_value = _async_none()
         await execute_pending_withdrawal("wd-aaaa1111")
 
-    mock_remove.assert_called_once_with("wd-aaaa1111")
+    mock_remove.assert_called_with("wd-aaaa1111")  # removed before the save, again on failure
     assert mock_audit.call_args.kwargs["status"] == "failed"
     assert "Internal error" in mock_audit.call_args.kwargs["reason"]
 
@@ -278,3 +278,97 @@ def _async_none():
     async def _coro():
         return None
     return _coro()
+
+
+def _pending():
+    return {
+        "id": "wd-aaaa1111", "investor": "Moses", "amount": 500.0,
+        "requested_at": "2026-06-21T10:00:00-05:00", "run_at": "2026-06-22T10:00:00-05:00",
+    }
+
+
+class _EveningCT(datetime):
+    """8:30 PM CT on Jun 22 — already Jun 23 in UTC."""
+
+    @classmethod
+    def now(cls, tz=None):
+        moment = datetime(2026, 6, 23, 1, 30, tzinfo=pytz.utc)
+        return moment.astimezone(tz) if tz else moment.replace(tzinfo=None)
+
+
+@pytest.mark.asyncio
+async def test_execute_pending_withdrawal_dates_withdrawal_in_central_time():
+    from app.withdrawal_execution import execute_pending_withdrawal
+    inv = _moses()
+    with patch("app.withdrawal_execution.datetime", _EveningCT), \
+         patch("app.withdrawal_execution.get_pending_withdrawal", return_value=_pending()), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(2000.0)), \
+         patch("app.withdrawal_execution.load_investors", return_value=[inv]), \
+         patch("app.withdrawal_execution.save_investors"), \
+         patch("app.withdrawal_execution.remove_pending_withdrawal"), \
+         patch("app.withdrawal_execution.append_withdrawal_audit"), \
+         patch("app.withdrawal_execution.notify_investors") as mock_notify, \
+         patch("app.withdrawal_execution.push_backup") as mock_backup:
+        mock_notify.return_value = _async_none()
+        mock_backup.return_value = _async_none()
+        await execute_pending_withdrawal("wd-aaaa1111")
+
+    assert inv.withdrawals[0].date == "2026-06-22"
+
+
+@pytest.mark.asyncio
+async def test_execute_pending_withdrawal_json_removes_pending_before_saving_ledger():
+    """Crash between the two writes must not leave a pending record that re-fires on boot."""
+    from unittest.mock import MagicMock
+    from app.withdrawal_execution import execute_pending_withdrawal
+    calls = MagicMock()
+    with patch("app.withdrawal_execution.settings.use_sqlite", False), \
+         patch("app.withdrawal_execution.get_pending_withdrawal", return_value=_pending()), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=741.20), \
+         patch("app.withdrawal_execution.get_account", return_value=_mock_account(2000.0)), \
+         patch("app.withdrawal_execution.load_investors", return_value=[_moses()]), \
+         patch("app.withdrawal_execution.save_investors", calls.save), \
+         patch("app.withdrawal_execution.remove_pending_withdrawal", calls.remove), \
+         patch("app.withdrawal_execution.append_withdrawal_audit"), \
+         patch("app.withdrawal_execution.notify_investors") as mock_notify, \
+         patch("app.withdrawal_execution.push_backup") as mock_backup:
+        mock_notify.return_value = _async_none()
+        mock_backup.return_value = _async_none()
+        await execute_pending_withdrawal("wd-aaaa1111")
+
+    names = [c[0] for c in calls.mock_calls]
+    assert names.index("remove") < names.index("save")
+
+
+@pytest.mark.asyncio
+async def test_execute_pending_withdrawal_retry_passes_attempt_count():
+    from app.withdrawal_execution import execute_pending_withdrawal
+    with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=_pending()), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=None), \
+         patch("app.withdrawal_execution.scheduler") as mock_scheduler, \
+         patch("app.withdrawal_execution.notify_investors") as mock_notify:
+        mock_notify.return_value = _async_none()
+        await execute_pending_withdrawal("wd-aaaa1111", attempt=3)
+
+    assert mock_scheduler.add_job.call_args.kwargs["kwargs"] == {"attempt": 4}
+
+
+@pytest.mark.asyncio
+async def test_execute_pending_withdrawal_marks_failed_after_max_retries():
+    from app.withdrawal_execution import _MAX_DATA_RETRIES, execute_pending_withdrawal
+    with patch("app.withdrawal_execution.get_pending_withdrawal", return_value=_pending()), \
+         patch("app.withdrawal_execution.get_latest_price", return_value=None), \
+         patch("app.withdrawal_execution.scheduler") as mock_scheduler, \
+         patch("app.withdrawal_execution.save_investors") as mock_save, \
+         patch("app.withdrawal_execution.remove_pending_withdrawal") as mock_remove, \
+         patch("app.withdrawal_execution.append_withdrawal_audit") as mock_audit, \
+         patch("app.withdrawal_execution.notify_investors") as mock_notify:
+        mock_notify.return_value = _async_none()
+        await execute_pending_withdrawal("wd-aaaa1111", attempt=_MAX_DATA_RETRIES)
+
+    mock_scheduler.add_job.assert_not_called()
+    mock_save.assert_not_called()
+    mock_remove.assert_called_once_with("wd-aaaa1111")
+    assert mock_audit.call_args.kwargs["status"] == "failed"
+    mock_notify.assert_called_once()
