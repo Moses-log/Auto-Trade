@@ -88,3 +88,14 @@ def check_and_mark(payload: AlertPayload) -> bool:
         seen[key] = time.time() + settings.idempotency_ttl
         _save(seen)
         return False
+
+
+def unmark(payload: AlertPayload) -> None:
+    """Forget an alert so a retry is processed instead of rejected as a duplicate.
+
+    Call only when the trade itself failed — never after an order was placed.
+    """
+    with _lock:
+        seen = _evict_expired(_load())
+        seen.pop(_make_key(payload), None)
+        _save(seen)

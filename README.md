@@ -1344,6 +1344,7 @@ docker-compose up
 
 **Tests:**
 ```bash
+pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 No real Alpaca, Robinhood, or Discord calls are made — all external clients are mocked.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Optional
 
 import pytz
@@ -34,6 +34,8 @@ from app.withdrawal_audit import append_withdrawal_audit
 log = logging.getLogger(__name__)
 
 _CT = pytz.timezone("America/Chicago")
+# Market/account data retries, 15 min apart (~2 h), before the withdrawal is marked failed.
+_MAX_DATA_RETRIES = 8
 
 
 class WithdrawalValidationError(Exception):
@@ -116,7 +118,31 @@ async def schedule_withdrawal(
     }
 
 
-async def execute_pending_withdrawal(withdrawal_id: str) -> None:
+async def _mark_failed(record: dict, withdrawal_id: str, reason: str) -> None:
+    """Terminal failure: drop the pending record, audit it as failed, tell the owner."""
+    # The pending record must go, or reschedule_pending_withdrawals re-fires it
+    # on every restart. The 'failed' audit entry below keeps the record.
+    try:
+        remove_pending_withdrawal(withdrawal_id)
+    except Exception:
+        log.exception("execute_pending_withdrawal: failed to remove pending record %s after failure", withdrawal_id)
+    try:
+        append_withdrawal_audit(
+            withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
+            requested_at=record["requested_at"], run_at=record["run_at"],
+            status="failed", reason=reason,
+        )
+    except Exception:
+        log.exception("execute_pending_withdrawal: failed to write 'failed' audit entry for %s", withdrawal_id)
+    try:
+        await notify_investors(
+            f"❌ Scheduled withdrawal for {record['investor']} (${record['amount']:,.2f}) failed: {reason}"
+        )
+    except Exception:
+        log.exception("execute_pending_withdrawal: failed to send failure notification for %s", withdrawal_id)
+
+
+async def execute_pending_withdrawal(withdrawal_id: str, attempt: int = 0) -> None:
     record = get_pending_withdrawal(withdrawal_id)
     if record is None:
         log.warning("execute_pending_withdrawal: %s not found (already canceled?)", withdrawal_id)
@@ -136,6 +162,12 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
         )
 
     if spy_price is None or real_total_equity is None:
+        if attempt >= _MAX_DATA_RETRIES:
+            await _mark_failed(
+                record, withdrawal_id,
+                f"market/account data unavailable after {attempt + 1} attempts",
+            )
+            return
         log.error(
             "execute_pending_withdrawal: market/account data unavailable for %s — retrying in 15 minutes",
             withdrawal_id,
@@ -147,6 +179,7 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
                 "date",
                 run_date=retry_at,
                 args=[withdrawal_id],
+                kwargs={"attempt": attempt + 1},
                 id=f"withdrawal_{withdrawal_id}",
                 replace_existing=True,
             )
@@ -192,7 +225,7 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
                             exit_spy=spy_price,
                             cost_basis=total_cost_basis,
                             proceeds=record["amount"],
-                            date=date.today().isoformat(),
+                            date=datetime.now(_CT).date().isoformat(),
                         )
                     )
                     if settings.use_sqlite:
@@ -207,6 +240,10 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
                                 completed_at=datetime.now(_CT).isoformat(),
                             )
                     else:
+                        # Pending record goes first: a crash between the two writes
+                        # then loses the withdrawal (reported below) instead of
+                        # re-firing it on boot and paying the investor twice.
+                        remove_pending_withdrawal(withdrawal_id)
                         save_investors(investors)
                 except Exception as exc:
                     log.exception(
@@ -216,35 +253,8 @@ async def execute_pending_withdrawal(withdrawal_id: str) -> None:
                     error_reason = f"Internal error while recording withdrawal: {exc}"
                     discord_msg = None
 
-    if not settings.use_sqlite:
-        try:
-            remove_pending_withdrawal(withdrawal_id)
-        except Exception:
-            log.exception("execute_pending_withdrawal: failed to remove pending record %s after processing", withdrawal_id)
-
     if error_reason:
-        if settings.use_sqlite:
-            # The success path removes it inside the transaction; a failed one
-            # must go too, or reschedule_pending_withdrawals re-fires it on
-            # every restart. The 'failed' audit entry below keeps the record.
-            try:
-                remove_pending_withdrawal(withdrawal_id)
-            except Exception:
-                log.exception("execute_pending_withdrawal: failed to remove pending record %s after failure", withdrawal_id)
-        try:
-            append_withdrawal_audit(
-                withdrawal_id=record["id"], investor=record["investor"], amount=record["amount"],
-                requested_at=record["requested_at"], run_at=record["run_at"],
-                status="failed", reason=error_reason,
-            )
-        except Exception:
-            log.exception("execute_pending_withdrawal: failed to write 'failed' audit entry for %s", withdrawal_id)
-        try:
-            await notify_investors(
-                f"❌ Scheduled withdrawal for {record['investor']} (${record['amount']:,.2f}) failed: {error_reason}"
-            )
-        except Exception:
-            log.exception("execute_pending_withdrawal: failed to send failure notification for %s", withdrawal_id)
+        await _mark_failed(record, withdrawal_id, error_reason)
         return
 
     if not settings.use_sqlite:

@@ -265,3 +265,43 @@ def test_webhook_result_includes_robinhood_key(mock_get_client, mock_rh_client):
     result = r.json()["result"]
     assert "robinhood" in result
     assert result["robinhood"]["status"] == "ok"
+
+
+# ── Retry after failed trade ──────────────────────────────────────────────────
+
+@patch("app.main.notify", new_callable=AsyncMock)
+@patch("app.main.notify_rh_trade", new_callable=AsyncMock)
+@patch("app.main.notify_trade", new_callable=AsyncMock)
+@patch("app.main.execute_action", new_callable=AsyncMock)
+def test_failed_trade_can_be_retried(mock_execute, mock_notify_trade, mock_notify_rh, mock_notify):
+    """A trade that raises must not leave its key marked, or TradingView's retry is dropped."""
+    mock_execute.side_effect = [RuntimeError("alpaca down"), {"status": "ok"}]
+    payload = _load_sample("buy")
+    payload["order_id"] = "retry_after_failure_order"
+
+    r1 = client.post("/webhook", json=payload)
+    r2 = client.post("/webhook", json=payload)
+
+    assert r1.status_code == 500
+    assert r2.status_code == 200
+    assert r2.json()["status"] == "ok"
+    assert mock_execute.call_count == 2
+
+
+@patch("app.main.notify", new_callable=AsyncMock)
+@patch("app.main.notify_rh_trade", new_callable=AsyncMock)
+@patch("app.main.notify_trade", new_callable=AsyncMock)
+@patch("app.main.execute_action", new_callable=AsyncMock)
+def test_notify_failure_after_trade_keeps_duplicate_guard(mock_execute, mock_notify_trade, mock_notify_rh, mock_notify):
+    """If the trade went through and only the notification failed, a retry must not trade twice."""
+    mock_execute.return_value = {"status": "ok"}
+    mock_notify_trade.side_effect = RuntimeError("discord down")
+    payload = _load_sample("buy")
+    payload["order_id"] = "notify_failure_order"
+
+    r1 = client.post("/webhook", json=payload)
+    r2 = client.post("/webhook", json=payload)
+
+    assert r1.status_code == 500
+    assert r2.json()["status"] == "duplicate"
+    assert mock_execute.call_count == 1
