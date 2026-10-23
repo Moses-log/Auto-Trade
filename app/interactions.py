@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 log = logging.getLogger(__name__)
@@ -21,7 +20,7 @@ def verify_discord_signature(
         public_key = Ed25519PublicKey.from_public_bytes(public_key_bytes)
         public_key.verify(signature_bytes, timestamp.encode() + body)
         return True
-    except (InvalidSignature, Exception):
+    except Exception:  # InvalidSignature, bad hex, wrong key length
         return False
 
 
