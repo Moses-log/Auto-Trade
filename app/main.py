@@ -32,7 +32,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ValidationError
 
 from app.config import settings
-from app.idempotency import check_and_mark
+from app.idempotency import check_and_mark, unmark
 from app.investors import (
     Deposit,
     Investor,
@@ -615,7 +615,10 @@ async def webhook(request: Request):
             content={"error": "Request body must be a JSON object."},
         )
 
-    log.debug("Raw alert received", extra={"body": raw})
+    log.debug(
+        "Raw alert received",
+        extra={"body": {k: v for k, v in raw.items() if k != "secret"}},
+    )
 
     # ── 2. Secret check ───────────────────────────────────────────────────────
     received_secret = raw.get("secret", "")
@@ -661,6 +664,10 @@ async def webhook(request: Request):
         )
 
     # ── 5. Execute trade ──────────────────────────────────────────────────────
+    # Until execute_action returns, a failure means no order was placed, so the
+    # idempotency key is released to let TradingView's retry through. After that,
+    # the key stays so a failed notification can't cause a second order.
+    trade_placed = False
     try:
         avg_entry_price: Optional[float] = None
         if payload.action == TradingAction.REMOVE_LEVERAGE:
@@ -675,6 +682,7 @@ async def webhook(request: Request):
                 avg_entry_price = float(pos.avg_entry_price)
 
         result = await execute_action(payload)
+        trade_placed = True
 
         log.info(
             "Trade executed",
@@ -702,6 +710,8 @@ async def webhook(request: Request):
         )
 
     except ValueError as exc:
+        if not trade_placed:
+            unmark(payload)
         log.warning("Trade rejected — bad value: %s", exc, extra={"ticker": payload.ticker})
         await notify(f"⚠️ Trade rejected for {payload.ticker}: {exc}")
         return JSONResponse(
@@ -710,6 +720,8 @@ async def webhook(request: Request):
         )
 
     except APIError as exc:
+        if not trade_placed:
+            unmark(payload)
         log.error(
             "Alpaca API error",
             exc_info=True,
@@ -722,6 +734,8 @@ async def webhook(request: Request):
         )
 
     except Exception as exc:
+        if not trade_placed:
+            unmark(payload)
         log.exception("Unexpected error processing alert")
         await notify(f"❌ Unexpected error for {payload.ticker}: {exc}")
         return JSONResponse(
