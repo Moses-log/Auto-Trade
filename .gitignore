@@ -12,3 +12,6 @@ dist/
 idempotency.json
 trade_record.json
 rh_trade_record.json
+investors.json
+leverage_entry.json
+pending_orders.json
